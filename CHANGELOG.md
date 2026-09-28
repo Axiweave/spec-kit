@@ -2,6 +2,12 @@
 
 <!-- insert new changelog below this comment -->
 
+## Unreleased
+
+### Added
+
+- Restore Python 3.11 and 3.12 CI coverage while retaining Python 3.13, Python 3.14, and all three operating systems.
+
 ## [1.0.12] - 2026-09-25
 
 ### Changed
