@@ -6,10 +6,26 @@ network; unknown ids fail online and downgrade to warnings offline.
 from __future__ import annotations
 
 from pathlib import Path
+import socket
+
+import pytest
 
 from specify_cli.bundles.manifest import ComponentRef
 from specify_cli.bundles.references import make_reference_checker
+from specify_cli.presets import PresetCatalog
+from specify_cli.workflows.catalog import StepCatalog
 from tests.specify_cli.bundles.helpers import make_project
+
+
+@pytest.fixture(autouse=True)
+def block_outbound_requests(monkeypatch):
+    def refuse_network(*args, **kwargs):
+        raise AssertionError("Reference checks must not send outbound requests")
+
+    monkeypatch.setattr(socket.socket, "connect", refuse_network)
+    monkeypatch.setattr(socket, "getaddrinfo", refuse_network)
+    monkeypatch.setattr(PresetCatalog, "get_pack_info", lambda self, id_: None)
+    monkeypatch.setattr(StepCatalog, "get_step_info", lambda self, id_: None)
 
 
 def _ref(kind: str, id_: str) -> ComponentRef:
@@ -110,3 +126,28 @@ def test_unknown_reference_warns_offline(tmp_path: Path):
     check = make_reference_checker(root, allow_network=False, warnings=warnings)
     assert check(_ref("presets", "does-not-exist")) is None
     assert any("does-not-exist" in w for w in warnings)
+
+
+@pytest.mark.parametrize("kind,catalog,method", [
+    ("presets", PresetCatalog, "get_pack_info"),
+    ("steps", StepCatalog, "get_step_info"),
+])
+@pytest.mark.parametrize("available", [True, False])
+def test_catalog_presence_and_outage_remain_distinct(
+    tmp_path, monkeypatch, kind, catalog, method, available,
+):
+    """Catalog outages produce warnings, not definitive unknown-reference errors."""
+    def lookup(self, id_):
+        if not available:
+            raise OSError("Catalog unavailable")
+        return {"id": id_, "version": "1.0.0"}
+
+    monkeypatch.setattr(catalog, method, lookup)
+    warnings = []
+    check = make_reference_checker(make_project(tmp_path), allow_network=True, warnings=warnings)
+
+    assert check(_ref(kind, "community-component")) is None
+    if available:
+        assert warnings == []
+    else:
+        assert any("community-component" in warning for warning in warnings)
