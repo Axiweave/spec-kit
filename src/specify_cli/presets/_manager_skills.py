@@ -566,7 +566,7 @@ class _PresetSkillMethods:
         from ..extensions import ExtensionManifest, ValidationError
 
         resolver = PresetResolver(self.project_root)
-        extensions_dir = self.project_root / ".specify" / "extensions"
+        extensions_dir = self.workspace_root / ".specify" / "extensions"
         restore_index: Dict[str, Dict[str, Any]] = {}
 
         for _priority, ext_id, _metadata in resolver._get_all_extensions_by_priority():
@@ -1331,7 +1331,7 @@ class _PresetSkillMethods:
         from ..shared_infra import _write_shared_text
 
         # Locate core command templates from the project's installed templates
-        core_templates_dir = self.project_root / ".specify" / "templates" / "commands"
+        core_templates_dir = self.workspace_root / ".specify" / "templates" / "commands"
         registrar = CommandRegistrar()
         integration = get_integration(selected_ai) if isinstance(selected_ai, str) else None
         extension_restore_index = self._build_extension_skill_restore_index()

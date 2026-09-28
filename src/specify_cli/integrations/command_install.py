@@ -27,11 +27,17 @@ def integration_install(
     script: str | None = typer.Option(None, "--script", help="Script type: sh, ps, or py (default: from init-options.json or platform default)"),
     force: bool = typer.Option(False, "--force", help="Allow multi-install when integrations are not declared safe"),
     integration_options: str | None = typer.Option(None, "--integration-options", help='Options for the integration (e.g. --integration-options="--commands-dir .myagent/cmds")'),
+    global_install: bool = typer.Option(False, "--global", help="Install shared OMP commands without a project"),
 ):
     """Install an integration into an existing project."""
     from . import INTEGRATION_REGISTRY, get_integration
     from .manifest import IntegrationManifest
     from .. import _require_specify_project, _install_shared_infra_or_exit
+
+    if global_install:
+        from .omp.global_commands import run_global_command
+        run_global_command(key, "install")
+        return
 
     project_root = _require_specify_project()
     integration = get_integration(key)

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ..workspace import workspace_root_for
 from .manifest import ComponentRef
 
 
@@ -98,13 +99,14 @@ def make_reference_checker(
     ``None`` otherwise. Unverifiable references (offline, or an unreachable
     catalog) append a note to *warnings* and pass.
     """
+    workspace = workspace_root_for(project_root)
 
     def check(component: ComponentRef) -> str | None:
-        if _resolved_locally(project_root, component):
+        if _resolved_locally(workspace, component):
             return None
 
         if allow_network:
-            in_catalog = _resolved_in_catalog(project_root, component)
+            in_catalog = _resolved_in_catalog(workspace, component)
             if in_catalog is True:
                 return None
             if in_catalog is False:

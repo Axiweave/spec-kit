@@ -10,9 +10,9 @@
 #
 # Usage: update-agent-context.ps1 [plan_path]
 #
-# When `plan_path` is omitted, the script derives it from `.specify/feature.json`
-# (written by /speckit-specify). Falls back to the most recently modified
-# `specs/**/plan.md` only when feature.json is absent or its plan does not exist yet.
+# External projects read configuration and feature selection from the workspace.
+# Local projects use `.specify/feature.json`, then the most recently modified
+# `specs/**/plan.md` when the saved plan does not exist.
 
 [CmdletBinding()]
 param(
@@ -169,8 +169,14 @@ function Test-IsSubPath {
 $ErrorActionPreference = 'Stop'
 $DefaultStart = '<!-- SPECKIT START -->'
 $DefaultEnd   = '<!-- SPECKIT END -->'
-$ProjectRoot  = (Get-Location).Path
-$ExtConfig    = Join-Path $ProjectRoot '.specify/extensions/agent-context/agent-context-config.yml'
+. (Join-Path $PSScriptRoot '../../../../scripts/powershell/common.ps1')
+$ProjectRoot = (Get-Location).Path
+if ($env:SPECIFY_INIT_DIR -or (Find-SpecifyRoot)) {
+    $ProjectRoot = Get-RepoRoot
+}
+$Storage = Get-StorageContext -RepoRoot $ProjectRoot
+$WorkspaceRoot = $Storage.Root
+$ExtConfig = Resolve-StoragePath $Storage '.specify/extensions/agent-context/agent-context-config.yml'
 
 if (-not (Test-Path -LiteralPath $ExtConfig)) {
     Write-Warning "agent-context: $ExtConfig not found; nothing to do."
@@ -305,7 +311,7 @@ if ($ContextFiles.Count -eq 0) {
     # own config declares no target it derives one from the active integration
     # recorded in init-options.json, using the extension's OWN bundled mapping
     # (agent-context-defaults.json). Independent of the Specify CLI by design.
-    $initOptionsPath = Join-Path $ProjectRoot '.specify/init-options.json'
+    $initOptionsPath = Join-Path $WorkspaceRoot '.specify/init-options.json'
     if (Test-Path -LiteralPath $initOptionsPath) {
         try {
             $initOpts = Get-Content -LiteralPath $initOptionsPath -Raw | ConvertFrom-Json -ErrorAction Stop
@@ -316,7 +322,7 @@ if ($ContextFiles.Count -eq 0) {
                 $integrationKey = [string]$initOpts.ai
             }
             if ($integrationKey) {
-                $defaultsPath = Join-Path $ProjectRoot '.specify/extensions/agent-context/agent-context-defaults.json'
+                $defaultsPath = Join-Path $WorkspaceRoot '.specify/extensions/agent-context/agent-context-defaults.json'
                 if (Test-Path -LiteralPath $defaultsPath) {
                     $defaults = Get-Content -LiteralPath $defaultsPath -Raw | ConvertFrom-Json -ErrorAction Stop
                     $derived = $null
@@ -382,7 +388,14 @@ if ($cm) {
     }
 }
 
-if (-not $PlanPath) {
+if ($Storage.External) {
+    if ($PlanPath) {
+        $PlanPath = Resolve-StoragePath $Storage $PlanPath
+    } else {
+        $PlanPath = (Get-FeaturePathsEnv -NoPersist).IMPL_PLAN
+    }
+    $PlanPath = (Get-CanonicalStoragePath $PlanPath).Replace('\', '/')
+} elseif (-not $PlanPath) {
     # Prefer .specify/feature.json (written by /speckit-specify) over mtime heuristic.
     $FeatureJson = Join-Path $ProjectRoot '.specify/feature.json'
     if (Test-Path -LiteralPath $FeatureJson) {

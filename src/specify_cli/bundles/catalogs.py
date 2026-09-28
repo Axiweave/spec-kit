@@ -11,6 +11,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from ..workspace import workspace_root_for
 from . import BundlerError
 from .yamlio import ensure_within, load_yaml
 
@@ -271,11 +272,13 @@ def load_source_stack(project_root: Path, user_config_dir: Path | None = None) -
     if user_config_dir is not None:
         _merge_config(by_id, Path(user_config_dir) / CONFIG_FILENAME, Scope.USER)
 
-    # Confine the project-scoped read: refuse a symlinked .specify/ that
-    # resolves outside the project root (consistent with other guarded reads).
-    project_config = Path(project_root) / ".specify" / CONFIG_FILENAME
-    if project_config.exists():
-        ensure_within(project_root, project_config)
+    try:
+        workspace_root = workspace_root_for(Path(project_root))
+    except (ValueError, OSError) as exc:
+        raise BundlerError(str(exc)) from exc
+    project_config = ensure_within(
+        workspace_root, workspace_root / ".specify" / CONFIG_FILENAME
+    )
     _merge_config(by_id, project_config, Scope.PROJECT)
 
     return sorted(by_id.values(), key=lambda s: (s.priority, s.id))

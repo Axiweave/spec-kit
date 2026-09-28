@@ -71,7 +71,7 @@ class StepContext:
     #: Workflow-level default options.
     default_options: dict[str, Any] = field(default_factory=dict)
 
-    #: Project root path.
+    #: Code repository root for step execution, not the external workspace.
     project_root: str | None = None
 
     #: Current run ID.

@@ -9,6 +9,7 @@ import typer
 from rich.markup import escape as _escape_markup
 
 from .. import _commands
+from ...workspace import workspace_root_for
 from . import catalog_app
 from ._helpers import load_catalog_command_config
 
@@ -19,7 +20,7 @@ def catalog_remove(
 ):
     """Remove a catalog from .specify/extension-catalogs.yml."""
     project_root = _commands._require_specify_project()
-    specify_dir = project_root / ".specify"
+    specify_dir = workspace_root_for(project_root) / ".specify"
 
     config_path = specify_dir / "extension-catalogs.yml"
     if not config_path.exists():

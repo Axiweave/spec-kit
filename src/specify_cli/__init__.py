@@ -210,10 +210,15 @@ def _install_shared_infra_or_exit(
         raise typer.Exit(1)
 
 
-def ensure_executable_scripts(project_path: Path, tracker: StepTracker | None = None) -> None:
-    """Ensure POSIX .sh scripts under .specify/scripts and .specify/extensions (recursively) have execute bits (no-op on Windows)."""
+def ensure_executable_scripts(
+    project_path: Path, tracker: StepTracker | None = None, *, script_paths: set[Path] | None = None,
+) -> None:
+    """Add POSIX execute bits to shell scripts, optionally limited to selected paths."""
     if os.name == "nt":
         return  # Windows: skip silently
+    from .workspace import workspace_root_for
+
+    project_path = workspace_root_for(project_path)
     scan_roots = [
         project_path / ".specify" / "scripts",
         project_path / ".specify" / "extensions",
@@ -224,6 +229,8 @@ def ensure_executable_scripts(project_path: Path, tracker: StepTracker | None = 
         if not scripts_root.is_dir():
             continue
         for script in scripts_root.rglob("*.sh"):
+            if script_paths is not None and script not in script_paths:
+                continue
             try:
                 if script.is_symlink() or not script.is_file():
                     continue
@@ -401,6 +408,12 @@ version = _command_version.version
 
 app.add_typer(_self_app, name="self")
 
+from .project._commands import register as _register_project_cmds  # noqa: E402
+_register_project_cmds(app)
+
+from .configs._commands import register as _register_config_cmds  # noqa: E402
+_register_config_cmds(app)
+
 
 # ===== Extension Commands =====
 
@@ -429,27 +442,14 @@ from ._project import _resolve_init_dir_override as _resolve_init_dir_override  
 
 
 def _require_specify_project() -> Path:
-    """Return the project root if it is a spec-kit project, else exit.
+    """Return the invoking repository after validating its selected workspace."""
+    from ._project import ProjectResolutionError, resolve_specify_project_root
 
-    Honors the ``SPECIFY_INIT_DIR`` override (same validation rules as the shell
-    scripts) so a member project can be targeted from a monorepo root without
-    ``cd``. This is the resolution chokepoint for *every* project-scoped
-    subcommand — ``integration``, ``extension``, ``workflow``, ``preset``, and the
-    rest that operate on an existing ``.specify/`` project — so the override
-    applies to all of them uniformly. When the override is unset, the project is
-    the current directory, as before.
-    """
-    override = _resolve_init_dir_override()
-    if override is not None:
-        return override
-    project_root = Path.cwd()
-    if (project_root / ".specify").is_dir():
-        return project_root
-    err_console.print("[red]Error:[/red] Not a Spec Kit project (no .specify/ directory)")
-    err_console.print(
-        "Run this command from a Spec Kit project root or set SPECIFY_INIT_DIR to one."
-    )
-    raise typer.Exit(1)
+    try:
+        return resolve_specify_project_root()
+    except ProjectResolutionError as exc:
+        err_console.print("Error:", str(exc), markup=False)
+        raise typer.Exit(1) from exc
 
 
 # ===== Preset Commands =====

@@ -260,7 +260,7 @@ def run_update_command(extension: str | None) -> None:
                             dirs_to_backup.append(legacy_dir)
 
                     for cmd_name in cmd_names:
-                        output_name = _AgentReg._compute_output_name(
+                        output_name = _AgentReg.compute_output_name(
                             agent_name, cmd_name, agent_config
                         )
                         names_to_backup = [output_name]
@@ -385,7 +385,7 @@ def run_update_command(extension: str | None) -> None:
                     ) in manager._command_registration_targets().items():
                         agent_config = registrar.AGENT_CONFIGS[agent_name]
                         for command_name in new_command_names:
-                            output_name = _AgentReg._compute_output_name(
+                            output_name = _AgentReg.compute_output_name(
                                 agent_name, command_name, agent_config
                             )
                             command_file = (
@@ -682,7 +682,7 @@ def run_update_command(extension: str | None) -> None:
                             )
 
                             for cmd_name in cmd_names:
-                                output_name = _AgentReg._compute_output_name(agent_name, cmd_name, agent_config)
+                                output_name = _AgentReg.compute_output_name(agent_name, cmd_name, agent_config)
                                 cmd_file = commands_dir / f"{output_name}{agent_config['extension']}"
                                 # Delete if it exists and wasn't in our backup
                                 if cmd_file.exists() and str(cmd_file) not in backed_up_command_files:

@@ -10,14 +10,23 @@
 #
 # Usage: update-agent-context.sh [plan_path]
 #
-# When `plan_path` is omitted, the script derives it from `.specify/feature.json`
-# (written by /speckit-specify). Falls back to the most recently modified
-# `specs/**/plan.md` only when feature.json is absent or its plan does not exist yet.
+# External projects read configuration and feature selection from the workspace.
+# Local projects use `.specify/feature.json`, then the most recently modified
+# `specs/**/plan.md` when the saved plan does not exist.
 
 set -euo pipefail
 
+SCRIPT_DIR="$(CDPATH="" cd -- "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/../../../../scripts/bash/common.sh"
 PROJECT_ROOT="$(pwd)"
-EXT_CONFIG="$PROJECT_ROOT/.specify/extensions/agent-context/agent-context-config.yml"
+if [[ -n "${SPECIFY_INIT_DIR:-}" ]] || find_specify_root >/dev/null; then
+  PROJECT_ROOT="$(get_repo_root)"
+fi
+load_workspace_context "$PROJECT_ROOT"
+EXT_CONFIG="$WORKSPACE_ROOT/.specify/extensions/agent-context/agent-context-config.yml"
+if [[ -n "$PROJECT_RECORD" ]]; then
+  EXT_CONFIG="$(workspace_path "$WORKSPACE_ROOT" "$EXT_CONFIG")"
+fi
 DEFAULT_START="<!-- SPECKIT START -->"
 DEFAULT_END="<!-- SPECKIT END -->"
 
@@ -66,7 +75,7 @@ esac
 # failing with "unexpected EOF while looking for matching `''". Keep these
 # $(...)-nested heredoc bodies free of apostrophes (use double quotes in Python
 # string literals and avoid contractions in comments).
-if ! _raw_opts="$("$_python" - "$EXT_CONFIG" "$_case_insensitive_context_files" "$PROJECT_ROOT" <<'PY'
+if ! _raw_opts="$("$_python" - "$EXT_CONFIG" "$_case_insensitive_context_files" "$WORKSPACE_ROOT" <<'PY'
 import json
 import sys
 try:
@@ -256,7 +265,16 @@ unset _cf_parts _seg
 [[ -z "$MARKER_END"   ]] && MARKER_END="$DEFAULT_END"
 
 PLAN_PATH="${1:-}"
-if [[ -z "$PLAN_PATH" ]]; then
+if [[ -n "$PROJECT_RECORD" ]]; then
+  if [[ -n "$PLAN_PATH" ]]; then
+    printf '[specify] Workspace: %s\n' "$WORKSPACE_ROOT" >&2
+    PLAN_PATH="$(workspace_path "$WORKSPACE_ROOT" "$PLAN_PATH")"
+  else
+    _feature_paths="$(get_feature_paths --no-persist)"
+    eval "$_feature_paths"
+    PLAN_PATH="$IMPL_PLAN"
+  fi
+elif [[ -z "$PLAN_PATH" ]]; then
   # Prefer .specify/feature.json (written by /speckit-specify) over mtime heuristic.
   _feature_json="$PROJECT_ROOT/.specify/feature.json"
   if [[ -f "$_feature_json" ]]; then

@@ -138,7 +138,7 @@ class TestListArtifactsContract:
         )
 
         monkeypatch.setattr(
-            "specify_cli.artifacts.catalog._locate_shared_asset_dir",
+            "specify_cli.artifacts.catalog.locate_shared_asset_dir",
             lambda subdir: {
                 "commands": commands_dir,
                 "scripts": scripts_dir,
@@ -188,7 +188,7 @@ class TestListArtifactsContract:
             encoding="utf-8",
         )
         monkeypatch.setattr(
-            "specify_cli.artifacts.catalog._locate_shared_asset_dir",
+            "specify_cli.artifacts.catalog.locate_shared_asset_dir",
             lambda subdir: {
                 "commands": commands_dir,
                 "scripts": scripts_dir,
@@ -222,7 +222,7 @@ class TestListArtifactsContract:
             encoding="utf-8",
         )
         monkeypatch.setattr(
-            "specify_cli.artifacts.catalog._locate_shared_asset_dir",
+            "specify_cli.artifacts.catalog.locate_shared_asset_dir",
             lambda subdir: {
                 "commands": commands_dir,
                 "scripts": scripts_dir,

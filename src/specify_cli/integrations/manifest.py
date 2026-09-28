@@ -16,6 +16,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ..workspace import workspace_root_for
+
 
 def _sha256(path: Path) -> str:
     """Return the hex SHA-256 digest of *path*."""
@@ -26,7 +28,7 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def _validate_rel_path(rel: Path, root: Path) -> Path:
+def _validate_rel_path(rel: Path, root: Path, *, resolve_root: bool = True) -> Path:
     """Resolve *rel* against *root* and verify it stays within *root*.
 
     Raises ``ValueError`` if *rel* is absolute, contains ``..`` segments
@@ -37,7 +39,7 @@ def _validate_rel_path(rel: Path, root: Path) -> Path:
             f"Absolute paths are not allowed in manifests: {rel}"
         )
     resolved = (root / rel).resolve()
-    root_resolved = root.resolve()
+    root_resolved = root.resolve() if resolve_root else root.absolute()
     try:
         resolved.relative_to(root_resolved)
     except ValueError:
@@ -125,6 +127,7 @@ class IntegrationManifest:
             if resolve_project_root
             else project_root.absolute()
         )
+        self.metadata_root = workspace_root_for(self.project_root)
         self.version = version
         self._files: dict[str, str] = {}  # rel_path → sha256 hex
         self._recovered_files: set[str] = set()
@@ -135,12 +138,50 @@ class IntegrationManifest:
     @property
     def manifest_path(self) -> Path:
         """Path to the on-disk manifest JSON."""
-        return self.project_root / ".specify" / "integrations" / f"{self.key}.manifest.json"
+        return self.metadata_root / ".specify" / "integrations" / f"{self.key}.manifest.json"
+
+    def _entry_root(self, rel: Path) -> Path:
+        return self.metadata_root if rel.parts[:1] == (".specify",) else self.project_root
+
+    def file_path(self, rel_path: str | Path, *, allow_symlink: bool = False) -> Path:
+        """Resolve a relative key under its asset root without symlink ancestors.
+
+        ``.specify`` entries belong to the workspace. Other entries belong to
+        the repository. ``allow_symlink`` permits only a final symlink, so
+        uninstall can remove that link without following its target.
+        """
+        rel = Path(rel_path)
+        if rel.is_absolute() or rel.anchor:
+            raise ValueError(f"Absolute paths are not allowed in manifests: {rel}")
+        if not rel.parts or ".." in rel.parts:
+            raise ValueError(
+                f"Manifest paths must be canonical and cannot point outside their root: {rel}"
+            )
+        root = self._entry_root(rel)
+        current = root
+        for part in rel.parts[:-1] if allow_symlink else rel.parts:
+            current = current / part
+            if current.is_symlink():
+                raise ValueError(f"Refusing to use symlinked manifest path: {rel}")
+        # Both asset roots already follow the constructor's resolution policy.
+        _validate_rel_path(rel.parent if allow_symlink else rel, root, resolve_root=False)
+        return root / rel
+
+    def _ignore_entry_point(self, relative: str) -> None:
+        if self.metadata_root == self.project_root or relative.startswith(".specify/"):
+            return
+        ignore = self.project_root / ".gitignore"
+        if ignore.is_symlink():
+            raise ValueError(f"Refusing a symlinked ignore file: {ignore}")
+        content = ignore.read_text(encoding="utf-8") if ignore.exists() else ""
+        entry = "/" + relative.replace("\\", "\\\\").replace(" ", "\\ ")
+        if entry not in content.splitlines():
+            ignore.write_text(content.rstrip("\n") + "\n" + entry + "\n", encoding="utf-8")
 
     # -- Recording files --------------------------------------------------
 
     def record_file(self, rel_path: str | Path, content: bytes | str) -> Path:
-        """Write *content* to *rel_path* (relative to project root) and record its hash.
+        """Write *content* under its asset root and record its relative key and hash.
 
         Creates parent directories as needed.  Returns the absolute path
         of the written file.
@@ -148,21 +189,22 @@ class IntegrationManifest:
         ``record_existing(recovered=True)``, the recovered marker is
         cleared because the bytes are now produced, not merely observed.
 
-        Raises ``ValueError`` if *rel_path* resolves outside the project root.
+        Raises ``ValueError`` for unsafe relative paths or symlinks.
         """
         rel = Path(rel_path)
-        abs_path = _validate_rel_path(rel, self.project_root)
+        abs_path = self.file_path(rel)
         abs_path.parent.mkdir(parents=True, exist_ok=True)
 
         if isinstance(content, str):
             content = content.encode("utf-8")
         abs_path.write_bytes(content)
 
-        normalized = abs_path.relative_to(self.project_root).as_posix()
+        normalized = rel.as_posix()
         self._files[normalized] = hashlib.sha256(content).hexdigest()
         # ``record_file`` writes *produced* content, so any prior
         # recovered marker for this path is no longer accurate.
         self._recovered_files.discard(normalized)
+        self._ignore_entry_point(normalized)
         return abs_path
 
     def record_existing(self, rel_path: str | Path, *, recovered: bool = False) -> None:
@@ -189,39 +231,12 @@ class IntegrationManifest:
                 ``ValueError``.
         """
         rel = Path(rel_path)
-        # Cheap lexical pre-check first so absolute / parent-traversal paths
-        # don't trigger a filesystem stat outside the project root before
-        # ``_validate_rel_path`` raises. ``_validate_rel_path`` produces the
-        # canonical error messages used elsewhere.
-        if rel.is_absolute() or ".." in rel.parts:
-            _validate_rel_path(rel, self.project_root)
-            # _validate_rel_path raised for any actually-escaping path. If we reach
-            # here the path normalizes inside root (e.g. ``dir/../file.txt``).
-            # Reject anyway: manifest keys must be canonical so ``check_modified``
-            # and ``uninstall`` cannot key the same file under two paths.
-            raise ValueError(
-                f"Manifest paths must be canonical; '..' segments are not "
-                f"allowed (got {rel})"
-            )
-        # Walk each path component before resolution so a symlinked ancestor
-        # (e.g. ``linked_dir/file.txt`` where ``linked_dir`` is a symlink)
-        # cannot be silently followed by ``_validate_rel_path().resolve()``
-        # down to a target outside the project root. ``_ensure_safe_manifest_directory``
-        # uses the same pattern.
-        _walk = self.project_root
-        for part in rel.parts:
-            _walk = _walk / part
-            if _walk.is_symlink():
-                raise ValueError(
-                    f"Refusing to record symlinked manifest path: {rel} "
-                    f"(symlinked at {_walk.relative_to(self.project_root).as_posix()})"
-                )
-        abs_path = _validate_rel_path(rel, self.project_root)
+        abs_path = self.file_path(rel)
         if not abs_path.is_file():
             raise ValueError(
                 f"Manifest path is not a regular file: {rel}"
             )
-        normalized = abs_path.relative_to(self.project_root).as_posix()
+        normalized = rel.as_posix()
         self._files[normalized] = _sha256(abs_path)
         if recovered:
             self._recovered_files.add(normalized)
@@ -231,6 +246,8 @@ class IntegrationManifest:
             # recovered marker so future is_recovered() queries reflect the
             # transition. ``discard`` is a no-op when the key is absent.
             self._recovered_files.discard(normalized)
+        if not recovered:
+            self._ignore_entry_point(normalized)
 
     def remove(self, rel_path: str | Path) -> bool:
         """Drop *rel_path* from the tracked file set and any recovered marker.
@@ -246,13 +263,9 @@ class IntegrationManifest:
         can never be canonical manifest keys, so there is nothing to remove.
         """
         rel = Path(rel_path)
-        if rel.is_absolute() or ".." in rel.parts:
+        if rel.anchor or ".." in rel.parts or not rel.parts:
             return False
-        try:
-            abs_path = _validate_rel_path(rel, self.project_root)
-            normalized = abs_path.relative_to(self.project_root).as_posix()
-        except ValueError:
-            return False
+        normalized = rel.as_posix()
         self._recovered_files.discard(normalized)
         return self._files.pop(normalized, None) is not None
 
@@ -278,20 +291,14 @@ class IntegrationManifest:
     def is_recovered(self, rel_path: str | Path) -> bool:
         """Return True if *rel_path* was recorded via ``record_existing(recovered=True)``.
 
-        Input is normalized through the same pipeline as ``record_existing``:
-        absolute paths, paths escaping the project root, AND paths containing
-        ``'..'`` segments are rejected (returned as ``False``). This mirrors
-        ``record_existing``'s canonicalization guard — such paths can never
-        appear as stored keys, so the answer is always ``False``.
+        This query uses only the relative key, not the file on disk.
+        Absolute paths, empty paths, and paths with ``..`` segments return
+        ``False`` because they cannot be canonical manifest keys.
         """
         rel = Path(rel_path)
-        if rel.is_absolute() or ".." in rel.parts:
+        if rel.anchor or ".." in rel.parts or not rel.parts:
             return False
-        try:
-            abs_path = _validate_rel_path(rel, self.project_root)
-            normalized = abs_path.relative_to(self.project_root).as_posix()
-        except ValueError:
-            return False
+        normalized = rel.as_posix()
         return normalized in self._recovered_files
 
     def check_modified(self) -> list[str]:
@@ -299,10 +306,14 @@ class IntegrationManifest:
         modified: list[str] = []
         for rel, expected_hash in self._files.items():
             rel_path = Path(rel)
-            # Skip paths that are absolute or attempt to escape the project root
-            if rel_path.is_absolute() or ".." in rel_path.parts:
+            # Ignore invalid keys without reading outside either asset root.
+            if rel_path.anchor or ".." in rel_path.parts or not rel_path.parts:
                 continue
-            abs_path = self.project_root / rel_path
+            try:
+                abs_path = self.file_path(rel_path, allow_symlink=True)
+            except (ValueError, OSError):
+                modified.append(rel)
+                continue
             if not abs_path.exists() and not abs_path.is_symlink():
                 continue
             # Treat symlinks and non-regular-files as modified
@@ -343,20 +354,22 @@ class IntegrationManifest:
         Returns:
             ``(removed, skipped)`` — absolute paths.
         """
-        root = (project_root or self.project_root).resolve()
+        resolver = self
+        if project_root is not None and project_root.resolve() != self.project_root:
+            resolver = IntegrationManifest(self.key, project_root)
         removed: list[Path] = []
         skipped: list[Path] = []
 
         for rel, expected_hash in self._files.items():
-            # Use non-resolved path for deletion so symlinks themselves
-            # are removed, not their targets.
-            path = root / rel
-            # Validate containment lexically (without following symlinks)
-            # by collapsing .. segments via Path resolution on the string parts.
+            rel_path = Path(rel)
+            if rel_path.is_absolute() or rel_path.anchor or ".." in rel_path.parts or not rel_path.parts:
+                continue
+            root = resolver._entry_root(rel_path)
+            path = root / rel_path
             try:
-                normed = Path(os.path.normpath(path))
-                normed.relative_to(root)
+                path = resolver.file_path(rel_path, allow_symlink=True)
             except (ValueError, OSError):
+                skipped.append(path)
                 continue
             if not path.exists() and not path.is_symlink():
                 continue
@@ -398,7 +411,13 @@ class IntegrationManifest:
                 parent = parent.parent
 
         # Remove the manifest file itself
-        manifest = root / ".specify" / "integrations" / f"{self.key}.manifest.json"
+        manifest = self.manifest_path
+        if remove_manifest:
+            try:
+                self.file_path(Path(".specify/integrations") / manifest.name, allow_symlink=True)
+            except (ValueError, OSError):
+                skipped.append(manifest)
+                return removed, skipped
         if remove_manifest and manifest.exists():
             try:
                 manifest.unlink()
@@ -414,7 +433,7 @@ class IntegrationManifest:
                 # rmdir() raises and breaks immediately.
                 skipped.append(manifest)
             parent = manifest.parent
-            while parent != root:
+            while parent != self.metadata_root:
                 try:
                     parent.rmdir()
                 except OSError:
@@ -441,14 +460,14 @@ class IntegrationManifest:
         }
         path = self.manifest_path
         content = json.dumps(data, indent=2) + "\n"
-        _ensure_safe_manifest_destination(self.project_root, path)
+        _ensure_safe_manifest_destination(self.metadata_root, path)
         fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
         temp_path = Path(temp_name)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(content)
             temp_path.chmod(0o644)
-            _ensure_safe_manifest_destination(self.project_root, path)
+            _ensure_safe_manifest_destination(self.metadata_root, path)
             os.replace(temp_path, path)
         finally:
             temp_path.unlink(missing_ok=True)
@@ -467,7 +486,7 @@ class IntegrationManifest:
         Raises ``FileNotFoundError`` if the manifest does not exist.
         """
         inst = cls(key, project_root, resolve_project_root=resolve_project_root)
-        path = inst.manifest_path
+        path = inst.file_path(Path(".specify/integrations") / inst.manifest_path.name)
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except UnicodeDecodeError as exc:

@@ -43,7 +43,7 @@ if [[ -f "$IMPL_PLAN" ]]; then
         echo "Plan already exists at $IMPL_PLAN, skipping template copy"
     fi
 else
-    if resolve_template_content "plan-template" "$REPO_ROOT" > "$IMPL_PLAN"; then
+    if resolve_template_content "plan-template" "$WORKSPACE_ROOT" > "$IMPL_PLAN"; then
         if $JSON_MODE; then
             echo "Copied plan template to $IMPL_PLAN" >&2
         else

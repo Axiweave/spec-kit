@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
+from ..workspace import workspace_root_for
 from .._utils import dump_frontmatter
 from ..extensions import ExtensionRegistry, normalize_priority
 from ._manifest import VALID_PRESET_STRATEGIES, PresetManifest, PresetValidationError
@@ -26,9 +27,9 @@ class PresetResolver:
         """Initialize preset resolver.
 
         Args:
-            project_root: Path to project root directory
+            project_root: Repository or workspace root directory.
         """
-        self.project_root = project_root
+        self.project_root = project_root = workspace_root_for(project_root)
         self.templates_dir = project_root / ".specify" / "templates"
         self.presets_dir = project_root / ".specify" / "presets"
         self.overrides_dir = self.templates_dir / "overrides"
@@ -84,7 +85,10 @@ class PresetResolver:
         if not manifest:
             return None, None
         for tmpl in manifest.templates:
-            if tmpl.get("name") == template_name and tmpl.get("type") == template_type:
+            matches_name = tmpl.get("name") == template_name or (
+                template_type == "command" and template_name in (tmpl.get("aliases") or [])
+            )
+            if matches_name and tmpl.get("type") == template_type:
                 file_path = tmpl.get("file")
                 if file_path:
                     manifest_candidate = pack_dir / file_path
@@ -132,7 +136,9 @@ class PresetResolver:
         else:
             entries = ext_manifest.scripts
         for entry in entries:
-            if entry.get("name") != template_name:
+            if entry.get("name") != template_name and not (
+                template_type == "command" and template_name in (entry.get("aliases") or [])
+            ):
                 continue
             file_rel = entry.get("file")
             if not file_rel:
@@ -424,7 +430,7 @@ class PresetResolver:
             except (ValidationError, OSError, TypeError, AttributeError):
                 continue
             for cmd_info in manifest.commands:
-                if cmd_info.get("name") != cmd_name:
+                if cmd_info.get("name") != cmd_name and cmd_name not in (cmd_info.get("aliases") or []):
                     continue
                 file_rel = cmd_info.get("file")
                 if not file_rel:
@@ -736,6 +742,8 @@ class PresetResolver:
         self,
         template_name: str,
         template_type: str = "template",
+        *,
+        rewrite_extension_paths: bool = True,
     ) -> Optional[str]:
         """Resolve a template name and return composed content.
 
@@ -751,6 +759,7 @@ class PresetResolver:
         Args:
             template_name: Template name (e.g., "spec-template")
             template_type: Template type ("template", "command", or "script")
+            rewrite_extension_paths: Keep legacy bare-path rewriting. If false, rewrite only declared scripts and quoted assets.
 
         Returns:
             Composed content string, or None if not found
@@ -786,9 +795,18 @@ class PresetResolver:
             if extension_id and extension_dir:
                 from ..agents import CommandRegistrar
 
-                text = CommandRegistrar.rewrite_extension_paths(
-                    text, extension_id, extension_dir
-                )
+                if rewrite_extension_paths:
+                    text = CommandRegistrar.rewrite_extension_paths(
+                        text, extension_id, extension_dir
+                    )
+                elif template_type == "command":
+                    registrar = CommandRegistrar()
+                    frontmatter, body = registrar.parse_frontmatter(text)
+                    frontmatter = registrar._adjust_script_paths(frontmatter, extension_id)
+                    body = registrar.rewrite_extension_paths(
+                        body, extension_id, extension_dir, markup_only=True
+                    )
+                    text = registrar.render_frontmatter(frontmatter) + body
             return text
 
         # If the top (highest-priority) layer is replace, it wins entirely —

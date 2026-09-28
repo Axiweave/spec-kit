@@ -440,6 +440,9 @@ def _verify_leaf_identity(fd: int, path: Path) -> None:
 def _validate_safe_cache_dir(project_root: Path) -> Path:
     """Create and validate the extension URL download cache one component at a
     time, refusing symlinked/junctioned components on every supported platform."""
+    from ..workspace import workspace_root_for
+
+    project_root = workspace_root_for(project_root)
     download_dir = project_root.joinpath(*_CACHE_REL_PARTS)
     try:
         if _has_secure_dir_fd():
@@ -567,6 +570,9 @@ def _safe_open_download_zip(
     returned descriptor, removing the pathname-reopen and cleanup-walk TOCTOU
     classes on every supported platform.
     """
+    from ..workspace import workspace_root_for
+
+    project_root = workspace_root_for(project_root)
     if _has_secure_dir_fd():
         return _open_download_zip_via_dir_fd(
             project_root, download_dir, zip_filename

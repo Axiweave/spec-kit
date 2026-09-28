@@ -4,6 +4,12 @@ Bundles compose existing Spec Kit components — extensions, presets, workflows,
 
 A bundle is described by a `bundle.yml` manifest and is discovered through the same catalog stack as other components. Installing a bundle resolves its declared components against pinned versions, checks for the single cross-bundle conflict point (the active integration), and applies each component idempotently with full provenance tracking so it can be cleanly removed or refreshed later.
 
+In external mode, bundle records, project catalogs, and integration metadata use the workspace.
+Native agent files remain in the code repository.
+Relative catalog source paths still resolve from the invoking directory.
+Automatic project setup uses personal defaults unless an explicit or bundle-declared integration takes precedence.
+The integration environment override also takes precedence over the saved integration.
+
 For a concrete starting point, see the
 [example bundle manifests](https://github.com/github/spec-kit/tree/main/examples/bundles)
 for product managers, business analysts, security researchers, and developers.

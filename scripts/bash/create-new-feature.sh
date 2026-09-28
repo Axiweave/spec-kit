@@ -194,10 +194,44 @@ SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
 REPO_ROOT=$(get_repo_root) || exit 1
+WORKSPACE_ROOT=$(get_workspace_root "$REPO_ROOT") || exit 1
 
 cd "$REPO_ROOT"
 
-SPECS_DIR="$REPO_ROOT/specs"
+SPECS_DIR="$WORKSPACE_ROOT/specs"
+check_workspace_path "$WORKSPACE_ROOT" "$SPECS_DIR" || exit 1
+INIT_OPTIONS="$WORKSPACE_ROOT/.specify/init-options.json"
+check_workspace_path "$WORKSPACE_ROOT" "$INIT_OPTIONS" || exit 1
+if [[ "$USE_TIMESTAMP" != true && "$NUMBER_EXPLICIT" != true && -f "$INIT_OPTIONS" ]]; then
+    if command -v jq >/dev/null 2>&1; then
+        FEATURE_NUMBERING=$(jq -er '
+            if type != "object" then error("Project choices must be a JSON object.")
+            elif has("feature_numbering") then .feature_numbering else "sequential" end
+            | if . == "sequential" or . == "timestamp" then .
+              else error("Feature numbering must be sequential or timestamp.") end
+        ' "$INIT_OPTIONS") || exit 1
+    elif PYTHON_SPEC=$(_python3_command); then
+        read -r -a PYTHON_CMD <<< "$PYTHON_SPEC"
+        FEATURE_NUMBERING=$("${PYTHON_CMD[@]}" -c '
+import json, sys
+options = json.load(open(sys.argv[1], encoding="utf-8"))
+if not isinstance(options, dict):
+    sys.exit("Project choices must be a JSON object.")
+numbering = options.get("feature_numbering", "sequential")
+if numbering not in ("sequential", "timestamp"):
+    sys.exit("Feature numbering must be sequential or timestamp.")
+print(numbering)
+' "$INIT_OPTIONS") || exit 1
+    else
+        echo "ERROR: Reading feature numbering requires jq or Python 3: $INIT_OPTIONS" >&2
+        exit 1
+    fi
+    case "$FEATURE_NUMBERING" in
+        timestamp) USE_TIMESTAMP=true ;;
+        sequential) ;;
+        *) echo "ERROR: Invalid feature numbering in $INIT_OPTIONS: $FEATURE_NUMBERING" >&2; exit 1 ;;
+    esac
+fi
 if [ "$DRY_RUN" != true ]; then
     mkdir -p "$SPECS_DIR"
 fi
@@ -345,6 +379,8 @@ fi
 
 FEATURE_DIR="$SPECS_DIR/$BRANCH_NAME"
 SPEC_FILE="$FEATURE_DIR/spec.md"
+check_workspace_path "$WORKSPACE_ROOT" "$FEATURE_DIR" || exit 1
+check_workspace_path "$WORKSPACE_ROOT" "$SPEC_FILE" || exit 1
 
 if [ "$DRY_RUN" != true ]; then
     if [ -d "$FEATURE_DIR" ] && [ "$ALLOW_EXISTING" != true ]; then
@@ -361,7 +397,7 @@ if [ "$DRY_RUN" != true ]; then
     SPEC_TEMPLATE_CONTENT=""
     if [ ! -f "$SPEC_FILE" ]; then
         NEEDS_SPEC=true
-        if SPEC_TEMPLATE_CONTENT=$(resolve_template_content "spec-template" "$REPO_ROOT"; status=$?; printf x; exit "$status"); then
+        if SPEC_TEMPLATE_CONTENT=$(resolve_template_content "spec-template" "$WORKSPACE_ROOT"; status=$?; printf x; exit "$status"); then
             SPEC_TEMPLATE_CONTENT="${SPEC_TEMPLATE_CONTENT%x}"
             SPEC_TEMPLATE_FOUND=true
         else
@@ -383,8 +419,8 @@ if [ "$DRY_RUN" != true ]; then
         fi
     fi
 
-    # Persist to .specify/feature.json so downstream commands can find the
-    # feature, unless the orchestrator opted out via SPECIFY_FEATURE_NO_PERSIST (#4129).
+    # Save the feature in the local pointer or external machine record.
+    # Honor the orchestrator's no-persist setting.
     if [[ "${SPECIFY_FEATURE_NO_PERSIST:-}" != "1" && "${SPECIFY_FEATURE_NO_PERSIST:-}" != "true" ]]; then
         _persist_feature_json "$REPO_ROOT" "$FEATURE_DIR"
     fi

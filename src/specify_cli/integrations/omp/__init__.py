@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from ..base import MarkdownIntegration
+from ..manifest import IntegrationManifest
 
 
 class OmpIntegration(MarkdownIntegration):
@@ -25,6 +26,20 @@ class OmpIntegration(MarkdownIntegration):
         "extension": ".md",
     }
     multi_install_safe = True
+
+    def setup(
+        self,
+        project_root: Path,
+        manifest: IntegrationManifest,
+        parsed_options: dict[str, Any] | None = None,
+        **opts: Any,
+    ) -> list[Path]:
+        from .global_commands import global_commands_enabled, install_global_commands
+
+        if opts.get("global_commands") or global_commands_enabled(project_root):
+            install_global_commands()
+            return []
+        return super().setup(project_root, manifest, parsed_options=parsed_options, **opts)
 
     def build_exec_args(
         self,

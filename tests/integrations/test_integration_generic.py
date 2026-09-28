@@ -70,7 +70,7 @@ class TestGenericIntegration:
         from specify_cli.integrations.generic import GenericIntegration
 
         with pytest.raises(ValueError, match="--commands-dir is required"):
-            GenericIntegration._resolve_commands_dir({"commands_dir": blank}, {})
+            GenericIntegration.resolve_commands_dir({"commands_dir": blank}, {})
 
     @pytest.mark.parametrize(
         "raw", ["--commands-dir ' '", "--commands-dir='  '", "--commands-dir '\t'"]
@@ -80,7 +80,7 @@ class TestGenericIntegration:
         from specify_cli.integrations.generic import GenericIntegration
 
         with pytest.raises(ValueError, match="--commands-dir is required"):
-            GenericIntegration._resolve_commands_dir({}, {"raw_options": raw})
+            GenericIntegration.resolve_commands_dir({}, {"raw_options": raw})
 
     @pytest.mark.parametrize("padded", ["  .myagent/cmds  ", "\t.myagent/cmds"])
     def test_resolve_commands_dir_returns_padded_value_verbatim(self, padded):
@@ -89,12 +89,12 @@ class TestGenericIntegration:
         retarget a directory the user asked for by name."""
         from specify_cli.integrations.generic import GenericIntegration
 
-        assert GenericIntegration._resolve_commands_dir(
+        assert GenericIntegration.resolve_commands_dir(
             {"commands_dir": padded}, {}
         ) == padded
         # Quoted in raw_options, since shlex.split() would otherwise consume the
         # surrounding whitespace before this code ever sees it.
-        assert GenericIntegration._resolve_commands_dir(
+        assert GenericIntegration.resolve_commands_dir(
             {}, {"raw_options": f"--commands-dir='{padded}'"}
         ) == padded
 
@@ -106,16 +106,16 @@ class TestGenericIntegration:
         from specify_cli.integrations.generic import GenericIntegration
 
         with pytest.raises(ValueError, match="--commands-dir is required"):
-            GenericIntegration._resolve_commands_dir({}, {"raw_options": raw})
+            GenericIntegration.resolve_commands_dir({}, {"raw_options": raw})
 
     def test_resolve_commands_dir_accepts_nonempty_raw_value(self):
         """A non-empty raw --commands-dir still resolves unchanged."""
         from specify_cli.integrations.generic import GenericIntegration
 
-        assert GenericIntegration._resolve_commands_dir(
+        assert GenericIntegration.resolve_commands_dir(
             {}, {"raw_options": "--commands-dir .myagent/commands"}
         ) == ".myagent/commands"
-        assert GenericIntegration._resolve_commands_dir(
+        assert GenericIntegration.resolve_commands_dir(
             {}, {"raw_options": "--commands-dir=.myagent/commands"}
         ) == ".myagent/commands"
 

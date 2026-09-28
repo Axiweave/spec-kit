@@ -138,16 +138,17 @@ def _find_project_root(start: Path) -> Path | None:
 
 
 def _load_core_common(project_root: Path | None):
-    """Load the core common.py from the project's installed scripts.
+    """Load core helpers from the same source or installed layout as this script.
 
-    Search locations in priority order, mirroring the bash script:
-     1. .specify/scripts/python/common.py (installed project)
-     2. scripts/python/common.py (source checkout fallback)
-    Returns the loaded module or None.
+    Source scripts prefer checkout helpers over stale installed copies.
+    Return the loaded module or None when neither location exists.
     """
     if project_root is None:
         return None
-    for relative in (".specify/scripts/python/common.py", "scripts/python/common.py"):
+    locations = [".specify/scripts/python/common.py", "scripts/python/common.py"]
+    if SCRIPT_DIR == project_root / "extensions/git/scripts/python":
+        locations.reverse()
+    for relative in locations:
         candidate = project_root / relative
         if candidate.is_file():
             spec = importlib.util.spec_from_file_location("speckit_core_common", candidate)
@@ -472,8 +473,21 @@ def main(argv: list[str]) -> int:
 
     has_git_repo = _local_has_git(repo_root)
 
-    specs_dir = repo_root / "specs"
-    config_file = repo_root / ".specify" / "extensions" / "git" / "git-config.yml"
+    locator = repo_root / ".specify/project.json"
+    external = locator.exists() or locator.is_symlink()
+    if external:
+        if core is None or not hasattr(core, "get_workspace_root"):
+            _err("Error: External storage requires the current Spec Kit core scripts.")
+            return 1
+        workspace_root = core.get_workspace_root(repo_root)
+    else:
+        workspace_root = repo_root
+    specs_dir = workspace_root / "specs"
+    config_file = workspace_root / ".specify/extensions/git/git-config.yml"
+    options_file = workspace_root / ".specify/init-options.json"
+    if external:
+        for path in (specs_dir, config_file, options_file):
+            core.confined_workspace_path(workspace_root, path)
 
     author_token = get_author_token(repo_root)
     app_token = get_app_token(repo_root)
@@ -500,6 +514,24 @@ def main(argv: list[str]) -> int:
             branch_suffix = clean_branch_name(args.short_name)
         else:
             branch_suffix = generate_branch_name(feature_description)
+
+        if not args.use_timestamp and not branch_number:
+            numbering = read_git_config_value(config_file, "branch_numbering")
+            if not numbering:
+                numbering = "sequential"
+                if options_file.exists() or options_file.is_symlink():
+                    try:
+                        options = json.loads(options_file.read_text(encoding="utf-8"))
+                        if not isinstance(options, dict):
+                            raise ValueError("Project choices must be a JSON object.")
+                        numbering = options.get("feature_numbering", "sequential")
+                    except (OSError, ValueError) as exc:
+                        _err(f"Error: Cannot read project numbering: {exc}")
+                        return 1
+            if numbering not in ("sequential", "timestamp"):
+                _err(f"Error: Branch numbering must be sequential or timestamp, not {numbering!r}.")
+                return 1
+            args.use_timestamp = numbering == "timestamp"
 
         if args.use_timestamp and branch_number:
             _err("[specify] Warning: --number is ignored when --timestamp is used")

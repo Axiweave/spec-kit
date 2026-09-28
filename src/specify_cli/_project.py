@@ -8,6 +8,7 @@ from pathlib import Path
 import typer
 
 from ._console import err_console
+from .workspace import Project, ProjectNotFoundError, find_repository, resolve_project, workspace_root_for
 
 
 class ProjectResolutionError(RuntimeError):
@@ -62,17 +63,39 @@ def _resolve_init_dir_override() -> Path | None:
         raise typer.Exit(1)
 
 
-def resolve_specify_project_root() -> Path:
-    """Return the active project root without rendering errors.
-
-    This is deliberately separate from ``_require_specify_project`` so the
-    installed-list JSON contract can send structured failures to stderr without
-    changing the Rich diagnostics used by every other project-scoped command.
-    """
+def _resolve_project(*, allow_standalone: bool = False) -> Project:
+    """Resolve both roots, with a cwd fallback only outside a project."""
     override = _resolve_init_dir_override_unrendered()
-    if override is not None:
-        return override
-    project_root = Path.cwd()
-    if not (project_root / ".specify").is_dir():
-        raise ProjectResolutionError("Not a Spec Kit project (no .specify/ directory)")
-    return project_root
+    try:
+        repository = find_repository(override)
+    except ProjectNotFoundError as error:
+        if allow_standalone and override is None:
+            root = Path.cwd()
+            return Project(root, root, None, None)
+        raise ProjectResolutionError(
+            "Not a Spec Kit project (no .specify/ directory)"
+        ) from error
+    except ValueError as error:
+        raise ProjectResolutionError(str(error)) from error
+    try:
+        return resolve_project(repository)
+    except (OSError, ValueError) as error:
+        raise ProjectResolutionError(str(error)) from error
+
+
+def resolve_specify_project_root() -> Path:
+    """Verify repository/workspace roots without requiring feature selection."""
+    override = _resolve_init_dir_override_unrendered()
+    try:
+        repository = find_repository(override)
+    except ProjectNotFoundError as error:
+        raise ProjectResolutionError(
+            "Not a Spec Kit project (no .specify/ directory)"
+        ) from error
+    except ValueError as error:
+        raise ProjectResolutionError(str(error)) from error
+    try:
+        workspace_root_for(repository)
+    except (OSError, ValueError) as error:
+        raise ProjectResolutionError(str(error)) from error
+    return repository

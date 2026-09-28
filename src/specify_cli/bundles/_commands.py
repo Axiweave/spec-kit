@@ -69,10 +69,14 @@ def _trust_badge(verified: bool) -> str:
 
 
 def _default_script_type() -> str:
-    """OS-appropriate default script flavor (FR-013)."""
+    """Use the personal script choice before the platform fallback."""
     import os
+    from ..user_config import get_default
 
-    return "ps" if os.name == "nt" else "sh"
+    try:
+        return get_default("script") or ("ps" if os.name == "nt" else "sh")
+    except (OSError, ValueError) as error:
+        raise BundlerError(str(error)) from error
 
 
 def _run_init(integration: str, *, script_type: str, offline: bool = False) -> None:
@@ -93,9 +97,14 @@ def _run_init(integration: str, *, script_type: str, offline: bool = False) -> N
         init_cb(
             project_name=None,
             script_type=script_type,
+            storage=None,
+            workspace=None,
+            feature_numbering=None,
+            global_commands=False,
             ignore_agent_tools=True,
             here=True,
             force=True,
+            non_interactive=True,
             skip_tls=False,
             debug=False,
             github_token=None,
@@ -115,13 +124,20 @@ def _run_init(integration: str, *, script_type: str, offline: bool = False) -> N
 
 def _resolve_init_integration(override: str | None, manifest) -> str:
     """Precedence (FR-013): explicit override → bundle-declared → default."""
-    from .._agent_config import resolve_default_init_integration
+    import os
+    from .._agent_config import DEFAULT_INIT_INTEGRATION_ENV_VAR, resolve_default_init_integration
+    from ..user_config import get_default
 
     if override:
         return override
     if manifest is not None and manifest.integration is not None:
         return manifest.integration.id
-    return resolve_default_init_integration()
+    if (os.environ.get(DEFAULT_INIT_INTEGRATION_ENV_VAR) or "").strip():
+        return resolve_default_init_integration()
+    try:
+        return get_default("integration") or resolve_default_init_integration()
+    except (OSError, ValueError) as error:
+        raise BundlerError(str(error)) from error
 
 
 def _bundle_overlaps(project_root: Path, manifest, *, offline: bool) -> list[str]:

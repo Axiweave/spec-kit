@@ -14,10 +14,15 @@ When ``plan_path`` is omitted, the script derives it from
 recently modified ``plan.md`` found anywhere under ``specs/`` — scoped layouts
 nest it as ``specs/<scope>/<feature>/plan.md`` — only when feature.json is
 absent or its plan does not exist yet.
+
+External projects read configuration and the selected plan from their workspace.
+The native context files remain in the repository. External selection does not
+use the local modification-time fallback.
 """
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import re
@@ -26,6 +31,22 @@ from pathlib import Path
 
 DEFAULT_START = "<!-- SPECKIT START -->"
 DEFAULT_END = "<!-- SPECKIT END -->"
+
+
+def _load_core_common():
+    """Load the core helper beside the source or installed extension."""
+    path = (
+        Path(__file__).resolve().parent / "../../../../scripts/python/common.py"
+    ).resolve()
+    if not path.is_file():
+        return None
+    spec = importlib.util.spec_from_file_location("speckit_core_common", path)
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def _err(message: str) -> None:
@@ -42,7 +63,7 @@ def _get_str(obj: object, *keys: str) -> str:
     return node if isinstance(node, str) else ""
 
 
-def _collect_context_files(data: dict, project_root: str) -> list[str]:
+def _collect_context_files(data: dict, workspace_root: str) -> list[str]:
     """Resolve the managed context files from config, mirroring the bash logic."""
     context_files: list[str] = []
     seen: set[str] = set()
@@ -74,7 +95,7 @@ def _collect_context_files(data: dict, project_root: str) -> list[str]:
         integration_key = ""
         try:
             with open(
-                f"{project_root}/.specify/init-options.json", "r", encoding="utf-8"
+                f"{workspace_root}/.specify/init-options.json", "r", encoding="utf-8"
             ) as fh:
                 opts = json.load(fh)
             if isinstance(opts, dict):
@@ -84,7 +105,7 @@ def _collect_context_files(data: dict, project_root: str) -> list[str]:
             integration_key = ""
         if integration_key:
             defaults_path = (
-                f"{project_root}/.specify/extensions/agent-context/"
+                f"{workspace_root}/.specify/extensions/agent-context/"
                 "agent-context-defaults.json"
             )
             mapping = {}
@@ -297,9 +318,22 @@ def _upsert_section(
 
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
-    project_root = os.getcwd()
+    core = _load_core_common()
+    project_root = str(core.get_repo_root()) if core else os.getcwd()
+    if core is None:
+        start = Path(os.environ.get("SPECIFY_INIT_DIR") or project_root).resolve()
+        if any(
+            os.path.lexists(root / ".specify/project.json")
+            for root in (start, *start.parents)
+        ):
+            _err("agent-context: external storage requires the installed core common.py helper.")
+            return 1
+    workspace_root = (
+        core.get_workspace_root(Path(project_root)) if core else Path(project_root)
+    )
+    external = (Path(project_root) / ".specify/project.json").exists()
     ext_config = (
-        f"{project_root}/.specify/extensions/agent-context/agent-context-config.yml"
+        f"{workspace_root}/.specify/extensions/agent-context/agent-context-config.yml"
     )
 
     if not os.path.isfile(ext_config):
@@ -332,7 +366,7 @@ def main(argv: list[str] | None = None) -> int:
     if not isinstance(data, dict):
         data = {}
 
-    context_files = _collect_context_files(data, project_root)
+    context_files = _collect_context_files(data, str(workspace_root))
     if not context_files:
         _err(
             "agent-context: context_files/context_file not set in extension config; "
@@ -350,7 +384,13 @@ def main(argv: list[str] | None = None) -> int:
     marker_end = _get_str(data, "context_markers", "end") or DEFAULT_END
 
     plan_path = args[0] if args else ""
-    if not plan_path:
+    if external:
+        if plan_path:
+            print(f"[specify] Workspace: {workspace_root}", file=sys.stderr)
+            plan_path = core.confined_workspace_path(workspace_root, plan_path).as_posix()
+        else:
+            plan_path = core.get_feature_paths(no_persist=True).impl_plan.as_posix()
+    elif not plan_path:
         plan_path = _resolve_plan_path(project_root)
 
     section = _build_section(marker_start, marker_end, plan_path)

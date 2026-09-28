@@ -880,7 +880,7 @@ class _PresetCommandMethods:
         """Merge reconciliation writes into an extension's registry entry."""
         if not written:
             return
-        registry = ExtensionRegistry(self.project_root / ".specify" / "extensions")
+        registry = ExtensionRegistry(self.workspace_root / ".specify" / "extensions")
         metadata = registry.get(extension_id)
         if metadata is None:
             return
@@ -1045,7 +1045,7 @@ class _PresetCommandMethods:
                         # Use extension's own registration to preserve context formatting
                         extension_id = source.split(":", 1)[1].split(" ", 1)[0]
                         ext_dir = (
-                            self.project_root / ".specify" / "extensions" / extension_id
+                            self.workspace_root / ".specify" / "extensions" / extension_id
                         )
                         ext_manifest_path = ext_dir / "extension.yml"
                         if ext_manifest_path.exists():
@@ -1219,7 +1219,7 @@ class _PresetCommandMethods:
         if source_id and not source_id.startswith("preset:"):
             try:
                 from ..extensions import ExtensionManifest
-                for ext_dir in (self.project_root / ".specify" / "extensions").iterdir():
+                for ext_dir in (self.workspace_root / ".specify" / "extensions").iterdir():
                     if not ext_dir.is_dir():
                         continue
                     if cmd_path.is_relative_to(ext_dir):

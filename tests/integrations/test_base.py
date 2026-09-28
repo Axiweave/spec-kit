@@ -177,14 +177,6 @@ class TestBasePrimitives:
         with pytest.raises(ValueError, match="config is not set"):
             NoConfig().commands_dest(tmp_path)
 
-    def test_copy_command_to_directory(self, tmp_path):
-        src = tmp_path / "source.md"
-        src.write_text("content", encoding="utf-8")
-        dest_dir = tmp_path / "output"
-        result = IntegrationBase.copy_command_to_directory(src, dest_dir, "speckit.plan.md")
-        assert result == dest_dir / "speckit.plan.md"
-        assert result.read_text(encoding="utf-8") == "content"
-
     def test_record_file_in_manifest(self, tmp_path):
         f = tmp_path / "f.txt"
         f.write_text("hello", encoding="utf-8")

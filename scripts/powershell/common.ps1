@@ -80,20 +80,142 @@ function Resolve-SpecifyInitDir {
 function Get-RepoRoot {
     param([switch]$ReturnNullOnError)
 
-    # Explicit project override wins (see Resolve-SpecifyInitDir).
     if ($env:SPECIFY_INIT_DIR) {
-        return (Resolve-SpecifyInitDir -ReturnNullOnError:$ReturnNullOnError)
+        $repoRoot = Resolve-SpecifyInitDir -ReturnNullOnError:$ReturnNullOnError
+        if (-not $repoRoot) { return $null }
+    } else {
+        $repoRoot = Find-SpecifyRoot
+        if (-not $repoRoot) {
+            # Preserve the script-location fallback for local projects only.
+            $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "../../..")).Path
+        }
     }
-
-    # First, look for .specify directory (spec-kit's own marker)
-    $specifyRoot = Find-SpecifyRoot
-    if ($specifyRoot) {
-        return $specifyRoot
+    if ((Test-Path -LiteralPath (Join-Path $repoRoot '.specify/workspace.json')) -and
+        -not (Test-Path -LiteralPath (Join-Path $repoRoot '.specify/project.json'))) {
+        [Console]::Error.WriteLine("ERROR: Use the code repository as the working directory, or set SPECIFY_INIT_DIR to its path.")
+        if ($ReturnNullOnError) { return $null }
+        exit 1
     }
+    return $repoRoot
+}
 
-    # Final fallback to script location
-    # Use -LiteralPath to handle paths with wildcard characters
-    return (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "../../..")).Path
+# Resolve existing links, including links in parent directories, without requiring the leaf to exist.
+function Get-CanonicalStoragePath {
+    param([string]$Path, [int]$Depth = 0)
+    if ($Depth -gt 40) { throw "Too many symbolic links in path: $Path" }
+    $full = [System.IO.Path]::GetFullPath($Path)
+    $parent = Split-Path $full -Parent
+    if (-not $parent -or $parent -eq $full) { return $full }
+    $resolvedParent = Get-CanonicalStoragePath -Path $parent -Depth $Depth
+    $full = Join-Path $resolvedParent (Split-Path $full -Leaf)
+    $item = Get-Item -LiteralPath $full -Force -ErrorAction SilentlyContinue
+    if ($item -and ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+        $target = @($item.Target)[0]
+        if (-not $target) { throw "Cannot resolve symbolic link: $full" }
+        if (-not [System.IO.Path]::IsPathRooted($target)) { $target = Join-Path $resolvedParent $target }
+        return Get-CanonicalStoragePath -Path $target -Depth ($Depth + 1)
+    }
+    return $full
+}
+
+function Resolve-ContainedStoragePath {
+    param([string]$Root, [string]$Path)
+    if ($Path -match '(^|[\\/])\.\.([\\/]|$)') { throw "Path traversal is not allowed: $Path" }
+    $rootPath = [System.IO.Path]::GetFullPath($Root)
+    $candidate = if ([System.IO.Path]::IsPathRooted($Path)) { $Path } else { Join-Path $rootPath $Path }
+    $candidate = [System.IO.Path]::GetFullPath($candidate)
+    $comparison = if ($env:OS -eq 'Windows_NT') { [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal }
+    $prefix = $rootPath.TrimEnd('/', '\') + [System.IO.Path]::DirectorySeparatorChar
+    if (-not $candidate.Equals($rootPath, $comparison) -and -not $candidate.StartsWith($prefix, $comparison)) {
+        throw "Path is outside the selected workspace ${Root}: $Path"
+    }
+    $canonicalRoot = Get-CanonicalStoragePath $rootPath
+    $canonical = Get-CanonicalStoragePath $candidate
+    $prefix = $canonicalRoot.TrimEnd('/', '\') + [System.IO.Path]::DirectorySeparatorChar
+    if (-not $canonical.Equals($canonicalRoot, $comparison) -and -not $canonical.StartsWith($prefix, $comparison)) {
+        throw "Symbolic link escapes the selected workspace ${Root}: $Path"
+    }
+    return $candidate
+}
+
+function Read-StorageRecord {
+    param([string]$Path)
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+    if (-not $item -or $item.PSIsContainer -or ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+        throw "Storage record must be a regular file: $Path. Relink the workspace with 'specify project link'."
+    }
+    try {
+        $record = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    } catch {
+        throw "Cannot read storage record ${Path}: $($_.Exception.Message)"
+    }
+    if ($record -isnot [PSCustomObject] -or
+        ($record.schema_version -isnot [int] -and $record.schema_version -isnot [long]) -or
+        $record.schema_version -ne 1) {
+        throw "Unsupported storage record schema: $Path"
+    }
+    return $record
+}
+
+function Test-AbsoluteStoragePath {
+    param([string]$Path)
+    if (-not [System.IO.Path]::IsPathRooted($Path)) { return $false }
+    if ($env:OS -eq 'Windows_NT') {
+        return $Path -match '^(?:[a-zA-Z]:[\\/]|[\\/]{2}[^\\/]+[\\/][^\\/]+(?:[\\/]|$))'
+    }
+    return $true
+}
+
+function Get-StorageContext {
+    param([string]$RepoRoot = (Get-RepoRoot))
+    $locatorPath = Join-Path $RepoRoot '.specify/project.json'
+    $locatorEntry = Get-Item -LiteralPath $locatorPath -Force -ErrorAction SilentlyContinue
+    if (-not $locatorEntry) {
+        return [PSCustomObject]@{ Root = $RepoRoot; External = $false; Record = $null; RecordPath = $null }
+    }
+    $locatorPath = Resolve-ContainedStoragePath $RepoRoot $locatorPath
+    $locator = Read-StorageRecord $locatorPath
+    if ($locator.storage -cne 'external' -or $locator.project_id -isnot [string] -or
+        $locator.project_id -cnotmatch '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$') {
+        throw "Invalid external project locator: $locatorPath"
+    }
+    $projectId = ([guid]$locator.project_id).ToString()
+    $dataRoot = if ($env:XDG_DATA_HOME) { $env:XDG_DATA_HOME } elseif ($env:OS -eq 'Windows_NT') {
+        if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $HOME 'AppData/Local' }
+    } else { Join-Path $HOME '.local/share' }
+    if (-not (Test-AbsoluteStoragePath $dataRoot)) { throw "User data directory must be absolute: $dataRoot" }
+    $recordPath = Resolve-ContainedStoragePath $dataRoot "specify/projects/$projectId.json"
+    $record = Read-StorageRecord $recordPath
+    if ($record.workspace -isnot [string] -or -not (Test-AbsoluteStoragePath $record.workspace)) {
+        throw "Workspace path must be absolute in storage record: $recordPath"
+    }
+    $workspace = [System.IO.Path]::GetFullPath($record.workspace)
+    [Console]::Error.WriteLine("[specify] Workspace: $workspace")
+    if (-not (Test-Path -LiteralPath $workspace -PathType Container)) {
+        throw "Selected workspace is unavailable: $workspace. Relink it with 'specify project link'."
+    }
+    $identityPath = Resolve-ContainedStoragePath $workspace '.specify/workspace.json'
+    $identity = Read-StorageRecord $identityPath
+    if ($identity.project_id -isnot [string] -or $identity.project_id -ine $projectId) {
+        throw "Workspace identity does not match project ${projectId}: $workspace"
+    }
+    if (-not $record.PSObject.Properties['active_feature'] -or
+        ($null -ne $record.active_feature -and
+            ($record.active_feature -isnot [string] -or -not $record.active_feature -or
+                [System.IO.Path]::IsPathRooted($record.active_feature)))) {
+        throw "Active feature must be a relative path or null: $recordPath"
+    }
+    if ($null -ne $record.active_feature) {
+        $null = Resolve-ContainedStoragePath $workspace $record.active_feature
+    }
+    return [PSCustomObject]@{ Root = $workspace; External = $true; Record = $record; RecordPath = $recordPath }
+}
+
+function Resolve-StoragePath {
+    param($Storage, [string]$Path)
+    if ($Storage.External) { return Resolve-ContainedStoragePath $Storage.Root $Path }
+    if ([System.IO.Path]::IsPathRooted($Path)) { return $Path }
+    return Join-Path $Storage.Root $Path
 }
 
 function Get-CurrentBranch {
@@ -110,13 +232,31 @@ function Get-CurrentBranch {
 
 
 
-# Persist a feature_directory value to .specify/feature.json.
-# Writes only when the file is missing or the value differs from what's stored.
+# Persist the active feature in the machine record or the local feature.json file.
+# Skip writes when the saved selection is unchanged.
 function Save-FeatureJson {
     param(
         [Parameter(Mandatory = $true)][string]$RepoRoot,
         [Parameter(Mandatory = $true)][string]$FeatureDirectory
     )
+
+    $storage = Get-StorageContext -RepoRoot $RepoRoot
+    if ($storage.External) {
+        $absolute = Resolve-StoragePath $storage $FeatureDirectory
+        $relative = $absolute.Substring($storage.Root.TrimEnd('/', '\').Length).TrimStart('/', '\').Replace('\', '/')
+        if (-not $relative) { throw "Select a feature directory below the workspace: $absolute" }
+        if ($storage.Record.active_feature -ceq $relative) { return }
+        $storage.Record.active_feature = $relative
+        $temporary = $storage.RecordPath + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
+        try {
+            $json = $storage.Record | ConvertTo-Json -Depth 100 -Compress
+            [System.IO.File]::WriteAllText($temporary, $json, (New-Object System.Text.UTF8Encoding($false)))
+            [System.IO.File]::Replace($temporary, $storage.RecordPath, [NullString]::Value)
+        } finally {
+            if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force }
+        }
+        return
+    }
 
     # Strip repo root prefix if the value is absolute and under repo root.
     # Use case-insensitive comparison on Windows only (case-sensitive filesystems elsewhere).
@@ -159,30 +299,52 @@ function Save-FeatureJson {
 }
 
 function Get-FeaturePathsEnv {
-    # Read-only callers (e.g. check-prerequisites.ps1 -PathsOnly) pass -NoPersist
-    # so pure path resolution never writes .specify/feature.json, which would
-    # dirty the working tree or overwrite a pinned value (issue #3025).
+    # Read-only callers pass -NoPersist to preserve the saved active feature.
     param(
         [switch]$NoPersist,
         [switch]$ReturnNullOnError
     )
 
-    # SPECIFY_FEATURE_NO_PERSIST is the environment-level equivalent of -NoPersist,
-    # letting an orchestrator (multi-agent runner, CI matrix) guarantee that no
-    # script invocation in the process tree writes .specify/feature.json, even
-    # scripts that don't pass -NoPersist themselves (#4128).
+    # The environment flag also prevents writes to the saved active feature.
     $noPersist = [bool]$NoPersist -or $env:SPECIFY_FEATURE_NO_PERSIST -eq '1' -or $env:SPECIFY_FEATURE_NO_PERSIST -eq 'true'
 
     $repoRoot = Get-RepoRoot -ReturnNullOnError:$ReturnNullOnError
     if (-not $repoRoot) { return $null }
+    try {
+        $storage = Get-StorageContext -RepoRoot $repoRoot
+    } catch {
+        [Console]::Error.WriteLine("ERROR: $($_.Exception.Message)")
+        if ($ReturnNullOnError) { return $null }
+        throw
+    }
     $currentBranch = Get-CurrentBranch
 
     # Resolve feature directory.  Priority:
     #   1. SPECIFY_FEATURE_DIRECTORY env var (explicit override)
-    #   2. .specify/feature.json "feature_directory" key (persisted by specify command)
+    #   2. Machine-local active_feature in external mode, or local feature.json
     #   3. Error - no feature context available
     $featureJson = Join-Path $repoRoot '.specify/feature.json'
-    if ($env:SPECIFY_FEATURE_DIRECTORY) {
+    if ($storage.External) {
+        try {
+            $selected = if ($env:SPECIFY_FEATURE_DIRECTORY) { $env:SPECIFY_FEATURE_DIRECTORY } else { $storage.Record.active_feature }
+            if (-not $selected) { throw "No active feature in workspace: $($storage.Root). Create or select a feature." }
+            $featureDir = Resolve-StoragePath $storage $selected
+            $preCreation = $env:SPECIFY_FEATURE_DIRECTORY -and $noPersist -and -not (Test-Path -LiteralPath $featureDir)
+            if (-not $preCreation -and -not (Test-Path -LiteralPath $featureDir -PathType Container)) {
+                throw "Selected feature directory does not exist: $featureDir"
+            }
+            foreach ($artifact in @('spec.md', 'plan.md', 'tasks.md', 'research.md', 'data-model.md', 'quickstart.md', 'contracts')) {
+                $null = Resolve-StoragePath $storage (Join-Path $featureDir $artifact)
+            }
+            if ($env:SPECIFY_FEATURE_DIRECTORY -and -not $noPersist) {
+                Save-FeatureJson -RepoRoot $repoRoot -FeatureDirectory $featureDir
+            }
+        } catch {
+            [Console]::Error.WriteLine("ERROR: $($_.Exception.Message)")
+            if ($ReturnNullOnError) { return $null }
+            throw
+        }
+    } elseif ($env:SPECIFY_FEATURE_DIRECTORY) {
         $featureDir = $env:SPECIFY_FEATURE_DIRECTORY
         # Normalize relative paths to absolute under repo root
         if (-not [System.IO.Path]::IsPathRooted($featureDir)) {
@@ -232,6 +394,7 @@ function Get-FeaturePathsEnv {
 
     [PSCustomObject]@{
         REPO_ROOT     = $repoRoot
+        WORKSPACE_ROOT = $storage.Root
         CURRENT_BRANCH = $currentBranch
         FEATURE_DIR   = $featureDir
         FEATURE_SPEC  = Join-Path $featureDir 'spec.md'
@@ -274,6 +437,7 @@ function Test-DirHasFiles {
 
 function Get-InvokeSeparator {
     param([string]$RepoRoot = (Get-RepoRoot))
+    $storage = Get-StorageContext -RepoRoot $RepoRoot
 
     if ($null -eq $script:SpecKitInvokeSeparatorCache) {
         $script:SpecKitInvokeSeparatorCache = @{}
@@ -283,7 +447,7 @@ function Get-InvokeSeparator {
     }
 
     $separator = '.'
-    $integrationJson = Join-Path $RepoRoot '.specify/integration.json'
+    $integrationJson = Resolve-StoragePath $storage '.specify/integration.json'
     if (Test-Path -LiteralPath $integrationJson -PathType Leaf) {
         try {
             $state = Get-Content -LiteralPath $integrationJson -Raw | ConvertFrom-Json
@@ -427,17 +591,18 @@ function Resolve-Template {
     )
 
     if ($TemplateName -cnotmatch '^[a-z0-9-]+$') { return $null }
+    $storage = Get-StorageContext -RepoRoot $RepoRoot
 
-    $base = Join-Path $RepoRoot '.specify/templates'
+    $base = Resolve-StoragePath $storage '.specify/templates'
 
     # Priority 1: Project overrides
-    $override = Join-Path $base "overrides/$TemplateName.md"
+    $override = Resolve-StoragePath $storage (Join-Path $base "overrides/$TemplateName.md")
     if (Test-Path $override) { return $override }
 
     # Priority 2: Installed presets (sorted by priority from .registry)
-    $presetsDir = Join-Path $RepoRoot '.specify/presets'
+    $presetsDir = Resolve-StoragePath $storage '.specify/presets'
     if (Test-Path $presetsDir) {
-        $registryFile = Join-Path $presetsDir '.registry'
+        $registryFile = Resolve-StoragePath $storage (Join-Path $presetsDir '.registry')
         $sortedPresets = @()
         $registryParsed = $false
         if (Test-Path $registryFile) {
@@ -481,36 +646,37 @@ function Resolve-Template {
 
         if ($registryParsed) {
             foreach ($presetId in $sortedPresets) {
-                $candidate = Join-Path $presetsDir "$presetId/templates/$TemplateName.md"
+                $candidate = Resolve-StoragePath $storage (Join-Path $presetsDir "$presetId/templates/$TemplateName.md")
                 if (Test-Path $candidate) { return $candidate }
-                $candidate = Join-Path $presetsDir "$presetId/$TemplateName.md"
+                $candidate = Resolve-StoragePath $storage (Join-Path $presetsDir "$presetId/$TemplateName.md")
                 if (Test-Path $candidate) { return $candidate }
             }
         } else {
             # Fallback: alphabetical directory order
             foreach ($preset in Get-ChildItem -Path $presetsDir -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike '.*' } | Sort-Object Name) {
-                $candidate = Join-Path $preset.FullName "templates/$TemplateName.md"
+                $candidate = Resolve-StoragePath $storage (Join-Path $preset.FullName "templates/$TemplateName.md")
                 if (Test-Path $candidate) { return $candidate }
-                $candidate = Join-Path $preset.FullName "$TemplateName.md"
+                $candidate = Resolve-StoragePath $storage (Join-Path $preset.FullName "$TemplateName.md")
                 if (Test-Path $candidate) { return $candidate }
             }
         }
     }
 
     # Priority 3: Extension-provided templates
-    $extDir = Join-Path $RepoRoot '.specify/extensions'
+    $extDir = Resolve-StoragePath $storage '.specify/extensions'
     if (Test-Path $extDir) {
+        $null = Resolve-StoragePath $storage (Join-Path $extDir '.registry')
         foreach ($extensionId in Get-SortedExtensionIds -ExtensionsDir $extDir) {
-            $candidate = Join-Path $extDir "$extensionId/templates/$TemplateName.md"
+            $candidate = Resolve-StoragePath $storage (Join-Path $extDir "$extensionId/templates/$TemplateName.md")
             if (-not (Test-Path $candidate)) {
-                $candidate = Join-Path $extDir "$extensionId/$TemplateName.md"
+                $candidate = Resolve-StoragePath $storage (Join-Path $extDir "$extensionId/$TemplateName.md")
             }
             if (Test-Path $candidate) { return $candidate }
         }
     }
 
     # Priority 4: Core templates
-    $core = Join-Path $base "$TemplateName.md"
+    $core = Resolve-StoragePath $storage (Join-Path $base "$TemplateName.md")
     if (Test-Path $core) { return $core }
 
     return $null
@@ -528,15 +694,16 @@ function Resolve-TemplateContent {
     if ($TemplateName -cnotmatch '^[a-z0-9-]+$') {
         return $null
     }
+    $storage = Get-StorageContext -RepoRoot $RepoRoot
 
-    $base = Join-Path $RepoRoot '.specify/templates'
+    $base = Resolve-StoragePath $storage '.specify/templates'
 
     # Collect all layers (highest priority first)
     $layerPaths = @()
     $layerStrategies = @()
 
     # Priority 1: Project overrides (always "replace")
-    $override = Join-Path $base "overrides/$TemplateName.md"
+    $override = Resolve-StoragePath $storage (Join-Path $base "overrides/$TemplateName.md")
     if (Test-Path $override) {
         return [System.IO.File]::ReadAllText(
             $override,
@@ -547,9 +714,9 @@ function Resolve-TemplateContent {
     $effectiveBaseFound = $false
 
     # Priority 2: Installed presets (sorted by priority from .registry)
-    $presetsDir = Join-Path $RepoRoot '.specify/presets'
+    $presetsDir = Resolve-StoragePath $storage '.specify/presets'
     if (Test-Path $presetsDir) {
-        $registryFile = Join-Path $presetsDir '.registry'
+        $registryFile = Resolve-StoragePath $storage (Join-Path $presetsDir '.registry')
         $sortedPresets = @()
         $registryParsed = $false
         if (Test-Path $registryFile) {
@@ -604,7 +771,7 @@ function Resolve-TemplateContent {
                 $strategy = 'replace'
                 $manifestFilePath = ''
                 $manifestDeclared = $false
-                $manifest = Join-Path $presetsDir "$presetId/preset.yml"
+                $manifest = Resolve-StoragePath $storage (Join-Path $presetsDir "$presetId/preset.yml")
                 if ((Test-Path $manifest) -and -not $pyCmd) {
                     throw "Python 3 and PyYAML are required to resolve preset template composition"
                 }
@@ -691,18 +858,19 @@ except Exception as exc:
                 if ($manifestFilePath) {
                     # Reject absolute paths and parent traversal
                     if ([System.IO.Path]::IsPathRooted($manifestFilePath) -or $manifestFilePath -match '\.\.[\\/]') {
+                        if ($storage.External) { throw "Invalid template path in ${manifest}: $manifestFilePath" }
                         $manifestFilePath = ''
                     }
                 }
                 if ($manifestFilePath) {
-                    $mf = Join-Path $presetsDir "$presetId/$manifestFilePath"
+                    $mf = Resolve-StoragePath $storage (Join-Path $presetsDir "$presetId/$manifestFilePath")
                     if (Test-Path $mf) { $candidate = $mf }
                 }
                 if (-not $candidate -and -not $manifestDeclared) {
-                    $cf = Join-Path $presetsDir "$presetId/templates/$TemplateName.md"
+                    $cf = Resolve-StoragePath $storage (Join-Path $presetsDir "$presetId/templates/$TemplateName.md")
                     if (Test-Path $cf) { $candidate = $cf }
                     if (-not $candidate) {
-                        $cf = Join-Path $presetsDir "$presetId/$TemplateName.md"
+                        $cf = Resolve-StoragePath $storage (Join-Path $presetsDir "$presetId/$TemplateName.md")
                         if (Test-Path $cf) { $candidate = $cf }
                     }
                 }
@@ -718,12 +886,13 @@ except Exception as exc:
     }
 
     # Priority 3: Extension-provided templates (always "replace")
-    $extDir = Join-Path $RepoRoot '.specify/extensions'
+    $extDir = Resolve-StoragePath $storage '.specify/extensions'
     if (-not $effectiveBaseFound -and (Test-Path $extDir)) {
+        $null = Resolve-StoragePath $storage (Join-Path $extDir '.registry')
         foreach ($extensionId in Get-SortedExtensionIds -ExtensionsDir $extDir) {
-            $candidate = Join-Path $extDir "$extensionId/templates/$TemplateName.md"
+            $candidate = Resolve-StoragePath $storage (Join-Path $extDir "$extensionId/templates/$TemplateName.md")
             if (-not (Test-Path $candidate)) {
-                $candidate = Join-Path $extDir "$extensionId/$TemplateName.md"
+                $candidate = Resolve-StoragePath $storage (Join-Path $extDir "$extensionId/$TemplateName.md")
             }
             if (Test-Path $candidate) {
                 $layerPaths += $candidate
@@ -735,7 +904,7 @@ except Exception as exc:
     }
 
     # Priority 4: Core templates (always "replace")
-    $core = Join-Path $base "$TemplateName.md"
+    $core = Resolve-StoragePath $storage (Join-Path $base "$TemplateName.md")
     if (-not $effectiveBaseFound -and (Test-Path $core)) {
         $layerPaths += $core
         $layerStrategies += 'replace'

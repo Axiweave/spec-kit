@@ -4,10 +4,24 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
+
+
+def _resource_command(relative: str) -> str:
+    script = (
+        "import os, sys; from pathlib import Path; "
+        f"print((Path(os.environ['SPECKIT_WORKFLOW_DIR']) / {relative!r}).read_text(encoding='utf-8'), end=''); "
+        f"print((Path(sys.argv[1]) / {relative!r}).read_text(encoding='utf-8'), end=''); "
+        "print(Path.cwd())"
+    )
+    argv = [sys.executable, "-X", "utf8", "-c", script, "{{ context.workflow_dir }}"]
+    return subprocess.list2cmdline(argv) if os.name == "nt" else shlex.join(argv)
 
 
 
@@ -464,6 +478,109 @@ steps:
         result = runner.invoke(app, ["workflow", "resume", run_id, "--json"])
         assert result.exit_code == 0, result.output
 
+    @pytest.mark.parametrize("legacy_state", [False, True])
+    def test_cross_project_resources_follow_owner_move_and_relink(
+        self, tmp_path, monkeypatch, legacy_state
+    ):
+        import yaml
+        from typer.testing import CliRunner
+        from specify_cli import app
+        from specify_cli.project.move import commit_move, prepare_move
+        from specify_cli.workflows.engine import RunState
+
+        owner, consumer = tmp_path / "owner", tmp_path / "consumer"
+        owner_workspace = tmp_path / "owner workspace"
+        consumer_workspace = tmp_path / "consumer workspace"
+        for repo in (owner, consumer):
+            (repo / ".specify/workflows").mkdir(parents=True)
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "home"))
+        monkeypatch.delenv("SPECIFY_INIT_DIR", raising=False)
+        monkeypatch.chdir(owner)
+        source = tmp_path / "package"
+        source.mkdir()
+        (source / "message.txt").write_text("owner resource\n", encoding="utf-8")
+        workflow = yaml.safe_load(self._GATED_WORKFLOW_YAML)
+        workflow["inputs"] = {
+            name: {"type": "string", "default": ""} for name in ("verdict", "second_verdict")
+        }
+        resource = {
+            "type": "shell",
+            "run": _resource_command("message.txt"),
+        }
+        workflow["steps"][0]["verdict_input"] = "verdict"
+        workflow["steps"].extend([
+            {"id": "first-resource", **resource},
+            {"id": "second-review", "type": "gate", "message": "Review again", "verdict_input": "second_verdict"},
+            {"id": "second-resource", **resource},
+        ])
+        (source / "workflow.yml").write_text(yaml.safe_dump(workflow), encoding="utf-8")
+        runner = CliRunner()
+        installed = runner.invoke(app, ["workflow", "add", str(source), "--dev"])
+        assert installed.exit_code == 0, installed.output
+        monkeypatch.chdir(consumer)
+        installed_path = owner / ".specify/workflows/gated-wf/workflow.yml"
+        started = runner.invoke(app, ["workflow", "run", str(installed_path), "--json"])
+        assert started.exit_code == 0, started.output
+        run_id = json.loads(started.stdout)["run_id"]
+        state_path = consumer / ".specify/workflows/runs" / run_id / "state.json"
+        if legacy_state:
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            state["workflow_dir"] = str(installed_path.parent)
+            state_path.write_text(json.dumps(state), encoding="utf-8")
+        commit_move(prepare_move(consumer, consumer_workspace))
+        commit_move(prepare_move(owner, owner_workspace))
+        resumed = runner.invoke(app, ["workflow", "resume", run_id, "--input", "verdict=approve", "--json"])
+        assert resumed.exit_code == 0, resumed.output
+        assert json.loads(resumed.stdout)["status"] == "paused"
+        first = RunState.load(run_id, consumer_workspace)
+        expected = ["owner resource", "owner resource", str(consumer)]
+        assert first.step_results["first-resource"]["output"]["stdout"].splitlines() == expected
+        relocated = tmp_path / "relocated owner workspace"
+        shutil.move(owner_workspace, relocated)
+        monkeypatch.chdir(owner)
+        linked = runner.invoke(app, ["project", "link", str(relocated)])
+        assert linked.exit_code == 0, linked.output
+        monkeypatch.chdir(consumer)
+        finished = runner.invoke(app, [
+            "workflow", "resume", run_id, "--input", "second_verdict=approve", "--json",
+        ])
+        assert finished.exit_code == 0, finished.output
+        assert json.loads(finished.stdout)["status"] == "completed"
+        final = RunState.load(run_id, consumer_workspace)
+        assert final.step_results["second-resource"]["output"]["stdout"].splitlines() == expected
+        assert final.step_results["first-resource"] == first.step_results["first-resource"]
+        assert final.workflow_dir == str(relocated / ".specify/workflows/gated-wf")
+
+    def test_resume_checks_migrated_cross_project_owner(self, tmp_path, monkeypatch):
+        from typer.testing import CliRunner
+        from specify_cli import app
+        from specify_cli.project.move import commit_move, prepare_move
+
+        owner = tmp_path / "owner"
+        consumer = tmp_path / "consumer"
+        (owner / ".specify/workflows").mkdir(parents=True)
+        (consumer / ".specify").mkdir(parents=True)
+        monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "home"))
+        monkeypatch.delenv("SPECIFY_INIT_DIR", raising=False)
+        monkeypatch.chdir(owner)
+        runner = CliRunner()
+        self._install_and_run_gated(runner, app, owner)
+        monkeypatch.chdir(consumer)
+        source = owner / ".specify/workflows/gated-wf/workflow.yml"
+        started = runner.invoke(app, ["workflow", "run", str(source), "--json"])
+        assert started.exit_code == 0, started.output
+        run_id = json.loads(started.stdout)["run_id"]
+        commit_move(prepare_move(owner, tmp_path / "workspace"))
+        monkeypatch.chdir(owner)
+        disabled = runner.invoke(app, ["workflow", "disable", "gated-wf"])
+        assert disabled.exit_code == 0, disabled.output
+        monkeypatch.chdir(consumer)
+        resumed = runner.invoke(app, ["workflow", "resume", run_id])
+        assert resumed.exit_code != 0
+        assert "disabled" in resumed.output
+        state = consumer / ".specify/workflows/runs" / run_id / "state.json"
+        assert json.loads(state.read_text(encoding="utf-8"))["status"] == "paused"
+
     @pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks are unavailable")
     def test_resume_respects_cross_project_registry_root(
         self, temp_dir, monkeypatch
@@ -572,13 +689,15 @@ steps:
             ("installed_registry_root", False),
             ("installed_registry_root", ""),
             ("installed_registry_root", "relative-owner"),
+            ("workflow_dir", 123),
+            ("workflow_dir", ""),
+            ("workflow_dir", "../outside"),
         ],
     )
-    def test_resume_rejects_malformed_run_state_origin_fields(
+    def test_resume_rejects_malformed_run_state_metadata(
         self, project_dir, monkeypatch, field, bad_value
     ):
-        """RunState.load() rejects malformed or unsafe origin metadata
-        before registry/path lookups and reports a clean CLI error."""
+        """Reject malformed ownership and resource paths before the run resumes."""
         from typer.testing import CliRunner
         from specify_cli import app
 
@@ -650,3 +769,138 @@ steps:
 
         result = runner.invoke(app, ["workflow", "resume", run_id, "--json"])
         assert result.exit_code == 0, result.output
+
+
+@pytest.mark.parametrize(
+    ("source_kind", "legacy_state", "relink"),
+    [
+        ("installed", False, False),
+        ("installed", True, False),
+        ("installed", False, True),
+        ("metadata", True, True),
+        ("specs", True, False),
+        ("active-feature", True, False),
+        ("repository", False, False),
+        ("outside", True, True),
+    ],
+)
+def test_resource_resume_survives_storage_transition(
+    tmp_path, monkeypatch, source_kind, legacy_state, relink
+):
+    from typer.testing import CliRunner
+    from specify_cli import app
+    from specify_cli.project.move import commit_move, prepare_move
+    from specify_cli.workflows.engine import RunState
+
+    repo = tmp_path / "repository"
+    workspace = tmp_path / "workspace"
+    (repo / ".specify/workflows").mkdir(parents=True)
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("SPECIFY_INIT_DIR", raising=False)
+    monkeypatch.delenv("SPECIFY_FEATURE_DIRECTORY", raising=False)
+    monkeypatch.chdir(repo)
+    source = {
+        "installed": tmp_path / "package",
+        "metadata": repo / ".specify/custom/nested",
+        "specs": repo / "specs/001-feature/resources",
+        "active-feature": repo / "design/current/resources",
+        "repository": repo / "standalone",
+        "outside": tmp_path / "standalone",
+    }[source_kind]
+    (source / "assets").mkdir(parents=True)
+    (source / "assets/message.txt").write_text("copied resource\n", encoding="utf-8")
+    argv = [sys.executable, "-X", "utf8", "-c", "import sys; print(sys.argv[1], end='')", "{{ inputs.note }}"]
+    remember = subprocess.list2cmdline(argv) if os.name == "nt" else shlex.join(argv)
+    workflow = source / "workflow.yml"
+    workflow.write_text(
+        f"""
+schema_version: "1.0"
+workflow:
+  id: resource-wf
+  name: Resource workflow
+  version: "1.0.0"
+inputs:
+  verdict:
+    type: string
+    default: ""
+  note:
+    type: string
+    default: ""
+steps:
+  - id: remember
+    type: shell
+    run: {json.dumps(remember)}
+  - id: review
+    type: gate
+    message: Review
+    verdict_input: verdict
+  - id: resource
+    type: shell
+    run: {json.dumps(_resource_command("assets/message.txt"))}
+""",
+        encoding="utf-8",
+    )
+    if source_kind == "active-feature":
+        (repo / ".specify/feature.json").write_text(
+            json.dumps({"feature_directory": "design/current"}), encoding="utf-8"
+        )
+    runner = CliRunner()
+    if source_kind == "installed":
+        installed = runner.invoke(app, ["workflow", "add", str(source), "--dev"])
+        assert installed.exit_code == 0, installed.output
+        source = repo / ".specify/workflows/resource-wf"
+        command = "resource-wf"
+    else:
+        command = str(workflow)
+    run_root = repo
+    if source_kind == "installed" and relink:
+        commit_move(prepare_move(repo, workspace))
+        source = workspace / source.relative_to(repo)
+        run_root = workspace
+    note = str(repo / ".specify/user-supplied-path")
+    started = runner.invoke(app, ["workflow", "run", command, "--input", f"note={note}", "--json"])
+    assert started.exit_code == 0, started.output
+    payload = json.loads(started.stdout)
+    assert payload["status"] == "paused"
+    run_id = payload["run_id"]
+    run_relative = Path(".specify/workflows/runs") / run_id
+    state_path = run_root / run_relative / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    if legacy_state:
+        state["workflow_dir"] = str(source)
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+    inputs_before = (run_root / run_relative / "inputs.json").read_bytes()
+    workflow_before = (run_root / run_relative / "workflow.yml").read_bytes()
+    if run_root == repo:
+        prepared = prepare_move(repo, workspace)
+        assert (workspace / run_relative / "state.json").read_bytes() == state_path.read_bytes()
+        commit_move(prepared)
+    if relink:
+        relocated = tmp_path / "relocated workspace"
+        shutil.move(workspace, relocated)
+        linked = runner.invoke(app, ["project", "link", str(relocated)])
+        assert linked.exit_code == 0, linked.output
+        workspace = relocated
+    moved = source_kind not in ("repository", "outside")
+    expected_source = workspace / source.relative_to(run_root) if moved else source
+    restored = RunState.load(run_id, workspace)
+    assert restored.workflow_dir == str(expected_source)
+    assert restored.step_results["remember"] == state["step_results"]["remember"]
+    assert (workspace / run_relative / "inputs.json").read_bytes() == inputs_before
+    assert (workspace / run_relative / "workflow.yml").read_bytes() == workflow_before
+    resumed = runner.invoke(
+        app, ["workflow", "resume", run_id, "--input", "verdict=approve", "--json"]
+    )
+    assert resumed.exit_code == 0, resumed.output
+    assert json.loads(resumed.stdout)["status"] == "completed"
+    finished = RunState.load(run_id, workspace)
+    assert finished.step_results["resource"]["output"]["stdout"].splitlines() == [
+        "copied resource", "copied resource", str(repo),
+    ]
+    assert finished.inputs["note"] == note
+    assert finished.step_results["remember"] == state["step_results"]["remember"]
+    assert {path.name for path in (repo / ".specify").iterdir()} == {"project.json"}
+    if moved:
+        assert not source.exists()
+    else:
+        assert (source / "assets/message.txt").read_text(encoding="utf-8") == "copied resource\n"

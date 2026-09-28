@@ -81,7 +81,7 @@ class GenericIntegration(MarkdownIntegration):
         ]
 
     @staticmethod
-    def _resolve_commands_dir(
+    def resolve_commands_dir(
         parsed_options: dict[str, Any] | None,
         opts: dict[str, Any],
     ) -> str:
@@ -203,7 +203,7 @@ class GenericIntegration(MarkdownIntegration):
         **opts: Any,
     ) -> list[Path]:
         """Install commands to the user-provided commands directory."""
-        commands_dir = self._resolve_commands_dir(parsed_options, opts)
+        commands_dir = self.resolve_commands_dir(parsed_options, opts)
 
         templates = self.list_command_templates()
         if not templates:

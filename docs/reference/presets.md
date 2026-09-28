@@ -195,7 +195,19 @@ catalogs:
 
 Presets can provide command files, template files (like `plan-template.md`), and script files. Each file name is evaluated independently against the priority stack, so different files can come from different layers.
 
-Templates and scripts are looked up from the stack when Spec Kit needs them. Commands use the same stack for replacement and composition, but are materialized into the active integration's directory only, instead of being re-resolved by agents or written to every detected agent directory (#2948). During preset install, Spec Kit registers command files for the preset being installed against the currently active integration; post-install and post-removal reconciliation then recomputes and writes the effective command content for affected command names based on the active stack. Install and rescaffold remain active-only, but removal may also update previously targeted inactive directories recorded by the removed preset to restore the surviving command or skill layer. A non-active installed integration does not otherwise receive these command files until it becomes the default — `specify integration use <key>` (or `switch <key>`) rescaffolds enabled presets for the newly active integration. Agents do not re-resolve the stack each time they run a command.
+Templates and scripts use the current stack when Spec Kit needs them.
+For project-local commands, Spec Kit writes composed content into the active integration's directory (#2948).
+Preset installation and removal recompute affected commands from the active stack.
+Installation and rescaffolding target only the active integration.
+Removal can also restore surviving command or skill content in previously targeted inactive directories.
+
+Other installed integrations receive command files when they become the default.
+`specify integration use <key>` or `switch <key>` selects the integration and rescaffolds enabled presets.
+For these project-local commands, agents do not resolve the stack at each invocation.
+
+**Global OMP exception:** shared launchers run `specify project command <name> --json` from the invoking repository.
+Each invocation resolves that project's current preset and extension stack, workspace, and selected feature.
+Preset updates, priority changes, disabling, and removal affect later invocations without rewriting existing shared launchers.
 
 By default, files use a **replace** strategy: the first match in the priority stack wins and is used entirely. Templates and commands can also use composition strategies: **prepend** places preset content before lower-priority content, **append** places it after lower-priority content, and **wrap** replaces `{CORE_TEMPLATE}` with lower-priority content. Scripts support **replace** and **wrap**; script wrappers use `$CORE_SCRIPT` as the placeholder.
 
@@ -271,9 +283,21 @@ Run `specify preset resolve <name>` to trace the resolution stack and see which 
 
 ### What's the difference between disabling and removing a preset?
 
-**Disabling** (`specify preset disable`) keeps the preset installed but excludes it from future template and script resolution. Previously registered commands remain available in your AI coding agent until preset removal, so use removal when you need command changes to stop taking effect. Disabling is useful for temporarily testing template/script behavior without a preset, or comparing template/script output with and without it. Re-enable anytime with `specify preset enable`.
+**Disabling** (`specify preset disable`) keeps the preset installed but excludes it from future template and script resolution.
+For project-local commands, previously written files stay available until removal.
+Re-enable the preset with `specify preset enable`.
 
-**Removing** (`specify preset remove`) fully uninstalls the preset — deletes its files, unregisters its commands from your AI coding agent, and removes it from the registry.
+**With global OMP commands**, disabling also excludes the preset from the next command resolution.
+The command uses lower-priority content or reports that it is unavailable.
+The shared launcher stays installed.
+
+**Removing** (`specify preset remove`) deletes the preset's files and removes its registry entry.
+For project-local commands, Spec Kit removes generated commands or restores surviving lower-priority content.
+
+**With global OMP commands**, removal changes the project's runtime stack but preserves shared launchers.
+Removing the project also leaves those launchers installed.
+Use `specify integration uninstall omp --global` to remove the shared install.
+Spec Kit preserves user-modified and unrelated command files.
 
 ### Who maintains presets?
 

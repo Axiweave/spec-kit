@@ -34,11 +34,12 @@ if [[ -z "$TEMPLATE_NAME" ]]; then
     exit 1
 fi
 
-REPO_ROOT=$(get_repo_root)
-if TEMPLATE_CONTENT=$(resolve_template_content "$TEMPLATE_NAME" "$REPO_ROOT"; status=$?; printf x; exit "$status"); then
+REPO_ROOT=$(get_repo_root) || exit 1
+WORKSPACE_ROOT=$(get_workspace_root "$REPO_ROOT") || exit 1
+if TEMPLATE_CONTENT=$(resolve_template_content "$TEMPLATE_NAME" "$WORKSPACE_ROOT"; status=$?; printf x; exit "$status"); then
     TEMPLATE_CONTENT="${TEMPLATE_CONTENT%x}"
 else
-    echo "ERROR: Could not resolve required $TEMPLATE_NAME from the template override stack for $REPO_ROOT" >&2
+    echo "ERROR: Could not resolve required $TEMPLATE_NAME from the template override stack for $WORKSPACE_ROOT" >&2
     exit 1
 fi
 

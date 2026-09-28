@@ -2,6 +2,26 @@
 
 Workflows automate multi-step Spec-Driven Development processes — chaining commands, prompts, shell steps, and human checkpoints into repeatable sequences. They support conditional logic, loops, fan-out/fan-in, and can be paused and resumed from the exact point of interruption.
 
+## External workspace ownership
+
+In external mode, the workspace owns installed workflows, overlays, registries, configuration, and run state.
+Shell steps keep the code repository as their working directory.
+Run `specify project info --json` from the repository to inspect the workspace.
+Missing or foreign workspace mappings stop execution without a local fallback.
+
+Direct workflow files outside a Spec Kit project retain their existing standalone behavior.
+Personal setup defaults do not redirect an existing workflow.
+
+A project move preserves installed workflow definitions, overlays, configuration, and run state in the external workspace.
+The code repository remains the execution directory.
+Stop active agents and workflows before a move.
+Create a separate workspace backup to protect workflow state and feature artifacts.
+
+Paused runs retain workspace-owned resource paths after migration or workspace relinking.
+Spec Kit does not rewrite paths inside user inputs, step outputs, or workflow commands.
+Use `context.workflow_dir` for package resources instead of saved absolute paths.
+For cross-project workflows, an explicit external owner path must remain available.
+
 ## Run a Workflow
 
 ```bash

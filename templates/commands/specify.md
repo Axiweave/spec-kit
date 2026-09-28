@@ -79,31 +79,37 @@ Given that feature description, do this:
 
 3. **Create the spec feature directory**:
 
-   Specs live under the default `specs/` directory unless the user explicitly provides `SPECIFY_FEATURE_DIRECTORY`.
+   Specs live under the workspace's `specs/` directory unless the user explicitly provides `SPECIFY_FEATURE_DIRECTORY`.
 
    **Resolution order for `SPECIFY_FEATURE_DIRECTORY`**:
-   1. If the user explicitly provided `SPECIFY_FEATURE_DIRECTORY` (e.g., via environment variable, argument, or configuration), use it as-is
+   1. Resolve an explicit `SPECIFY_FEATURE_DIRECTORY` against the workspace. Preserve absolute local-mode overrides. External overrides must stay inside the workspace.
    2. Otherwise, auto-generate it under `specs/`:
-      - Check `.specify/init-options.json` for `feature_numbering` (preferred) or `branch_numbering` (deprecated, migration only — will be removed in a future release)
-      - If `"timestamp"`: prefix is `YYYYMMDD-HHMMSS` (current timestamp)
-      - If `"sequential"` or absent: prefix is `NNN` (next available 3-digit number after scanning existing directories in `specs/`)
+      - An explicit per-feature number or timestamp choice overrides the saved project mode. If both are explicit, use the timestamp choice.
+      - Otherwise, read `feature_numbering` from the workspace's `.specify/init-options.json`.
+      - If `"timestamp"`: prefix is `YYYYMMDD-HHMMSS` (current timestamp).
+      - If `"sequential"` or absent: prefix is `NNN`, the next number from existing feature directories. Ignore timestamp-prefixed directories.
+      - If another value is present, stop and report an invalid project numbering mode.
       - Construct the directory name: `<prefix>-<short-name>` (e.g., `003-user-auth` or `20260319-143022-user-auth`)
       - Set `SPECIFY_FEATURE_DIRECTORY` to `specs/<directory-name>`
-      - If `branch_numbering` was used (and `feature_numbering` was absent), emit a one-line warning: "⚠️ `branch_numbering` in init-options.json is deprecated. Rename to `feature_numbering`."
 
    **Create the directory and spec file**:
+   - Validate the feature path through the installed common helper listed below before writing files.
+     For that invocation only, set `SPECIFY_FEATURE_NO_PERSIST=1`.
+     Use the helper's resolved feature path. Stop if workspace or path validation fails.
    - `mkdir -p SPECIFY_FEATURE_DIRECTORY`
    - Resolve the active `spec-template` through the Spec Kit preset/template resolution stack (equivalent to `specify preset resolve spec-template`)
    - Copy the resolved `spec-template` file to `SPECIFY_FEATURE_DIRECTORY/spec.md` as the starting point
    - Set `SPEC_FILE` to `SPECIFY_FEATURE_DIRECTORY/spec.md`
-   - Persist the resolved path to `.specify/feature.json`:
-     ```json
-     {
-       "feature_directory": "<resolved feature dir>"
-     }
-     ```
-     Write the actual resolved directory path value (for example, `specs/003-user-auth`), not the literal string `SPECIFY_FEATURE_DIRECTORY`.
-     This allows downstream commands (`__SPECKIT_COMMAND_PLAN__`, `__SPECKIT_COMMAND_TASKS__`, etc.) to locate the feature directory without relying on git branch name conventions.
+   - Persist the selection through the installed common helper, not by writing JSON directly.
+     Set `SPECIFY_FEATURE_DIRECTORY` to the absolute feature directory for that helper invocation.
+     Keep the code repository as the working directory.
+     Use the selected script language from `.specify/init-options.json`:
+     - Bash: source the workspace's `.specify/scripts/bash/common.sh`, then call `get_feature_paths`.
+     - PowerShell: dot-source the workspace's `.specify/scripts/powershell/common.ps1`, then call `Get-FeaturePathsEnv`.
+     - Python: load the workspace's `.specify/scripts/python/common.py`, then call `get_feature_paths()`.
+     These helpers preserve local `.specify/feature.json` behavior and update the external machine-local record when applicable.
+     Unless `SPECIFY_FEATURE_NO_PERSIST` disables persistence, verify a fresh `specify project info --json` reports this feature.
+     Downstream commands must recover the selection without a per-command environment override.
 
    **IMPORTANT**:
    - You must only create one feature per `__SPECKIT_COMMAND_SPECIFY__` invocation

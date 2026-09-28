@@ -12,6 +12,7 @@ try:
     from common import (
         TemplateResolutionError,
         get_repo_root,
+        get_workspace_root,
         resolve_template_content,
     )
 except ImportError:  # pragma: no cover - direct execution from unusual cwd
@@ -19,6 +20,7 @@ except ImportError:  # pragma: no cover - direct execution from unusual cwd
     from common import (
         TemplateResolutionError,
         get_repo_root,
+        get_workspace_root,
         resolve_template_content,
     )
 
@@ -30,6 +32,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     repo_root = get_repo_root(Path(__file__))
+    workspace_root = get_workspace_root(repo_root, report=True)
     try:
         content = resolve_template_content(args.template_name, repo_root)
     except TemplateResolutionError as exc:
@@ -38,7 +41,7 @@ def main(argv: list[str] | None = None) -> int:
     if content is None:
         print(
             f"ERROR: Could not resolve required {args.template_name} from the "
-            f"template override stack for {repo_root}",
+            f"template override stack for {workspace_root}",
             file=sys.stderr,
         )
         return 1

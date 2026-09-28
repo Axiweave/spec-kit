@@ -10,10 +10,14 @@ The singular CLI namespace intentionally maps to the plural Python package.
 so preserving it takes precedence over matching the CLI spelling on disk.
 ``command_run`` contains the nested CLI adapter; this module owns the domain
 API, Typer application, and registration.
+
+External workspaces own event definitions, scripts, and the Python dispatcher.
+The code repository owns native hook configuration and remains the handler working directory.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -28,6 +32,8 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 import typer
+
+from ..workspace import workspace_root_for
 
 if TYPE_CHECKING:
     from ..integrations.base import IntegrationBase
@@ -47,6 +53,7 @@ event_app = typer.Typer(
 # An older installed specify_cli.events (uvx-init plus a stale global
 # install) would otherwise run unconfined script tokens.
 EVENT_SCRIPT_PATH_CONFINEMENT = True
+EVENT_WORKSPACE_ROUTING = True
 
 EVENTS_DISPATCHER_DIR = Path(".specify")
 EVENTS_DISPATCHER_FILENAME = "events.py"
@@ -102,6 +109,58 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path, PurePosixPath, PureWindowsPath
+from uuid import UUID
+
+EXTERNAL_WORKSPACE = False
+
+
+def _metadata(path):
+    if path.is_symlink() or path.parent.is_symlink():
+        raise ValueError(f"Metadata must not use a symlink: {path}")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or type(data.get("schema_version")) is not int or data["schema_version"] != 1:
+        raise ValueError(f"Unsupported metadata version: {path}")
+    return data
+
+
+def _event_roots():
+    """Resolve the invoking repository and validate this dispatcher's workspace."""
+    dispatcher_root = Path(__file__).resolve().parent.parent
+    if not EXTERNAL_WORKSPACE:
+        return dispatcher_root, dispatcher_root
+    override = os.environ.get("SPECIFY_INIT_DIR") or os.environ.get("CLAUDE_PROJECT_DIR")
+    start = Path(override).expanduser().resolve() if override else Path.cwd().resolve()
+    candidates = (start,) if override else (start, *start.parents)
+    repository = next((p for p in candidates if (p / ".specify").is_dir()), None)
+    if repository is None:
+        raise ValueError("Run the event from its code repository or set SPECIFY_INIT_DIR.")
+    if (repository / ".specify/workspace.json").exists():
+        raise ValueError("Run the event from its code repository, not its workspace.")
+    locator_path = repository / ".specify/project.json"
+    workspace = repository
+    if locator_path.exists() or locator_path.is_symlink():
+        locator = _metadata(locator_path)
+        project_id = locator.get("project_id")
+        if locator.get("storage") != "external" or not isinstance(project_id, str) or str(UUID(project_id)) != project_id:
+            raise ValueError(f"Invalid project locator: {locator_path}")
+        if os.environ.get("XDG_DATA_HOME"):
+            data_dir = Path(os.environ["XDG_DATA_HOME"]).expanduser()
+        elif os.name == "nt":
+            data_dir = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData/Local")))
+        else:
+            data_dir = Path.home() / ".local/share"
+        record_path = data_dir / "specify/projects" / (project_id + ".json")
+        record = _metadata(record_path)
+        value = record.get("workspace")
+        if not isinstance(value, str) or not Path(value).is_absolute():
+            raise ValueError(f"Workspace must be an absolute path: {record_path}")
+        workspace = Path(value).resolve()
+        identity = _metadata(workspace / ".specify/workspace.json")
+        if identity.get("project_id") != project_id:
+            raise ValueError(f"Workspace belongs to another project: {workspace}")
+    if workspace != dispatcher_root:
+        raise ValueError("This dispatcher does not belong to the invoking project's workspace.")
+    return repository, workspace
 
 
 def _script_under_base(base, token, project_root):
@@ -284,12 +343,13 @@ def _resolve_argv(template_path, project_root, ext_id):
     return [str(script_abs), *rest]
 
 
-def _run_inline(command_name, payload, project_root, timeout, envelope="plain", native_event=""):
+def _run_inline(command_name, payload, project_root, timeout, envelope="plain", native_event="", workspace_root=None):
     """Resolve and run the event command with stdlib only (no specify_cli)."""
-    template_path, ext_id = _find_command_template(command_name, project_root)
+    workspace_root = workspace_root or project_root
+    template_path, ext_id = _find_command_template(command_name, workspace_root)
     if not template_path:
         return 0  # command not found: fail open (no-op) for lifecycle events
-    argv = _resolve_argv(template_path, project_root, ext_id)
+    argv = _resolve_argv(template_path, workspace_root, ext_id)
     if not argv:
         return 0
     try:
@@ -410,7 +470,11 @@ def main():
         payload = raw.decode("utf-8")
     else:
         payload = "{}"
-    project_root = Path(__file__).parent.parent.resolve()
+    try:
+        project_root, workspace_root = _event_roots()
+    except (OSError, ValueError) as exc:
+        print(f"Cannot resolve event workspace: {exc}", file=sys.stderr)
+        sys.exit(2)
 
     # Preferred path: specify_cli is importable (durable install) — delegate to
     # the full resolver, which also handles extension manifests whose file stem
@@ -420,10 +484,11 @@ def main():
     try:
         from specify_cli.events import (
             EVENT_SCRIPT_PATH_CONFINEMENT as _confine_ok,
+            EVENT_WORKSPACE_ROUTING as _workspace_ok,
             resolve_and_run_event_command,
         )
-        if _confine_ok is not True:
-            raise ImportError("specify_cli.events lacks script path confinement")
+        if _confine_ok is not True or _workspace_ok is not True:
+            raise ImportError("specify_cli.events lacks safe workspace routing")
         sys.exit(
             resolve_and_run_event_command(
                 command_name, _event_name, payload, project_root, timeout=timeout, envelope=envelope, native_event=native_event
@@ -433,7 +498,7 @@ def main():
         pass
 
     # Fallback: self-contained stdlib resolver (one-time/temporary installs).
-    sys.exit(_run_inline(command_name, payload, project_root, timeout, envelope, native_event))
+    sys.exit(_run_inline(command_name, payload, project_root, timeout, envelope, native_event, workspace_root))
 
 
 if __name__ == "__main__":
@@ -451,6 +516,7 @@ import * as path from 'path';
 // another workspace, in which case process.cwd() points at the wrong project.
 let DISPATCHER = '';
 let INTERPRETER = '';
+let PROJECT_ROOT = '';
 
 function canImportSpecifyCli(py: string): boolean {{
   // R2: a project-local venv commonly lacks Spec Kit (installed globally or
@@ -468,7 +534,8 @@ function canImportSpecifyCli(py: string): boolean {{
 }}
 
 function resolveDispatcher(directory: string): void {{
-  DISPATCHER = path.join(directory, '.specify', 'events.py');
+  DISPATCHER = {dispatcher};
+  PROJECT_ROOT = directory;
   // Prefer a project-local venv interpreter that can import specify_cli (R2),
   // then fall back to a platform-appropriate PATH interpreter (S2: python on
   // Windows, where python3 is commonly absent; python3 on POSIX).
@@ -496,6 +563,7 @@ function runEvent(command: string, event: string, input: any, output: any, timeo
       input: JSON.stringify({{ input, output }}),
       stdio: ['pipe', 'pipe', 'inherit'],
       encoding: 'utf-8',
+      cwd: PROJECT_ROOT,
       timeout: (timeoutSec + {buffer}) * 1000,
     }});
   }} catch (e) {{
@@ -532,7 +600,8 @@ def _find_command_template(command_name: str, project_root: Path) -> tuple[Path 
     #    command name to its declared ``file`` so commands whose file stem
     #    differs from the command name (e.g. ``speckit.selftest.extension`` →
     #    ``commands/selftest.md``) resolve correctly.
-    exts_dir = project_root / ".specify" / "extensions"
+    workspace_root = workspace_root_for(project_root)
+    exts_dir = workspace_root / ".specify" / "extensions"
     # S1: build the set of explicitly-disabled extension IDs so dispatch skips
     # disabled extensions (a stale hook would otherwise keep executing a
     # disabled extension's command). Applied to both the manifest loop and the
@@ -573,7 +642,7 @@ def _find_command_template(command_name: str, project_root: Path) -> tuple[Path 
                         return f, ext_dir.name
 
     # 3. Check core templates in the project
-    core = project_root / ".specify" / "templates" / "commands"
+    core = workspace_root / ".specify" / "templates" / "commands"
     if core.is_dir():
         stem = command_name.replace("speckit.", "").replace("spec.", "")
         candidate = core / f"{stem}.md"
@@ -640,6 +709,7 @@ def _resolve_event_command_argv(
     script is declared.
     """
     from ..integrations.base import IntegrationBase
+    workspace_root = workspace_root_for(project_root)
 
     try:
         content = template_path.read_text(encoding="utf-8")
@@ -681,9 +751,9 @@ def _resolve_event_command_argv(
     # the py branch previously invoked build_python_invocation() on the raw
     # command string, leaving `scripts/...` anchored at the project root).
     if ext_id:
-        base = project_root / ".specify" / "extensions" / ext_id
+        base = workspace_root / ".specify" / "extensions" / ext_id
     else:
-        base = project_root / ".specify"
+        base = workspace_root / ".specify"
 
     try:
         tokens = shlex.split(script_cmd, posix=(os.name != "nt"))
@@ -694,7 +764,7 @@ def _resolve_event_command_argv(
         return None
     if not tokens:
         return None
-    script_abs = _confine_event_script_path(project_root, base, tokens[0])
+    script_abs = _confine_event_script_path(workspace_root, base, tokens[0])
     if script_abs is None or not script_abs.exists():
         return None
     rest_args = tokens[1:]
@@ -949,6 +1019,7 @@ def resolve_events(
        (#21) before returning; a malformed override is warned about and
        ignored rather than crashing downstream.
     """
+    workspace_root = workspace_root_for(project_root)
     # Layer 1: CLI flag gate
     if parsed_options:
         events_flag = str(parsed_options.get("events", "true")).lower()
@@ -969,7 +1040,7 @@ def resolve_events(
         events.setdefault(ev, []).extend(handlers)
 
     # Layer 4: user YAML override (replaces entirely if key present)
-    override_file = project_root / YAML_OVERRIDE_FILENAME
+    override_file = workspace_root / YAML_OVERRIDE_FILENAME
     if override_file.exists():
         try:
             override = yaml.safe_load(override_file.read_text(encoding="utf-8")) or {}
@@ -1054,7 +1125,7 @@ def _disabled_extension_ids(project_root: Path) -> set[str]:
     """
     from ..extensions import ExtensionRegistry
 
-    exts_dir = project_root / ".specify" / "extensions"
+    exts_dir = workspace_root_for(project_root) / ".specify" / "extensions"
     disabled_ids: set[str] = set()
     if not exts_dir.is_dir():
         return disabled_ids
@@ -1091,7 +1162,7 @@ def collect_extension_events(project_root: Path) -> ResolvedEvents:
     from ..extensions import ExtensionManager
 
     events: ResolvedEvents = {}
-    exts_dir = project_root / ".specify" / "extensions"
+    exts_dir = workspace_root_for(project_root) / ".specify" / "extensions"
     if not exts_dir.is_dir():
         return events
 
@@ -1298,7 +1369,10 @@ def _dispatcher_command(
     q_interp = _shell_quote(interpreter, target_os)
     q_command = _shell_quote(command_name, target_os)
     q_event = _shell_quote(event_name, target_os)
-    if integration.key == "claude":
+    workspace_root = workspace_root_for(project_root)
+    if workspace_root != project_root:
+        dispatcher = _shell_quote(str(workspace_root / EVENTS_DISPATCHER_REL), target_os)
+    elif integration.key == "claude":
         # C2: double-quote so ${CLAUDE_PROJECT_DIR} still expands (double
         # quotes allow variable expansion in POSIX shells) but a project path
         # containing spaces doesn't word-split.
@@ -1359,6 +1433,7 @@ def install_integration_events(
     (#2); every handler is emitted as a separate native hook entry so two
     extensions declaring ``session_start`` both run.
     """
+    workspace_root = workspace_root_for(project_root)
     canonical_to_native = getattr(integration, "CANONICAL_TO_NATIVE", {})
     if not canonical_to_native:
         return []
@@ -1390,14 +1465,17 @@ def install_integration_events(
     created: list[Path] = []
 
     # 1. Generate events.py dispatcher script (#12: validate destination first)
-    dispatcher_dir = project_root / EVENTS_DISPATCHER_DIR
+    dispatcher_dir = workspace_root / EVENTS_DISPATCHER_DIR
     dispatcher_path = dispatcher_dir / EVENTS_DISPATCHER_FILENAME
     _ensure_safe_destination(dispatcher_path)
     dispatcher_dir.mkdir(parents=True, exist_ok=True)
-    dispatcher_path.write_text(_EVENTS_DISPATCHER_TEMPLATE, encoding="utf-8")
+    dispatcher_content = _EVENTS_DISPATCHER_TEMPLATE.replace(
+        "EXTERNAL_WORKSPACE = False", f"EXTERNAL_WORKSPACE = {workspace_root != project_root}", 1,
+    )
+    dispatcher_path.write_text(dispatcher_content, encoding="utf-8")
     dispatcher_path.chmod(0o755)
     manifest.record_file(
-        str(dispatcher_path.relative_to(project_root)),
+        EVENTS_DISPATCHER_REL,
         dispatcher_path.read_bytes(),
     )
     created.append(dispatcher_path)
@@ -1415,9 +1493,20 @@ def install_integration_events(
         plugin_rel = ".opencode/plugin/speckit-events.ts"
         plugin_path = project_root / plugin_rel
         _ensure_safe_destination(plugin_path)
+        if plugin_path.is_file():
+            from ..integrations.manifest import IntegrationManifest
+
+            expected_hash = manifest.files.get(plugin_rel)
+            if expected_hash is None:
+                expected_hash = IntegrationManifest.load(integration.key, project_root).files.get(plugin_rel)
+            if hashlib.sha256(plugin_path.read_bytes()).hexdigest() != expected_hash:
+                raise ValueError(f"Event plugin contains user content: {plugin_path}")
         plugin_path.parent.mkdir(parents=True, exist_ok=True)
         plugin_path.write_text(
-            _build_opencode_plugin(filtered, canonical_to_native),
+            _build_opencode_plugin(
+                filtered, canonical_to_native,
+                workspace_root / EVENTS_DISPATCHER_REL if workspace_root != project_root else None,
+            ),
             encoding="utf-8",
         )
         manifest.record_file(
@@ -1730,7 +1819,15 @@ def _cleanup_shared_dispatcher(
     path so an ``--events false`` upgrade of the last event integration
     doesn't orphan ``.specify/events.py`` permanently (S3).
     """
+    from ..integrations.manifest import IntegrationManifest
+
     dispatcher_rel = EVENTS_DISPATCHER_REL
+    expected_hash = manifest.files.get(dispatcher_rel)
+    if expected_hash is None:
+        try:
+            expected_hash = IntegrationManifest.load(integration.key, project_root).files.get(dispatcher_rel)
+        except FileNotFoundError:
+            return  # A first install has no saved ownership record.
     # Drop this integration's manifest claim if present. The remove() is
     # conditional (S1): an upgrade passes a *fresh* manifest that may never
     # have claimed the dispatcher, so the key may be absent — that's a no-op.
@@ -1744,10 +1841,11 @@ def _cleanup_shared_dispatcher(
     # other installed event-capable integration references the dispatcher,
     # delete it; otherwise leave it for them.
     if not _other_event_integrations_reference_dispatcher(project_root, integration.key):
-        dispatcher_path = project_root / dispatcher_rel
-        if dispatcher_path.exists():
+        dispatcher_path = workspace_root_for(project_root) / dispatcher_rel
+        if dispatcher_path.exists() and expected_hash:
             _ensure_safe_destination(dispatcher_path)
-            dispatcher_path.unlink(missing_ok=True)
+            if hashlib.sha256(dispatcher_path.read_bytes()).hexdigest() == expected_hash:
+                dispatcher_path.unlink(missing_ok=True)
 
 
 def remove_integration_events(
@@ -1760,6 +1858,7 @@ def remove_integration_events(
     it is left in place so multi-install setups don't lose the dispatcher
     mid-stream.
     """
+    workspace_root_for(project_root)
     _remove_native_event_hooks(integration, project_root, manifest)
     _cleanup_shared_dispatcher(integration, project_root, manifest)
 
@@ -1770,7 +1869,8 @@ def remove_integration_events(
             plugin_path = project_root / plugin_rel
             if plugin_path.exists():
                 _ensure_safe_destination(plugin_path)
-                plugin_path.unlink(missing_ok=True)
+                if plugin_rel not in manifest.check_modified():
+                    plugin_path.unlink(missing_ok=True)
             manifest.remove(plugin_rel)
 
 
@@ -1924,13 +2024,14 @@ def has_events(data: dict[str, Any]) -> bool:
 
 def _toml_quote(value: str) -> str:
     """Render *value* as a TOML basic string via the shared escaper."""
-    from .._toml_string import escape_toml_basic
+    from ..toml_string import escape_toml_basic
     return escape_toml_basic(value)
 
 
 def _build_opencode_plugin(
     filtered_events: ResolvedEvents,
     canonical_to_native: dict[str, str],
+    dispatcher_path: Path | None = None,
 ) -> str:
     """Render the opencode TS plugin for the resolved event set.
 
@@ -2089,6 +2190,7 @@ def _build_opencode_plugin(
 
     return _TS_PLUGIN_TEMPLATE.format(
         buffer=EVENT_TIMEOUT_BUFFER,
+        dispatcher=json.dumps(str(dispatcher_path)) if dispatcher_path else "path.join(directory, '.specify', 'events.py')",
         event_entries="\n\n".join(event_entries),
         plugin_returns="\n".join(plugin_returns),
     )

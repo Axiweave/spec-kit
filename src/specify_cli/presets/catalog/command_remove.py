@@ -7,6 +7,7 @@ import yaml
 from rich.markup import escape as _escape_markup
 
 from ..._console import console
+from ...workspace import workspace_root_for
 from . import catalog_app
 
 
@@ -18,7 +19,7 @@ def preset_catalog_remove(
     from ... import _require_specify_project
 
     project_root = _require_specify_project()
-    specify_dir = project_root / ".specify"
+    specify_dir = workspace_root_for(project_root) / ".specify"
 
     config_path = specify_dir / "preset-catalogs.yml"
     if not config_path.exists():

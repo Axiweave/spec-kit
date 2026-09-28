@@ -48,6 +48,7 @@ from .._utils import dump_frontmatter, relative_extension_path_violation, versio
 from ..catalogs import CatalogEntry as BaseCatalogEntry
 from ..catalogs import CatalogStackBase
 from ..shared_infra import verify_archive_sha256
+from ..workspace import workspace_root_for
 
 _FALLBACK_CORE_COMMAND_NAMES = frozenset(
     {
@@ -1024,7 +1025,8 @@ class ExtensionManager:
             project_root: Path to project root directory
         """
         self.project_root = project_root
-        self.extensions_dir = project_root / ".specify" / "extensions"
+        self.workspace_root = workspace_root_for(project_root)
+        self.extensions_dir = self.workspace_root / ".specify" / "extensions"
         self.registry = ExtensionRegistry(self.extensions_dir)
 
     def _rescue_staging_dir(self, extension_id: str) -> Path:
@@ -1193,7 +1195,7 @@ class ExtensionManager:
         """Normalize a command/alias name to its on-disk output form.
 
         Agent integrations (Cline, Forge, Junie) and the SKILL.md output-name
-        computation (``CommandRegistrar._compute_output_name``) all collapse
+        computation (``CommandRegistrar.compute_output_name``) all collapse
         dots to hyphens and prefix a bare name with ``speckit-``, so
         ``speckit.taskstoissues``, ``taskstoissues``, and
         ``speckit-taskstoissues`` are distinct alias spellings that land on
@@ -2788,11 +2790,11 @@ class ExtensionManager:
         is fine: scaffolding creates it under the project root.
         """
         try:
-            root = self.project_root.resolve()
+            root = self.workspace_root.resolve()
         except OSError:
             return False
-        current = self.project_root
-        for part in specify_dir.relative_to(self.project_root).parts:
+        current = self.workspace_root
+        for part in specify_dir.relative_to(self.workspace_root).parts:
             current = current / part
             if current.is_symlink():
                 return False
@@ -2861,7 +2863,7 @@ class ExtensionManager:
         # `.specify/extensions/<id>/<id>-config.yml`, and the bundled scripts
         # and READMEs use the same location. Writing to `.specify/<name>` put
         # the file somewhere nothing ever looks.
-        config_dir = self.project_root / ".specify" / "extensions" / extension_id
+        config_dir = self.extensions_dir / extension_id
         # Resolving that directory and trusting the result as the containment
         # root lets a symlinked component point outside the project: every
         # target would then satisfy relative_to and copy2 would write
@@ -3211,7 +3213,7 @@ class ExtensionManager:
             ):
                 continue
 
-            skill_name = registrar._compute_output_name(
+            skill_name = registrar.compute_output_name(
                 agent_name, command_name, agent_config
             )
             replacement = skills_root / skill_name / "SKILL.md"
@@ -3748,7 +3750,7 @@ class ExtensionCatalog(CatalogStackBase):
         Args:
             project_root: Root directory of the spec-kit project
         """
-        self.project_root = project_root
+        self.project_root = project_root = workspace_root_for(project_root)
         self.extensions_dir = project_root / ".specify" / "extensions"
         self.cache_dir = self.extensions_dir / ".cache"
         self.cache_file = self.cache_dir / "catalog.json"
@@ -4536,7 +4538,7 @@ class ConfigManager:
             project_root: Root directory of the spec-kit project
             extension_id: ID of the extension
         """
-        self.project_root = project_root
+        self.project_root = project_root = workspace_root_for(project_root)
         self.extension_id = extension_id
         self.extension_dir = project_root / ".specify" / "extensions" / extension_id
 
@@ -4833,7 +4835,7 @@ class HookExecutor:
         Args:
             project_root: Root directory of the spec-kit project
         """
-        self.project_root = project_root
+        self.project_root = project_root = workspace_root_for(project_root)
         self.extensions_dir = project_root / ".specify" / "extensions"
         self.config_file = project_root / ".specify" / "extensions.yml"
         self._init_options_cache: Optional[Dict[str, Any]] = None

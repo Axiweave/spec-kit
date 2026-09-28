@@ -1,4 +1,4 @@
-"""CLI adapter for ``specify init``."""
+"""CLI adapter for ``specify init`` with storage setup in ``_command_init_storage``."""
 
 from __future__ import annotations
 
@@ -266,6 +266,18 @@ def register(app: typer.Typer) -> None:
         script_type: str = typer.Option(
             None, "--script", help="Script type to use: sh, ps, or py"
         ),
+        storage: str = typer.Option(
+            None, "--storage", help="Store Spec Kit assets locally or externally: local, external."
+        ),
+        workspace: Path = typer.Option(
+            None, "--workspace", help="Exact external workspace path. Implies --storage external."
+        ),
+        feature_numbering: str = typer.Option(
+            None, "--feature-numbering", help="Feature numbering mode: sequential or timestamp."
+        ),
+        global_commands: bool = typer.Option(
+            False, "--global-commands", help="Use shared OMP commands instead of project-local command copies."
+        ),
         ignore_agent_tools: bool = typer.Option(
             False,
             "--ignore-agent-tools",
@@ -348,6 +360,10 @@ def register(app: typer.Typer) -> None:
         package, so initialization does not need network access and templates
         match the installed CLI version.
 
+        External storage keeps Spec Kit assets in a separate workspace.
+        Use --workspace for an exact path, or --storage external for a unique
+        directory under ~/speckit-specs. Agent launch files stay in the repository.
+
         This command will:
         1. Check that required tools are installed
         2. Let you choose your coding agent integration, or default to Copilot
@@ -399,17 +415,6 @@ def register(app: typer.Typer) -> None:
 
         from .integrations import INTEGRATION_REGISTRY, get_integration
 
-        if integration:
-            resolved_integration = get_integration(integration)
-            if not resolved_integration:
-                console.print(
-                    f"[red]Error:[/red] Unknown integration: "
-                    f"'{_escape_markup(str(integration))}'"
-                )
-                available = ", ".join(sorted(INTEGRATION_REGISTRY))
-                console.print(f"[yellow]Available integrations:[/yellow] {available}")
-                raise typer.Exit(1)
-
         if project_name == ".":
             here = True
             project_name = None
@@ -425,6 +430,44 @@ def register(app: typer.Typer) -> None:
                 "[red]Error:[/red] Must specify either a project name, use '.' for current directory, or use --here flag"
             )
             raise typer.Exit(1)
+
+        from ._command_init_storage import claim_storage, select_storage
+        from ._init_options import load_init_options
+        from .user_config import load_defaults
+
+        try:
+            repository = (Path.cwd() if here else Path(project_name)).resolve()
+            existing_project = (repository / ".specify").is_dir()
+            defaults = (load_init_options(repository) or {}) if existing_project else load_defaults()
+            if not integration and not existing_project and os.environ.get("SPECKIT_INTEGRATION_DEFAULT", "").strip():
+                integration = resolve_default_init_integration()
+            integration = integration or defaults.get("integration") or defaults.get("ai")
+            script_type = script_type or defaults.get("script")
+            feature_numbering = feature_numbering or defaults.get("feature_numbering")
+            storage_root = defaults.get("storage_root") if not existing_project else None
+        except (ValueError, OSError) as exc:
+            console.print(f"[red]Error:[/red] {_escape_markup(str(exc))}")
+            raise typer.Exit(1) from None
+        if global_commands:
+            if integration and integration != "omp":
+                console.print(
+                    f"--global-commands supports only omp, not {integration!r}.",
+                    style="red", markup=False,
+                )
+                raise typer.Exit(1)
+            integration = "omp"
+
+
+        if integration:
+            resolved_integration = get_integration(integration)
+            if not resolved_integration:
+                console.print(
+                    f"[red]Error:[/red] Unknown integration: "
+                    f"'{_escape_markup(str(integration))}'"
+                )
+                available = ", ".join(sorted(INTEGRATION_REGISTRY))
+                console.print(f"[yellow]Available integrations:[/yellow] {available}")
+                raise typer.Exit(1)
 
         dir_existed_before = False
         if here:
@@ -520,6 +563,30 @@ def register(app: typer.Typer) -> None:
                     console.print(error_panel)
                     raise typer.Exit(1)
 
+        try:
+            if not existing_project and workspace is None:
+                if storage is None:
+                    if storage_root:
+                        storage = "external"
+                    elif _prompts_allowed(non_interactive):
+                        storage = select_with_arrows(
+                            {"local": "Code repository", "external": "External workspace"},
+                            "Choose Spec Kit storage:",
+                            "external",
+                            flag_hint="--storage local|external",
+                        )
+                if storage == "external" and not storage_root and _prompts_allowed(non_interactive):
+                    suggested = select_storage(repository, "external", None).workspace_root
+                    workspace = Path(typer.prompt("External workspace", default=str(suggested)))
+            project = select_storage(
+                repository, storage, workspace,
+                storage_root=Path(storage_root) if storage_root else None,
+            )
+        except (ValueError, OSError) as exc:
+            console.print(f"[red]Error:[/red] {_escape_markup(str(exc))}")
+            raise typer.Exit(1) from None
+        workspace_path = project.workspace_root
+
         if integration:
             if integration not in AGENT_CONFIG:
                 console.print(
@@ -549,6 +616,14 @@ def register(app: typer.Typer) -> None:
                 console.print(f"[red]Error:[/red] Unknown agent '{selected_ai}'")
                 raise typer.Exit(1)
 
+        if selected_ai == "omp":
+            from .integrations.omp.global_commands import global_commands_enabled
+            try:
+                global_commands = global_commands or global_commands_enabled(project_path)
+            except (ValueError, OSError) as exc:
+                console.print(str(exc), style="red", markup=False)
+                raise typer.Exit(1) from None
+
         if selected_ai == "generic" and not integration_options:
             console.print(
                 "[red]Error:[/red] --integration generic requires --integration-options with --commands-dir"
@@ -571,6 +646,10 @@ def register(app: typer.Typer) -> None:
             setup_lines.append(
                 f"{'Target Path':<15} [dim]{_escape_markup(str(project_path))}[/dim]"
             )
+
+        setup_lines.append(
+            f"{'Workspace':<15} [dim]{_escape_markup(str(workspace_path))}[/dim]"
+        )
 
         console.print(
             Panel("\n".join(setup_lines), border_style="cyan", padding=(1, 2))
@@ -613,6 +692,26 @@ def register(app: typer.Typer) -> None:
                 )
             else:
                 selected_script = default_script
+
+        if feature_numbering:
+            if feature_numbering not in ("sequential", "timestamp"):
+                console.print("Error: --feature-numbering must be sequential or timestamp.", style="red")
+                raise typer.Exit(1)
+        elif _prompts_allowed(non_interactive):
+            feature_numbering = select_with_arrows(
+                {"sequential": "Sequential (001, 002)", "timestamp": "Timestamp (YYYYMMDD-HHMMSS)"},
+                "Choose feature numbering:",
+                "sequential",
+                flag_hint="--feature-numbering sequential|timestamp",
+            )
+        else:
+            feature_numbering = "sequential"
+
+        integration_parsed_options: dict[str, Any] = {}
+        if integration_options:
+            extra = _parse_integration_options(resolved_integration, integration_options)
+            if extra:
+                integration_parsed_options.update(extra)
 
         console.print(f"[cyan]Selected coding agent integration:[/cyan] {selected_ai}")
         console.print(f"[cyan]Selected script type:[/cyan] {selected_script}")
@@ -662,27 +761,20 @@ def register(app: typer.Typer) -> None:
         # hangs when Rich tries to restore cursor state via VT escape sequences.
         _transient = sys.platform != "win32"
 
-        with Live(
-            tracker.render(), console=console, refresh_per_second=8, transient=_transient
-        ) as live:
-            tracker.attach_refresh(lambda: live.update(tracker.render()))
-            try:
+        try:
+            with claim_storage(project), Live(
+                tracker.render(), console=console, refresh_per_second=8, transient=_transient
+            ) as live:
+                tracker.attach_refresh(lambda: live.update(tracker.render()))
                 from .integrations.manifest import IntegrationManifest
 
+                project_path.mkdir(parents=True, exist_ok=True)
                 tracker.start("integration")
                 manifest = IntegrationManifest(
                     resolved_integration.key,
                     project_path,
                     version=get_speckit_version(),
                 )
-
-                integration_parsed_options: dict[str, Any] = {}
-                if integration_options:
-                    extra = _parse_integration_options(
-                        resolved_integration, integration_options
-                    )
-                    if extra:
-                        integration_parsed_options.update(extra)
 
                 from .events import resolve_events
                 events_map = resolve_events(
@@ -698,8 +790,24 @@ def register(app: typer.Typer) -> None:
                     script_type=selected_script,
                     raw_options=integration_options,
                     events=events_map,
+                    global_commands=global_commands,
                 )
                 manifest.save()
+
+                init_opts = {
+                    "ai": selected_ai,
+                    "integration": resolved_integration.key,
+                    "here": here,
+                    "script": selected_script,
+                    "feature_numbering": feature_numbering,
+                    "speckit_version": get_speckit_version(),
+                    "command_scope": "global" if global_commands else "project",
+                }
+                if resolved_integration.is_skills_mode(
+                    integration_parsed_options or None, project_root=project_path
+                ):
+                    init_opts["ai_skills"] = True
+                save_init_options(workspace_path, init_opts)
 
                 if force:
                     from .integrations._helpers import (
@@ -735,7 +843,7 @@ def register(app: typer.Typer) -> None:
                     project_root=project_path,
                 )
                 _write_integration_json(
-                    project_path,
+                    workspace_path,
                     resolved_integration.key,
                     [resolved_integration.key],
                     integration_settings,
@@ -748,7 +856,7 @@ def register(app: typer.Typer) -> None:
 
                 tracker.start("shared-infra")
                 _install_shared_infra_or_exit(
-                    project_path,
+                    workspace_path,
                     selected_script,
                     tracker=tracker,
                     force=force,
@@ -772,14 +880,14 @@ def register(app: typer.Typer) -> None:
                         from .workflows.catalog import WorkflowRegistry
                         from .workflows.engine import WorkflowDefinition
 
-                        wf_registry = WorkflowRegistry(project_path)
+                        wf_registry = WorkflowRegistry(workspace_path)
                         if wf_registry.is_installed("speckit"):
                             tracker.complete("workflow", "already installed")
                         else:
                             import shutil as _shutil
 
                             dest_wf = (
-                                project_path / ".specify" / "workflows" / "speckit"
+                                workspace_path / ".specify" / "workflows" / "speckit"
                             )
                             dest_wf.mkdir(parents=True, exist_ok=True)
                             _shutil.copy2(
@@ -805,21 +913,8 @@ def register(app: typer.Typer) -> None:
                     sanitized_wf = str(wf_err).replace("\n", " ").strip()
                     tracker.error("workflow", f"install failed: {sanitized_wf[:120]}")
 
-                init_opts = {
-                    "ai": selected_ai,
-                    "integration": resolved_integration.key,
-                    "here": here,
-                    "script": selected_script,
-                    "feature_numbering": "sequential",
-                    "speckit_version": get_speckit_version(),
-                }
-                if resolved_integration.is_skills_mode(
-                    integration_parsed_options or None, project_root=project_path
-                ):
-                    init_opts["ai_skills"] = True
-                save_init_options(project_path, init_opts)
 
-                ensure_executable_scripts(project_path, tracker=tracker)
+                ensure_executable_scripts(workspace_path, tracker=tracker)
 
                 if preset:
                     try:
@@ -840,7 +935,7 @@ def register(app: typer.Typer) -> None:
                                     bundled_path, speckit_ver
                                 )
                             else:
-                                preset_catalog = PresetCatalog(project_path)
+                                preset_catalog = PresetCatalog(workspace_path)
                                 pack_info = preset_catalog.get_pack_info(preset)
                                 if not pack_info:
                                     console.print(
@@ -934,43 +1029,43 @@ def register(app: typer.Typer) -> None:
                 # Seed the constitution AFTER preset installation so that a
                 # preset-provided constitution-template (resolved via the
                 # priority stack) wins over the core template.
-                ensure_constitution_from_template(project_path, tracker=tracker)
+                ensure_constitution_from_template(workspace_path, tracker=tracker)
 
                 tracker.complete("final", "project ready")
-            except (typer.Exit, SystemExit):
-                raise
-            except Exception as e:
-                tracker.error("final", str(e))
+        except (typer.Exit, SystemExit):
+            raise
+        except Exception as e:
+            tracker.error("final", str(e))
+            console.print(
+                Panel(
+                    f"Initialization failed: {_escape_markup(str(e))}",
+                    title="Failure",
+                    border_style="red",
+                )
+            )
+            for note in getattr(e, "__notes__", ()):
+                console.print(_escape_markup(note))
+            if debug:
+                _env_pairs = [
+                    ("Python", sys.version.split()[0]),
+                    ("Platform", sys.platform),
+                    ("CWD", str(Path.cwd())),
+                ]
+                _label_width = max(len(k) for k, _ in _env_pairs)
+                env_lines = [
+                    f"{k.ljust(_label_width)} → [bright_black]{v}[/bright_black]"
+                    for k, v in _env_pairs
+                ]
                 console.print(
                     Panel(
-                        f"Initialization failed: {e}",
-                        title="Failure",
-                        border_style="red",
+                        "\n".join(env_lines),
+                        title="Debug Environment",
+                        border_style="magenta",
                     )
                 )
-                if debug:
-                    _env_pairs = [
-                        ("Python", sys.version.split()[0]),
-                        ("Platform", sys.platform),
-                        ("CWD", str(Path.cwd())),
-                    ]
-                    _label_width = max(len(k) for k, _ in _env_pairs)
-                    env_lines = [
-                        f"{k.ljust(_label_width)} → [bright_black]{v}[/bright_black]"
-                        for k, v in _env_pairs
-                    ]
-                    console.print(
-                        Panel(
-                            "\n".join(env_lines),
-                            title="Debug Environment",
-                            border_style="magenta",
-                        )
-                    )
-                if not here and project_path.exists() and not dir_existed_before:
-                    shutil.rmtree(project_path)
-                raise typer.Exit(1)
-            finally:
-                pass
+            if not here and project_path.exists() and not dir_existed_before:
+                shutil.rmtree(project_path)
+            raise typer.Exit(1)
 
         if _transient:
             console.print(tracker.render())

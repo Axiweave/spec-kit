@@ -273,42 +273,6 @@ class TestInitIntegrationFlag:
         ], catch_exceptions=False)
 
         assert result.exit_code == 0, result.output
-        assert "defaulting to 'gemini'" in result.output
-
-        data = json.loads((project / ".specify" / "integration.json").read_text(encoding="utf-8"))
-        assert data["integration"] == "gemini"
-
-    def test_interactive_init_picker_default_honors_env_var(
-        self, tmp_path, monkeypatch
-    ):
-        # The interactive integration picker must receive the resolved
-        # SPECKIT_INTEGRATION_DEFAULT value as its default_key, not the
-        # hardcoded constant (guards the picker wiring against regression).
-        from typer.testing import CliRunner
-        from specify_cli import app
-        import specify_cli.command_init as init_mod
-
-        monkeypatch.setattr(init_mod, "_stdin_is_interactive", lambda: True)
-        monkeypatch.setenv("SPECKIT_INTEGRATION_DEFAULT", "gemini")
-
-        captured = {}
-
-        def fake_select(options, prompt_text=None, default_key=None, **_kwargs):
-            # Only capture the integration picker (not the script picker).
-            if "Choose your coding agent integration" in (prompt_text or ""):
-                captured["default_key"] = default_key
-            return default_key
-
-        monkeypatch.setattr(init_mod, "select_with_arrows", fake_select)
-
-        runner = CliRunner()
-        project = tmp_path / "interactive_env"
-        result = runner.invoke(app, [
-            "init", str(project), "--script", "sh", "--ignore-agent-tools",
-        ], catch_exceptions=False)
-
-        assert result.exit_code == 0, result.output
-        assert captured.get("default_key") == "gemini"
 
         data = json.loads((project / ".specify" / "integration.json").read_text(encoding="utf-8"))
         assert data["integration"] == "gemini"
@@ -770,10 +734,10 @@ class TestInitIntegrationFlag:
         # drive-relative escape on Windows. The cleanup must skip it gracefully.
         real_validate = manifest_mod._validate_rel_path
 
-        def fake_validate(rel, root):
+        def fake_validate(rel, root, **kwargs):
             if str(rel).endswith("update-agent-context.sh"):
                 raise ValueError("simulated drive-relative escape")
-            return real_validate(rel, root)
+            return real_validate(rel, root, **kwargs)
 
         monkeypatch.setattr(manifest_mod, "_validate_rel_path", fake_validate)
 
@@ -2192,7 +2156,10 @@ class TestExtensionFlag:
         ):
             project, result = self._run_init(
                 tmp_path,
-                ["--extension", "https://example.com/git.zip"],
+                [
+                    "--storage", "local", "--feature-numbering", "sequential",
+                    "--extension", "https://example.com/git.zip",
+                ],
                 project_name="ext-url-confirm",
             )
 

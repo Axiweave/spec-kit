@@ -31,6 +31,7 @@ def integration_upgrade(
     force: bool = typer.Option(False, "--force", help="Force upgrade even if files are modified"),
     script: str | None = typer.Option(None, "--script", help="Script type: sh, ps, or py (default: from init-options.json or platform default)"),
     integration_options: str | None = typer.Option(None, "--integration-options", help="Options for the integration"),
+    global_install: bool = typer.Option(False, "--global", help="Upgrade shared OMP commands without a project"),
 ):
     """Upgrade an integration by reinstalling with diff-aware file handling.
 
@@ -40,6 +41,11 @@ def integration_upgrade(
     from . import get_integration
     from .manifest import IntegrationManifest
     from .. import _require_specify_project, _install_shared_infra_or_exit, _install_shared_infra
+
+    if global_install:
+        from .omp.global_commands import run_global_command
+        run_global_command(key, "upgrade")
+        return
 
     project_root = _require_specify_project()
     current = _read_integration_json(project_root)
@@ -61,7 +67,7 @@ def integration_upgrade(
         console.print(f"[red]Error:[/red] Unknown integration '{key}'")
         raise typer.Exit(1)
 
-    manifest_path = project_root / ".specify" / "integrations" / f"{key}.manifest.json"
+    manifest_path = IntegrationManifest(key, project_root).manifest_path
     if not manifest_path.exists():
         console.print(f"[yellow]No manifest found for integration '{key}'. Nothing to upgrade.[/yellow]")
         console.print(f"Run [cyan]specify integration install {key}[/cyan] to perform a fresh install.")

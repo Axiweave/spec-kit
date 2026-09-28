@@ -3174,7 +3174,7 @@ class TestExtensionManager:
         """Plain and hyphenated alias spellings must be rejected too.
 
         Regression test for the reviewer follow-up on #4555: agent-specific
-        name transformation (``CommandRegistrar._compute_output_name`` and the
+        name transformation (``CommandRegistrar.compute_output_name`` and the
         Cline/Forge/Junie formatters) collapses ``speckit.taskstoissues``,
         ``taskstoissues``, and ``speckit-taskstoissues`` to the same on-disk
         command name, so all three spellings must be rejected, not just the

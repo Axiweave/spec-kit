@@ -7,6 +7,7 @@ import yaml
 from rich.markup import escape as _escape_markup
 
 from ..._console import console
+from ...workspace import workspace_root_for
 from . import catalog_app
 
 
@@ -31,7 +32,7 @@ def preset_catalog_add(
     from .. import PresetCatalog, PresetValidationError
 
     project_root = _require_specify_project()
-    specify_dir = project_root / ".specify"
+    specify_dir = workspace_root_for(project_root) / ".specify"
 
     # Validate URL
     tmp_catalog = PresetCatalog(project_root)

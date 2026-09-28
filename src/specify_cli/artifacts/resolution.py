@@ -216,7 +216,7 @@ def _materialized_command_source_path(
             agent_config = registrar.AGENT_CONFIGS.get(agent_name)
             if agent_config is None:
                 continue
-            output_name = registrar._compute_output_name(
+            output_name = registrar.compute_output_name(
                 agent_name, name, agent_config
             )
             command_path = (

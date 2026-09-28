@@ -6,8 +6,41 @@
 
 ### Added
 
+- Add opt-in external workspaces during project initialization and `specify project info --json`.
+- Keep feature artifacts and workflow state outside the code repository while preserving repository execution paths.
+- Add verified workspace relinking and runtime command composition for the invoking project.
+- Add one shared OMP command set with separate ownership, profile support, and protection for user edits.
+- Keep bundle, extension, preset, event, and integration metadata in the selected workspace.
+- Add personal defaults with `specify config get`, `set`, and `clear`, plus per-project feature numbering and setup precedence.
+- Make generated Git configuration inherit the project's numbering mode while preserving explicit branch-only choices.
+- Add verified local-project migration with cleanup consent, active-feature preservation, and recovery after failed cutover.
+- Preserve edited native command content during migration and redirect native commands and events to the selected workspace.
+- Preserve script arguments when rendered inline commands resolve workspace paths.
+- Keep paused workflow resources usable after migration and workspace relinking without changing repository execution paths.
+- Apply personal integration and script defaults during automatic bundle setup.
+- Refresh unchanged managed helpers during migration so older projects can continue external workflows.
+- Preserve helper edits with a safe migration refusal, and restore source and staged files after failed refresh.
+- Confine integration-state reads and report invalid roots through structured diagnostics instead of unsafe fallback reads.
+- Validate native command and integration-script destinations before writes through the existing manifest owner.
+- Claim new external workspace metadata exclusively. Failed initialization preserves unrelated content and partial assets instead of deleting the workspace.
+- Report initial storage-write failures through the normal init error boundary, including recovery notes, without an unhandled traceback.
+- Route migration through public integration, asset, native-name, and TOML interfaces. Keep CLI error handling separate from option parsing.
 - Make bundle reference checks deterministic in tests with outbound requests blocked and explicit catalog outcomes.
+- Use portable Python resource commands, explicit UTF-8, and the legacy Windows PowerShell fallback in workflow and command regression checks.
+- Allow read-only PowerShell validation of explicit new external feature paths before directory creation. Continue to reject missing saved selections.
+- Preserve repository roots during init preset and extension registration so native add-on commands remain in the code repository.
+- Resolve an explicit init target without the discovery override so reinitialization cannot use another project's workspace.
+- Make installed Python helpers prefer `XDG_DATA_HOME` on Windows, matching the CLI, Bash, and PowerShell machine-record policy.
+- Resolve workspace script paths after Python, Bash, and PowerShell interpreter prefixes in code spans without changing arguments or plain prose.
+- Keep bundle workflow and step registries, catalogs, and failed-refresh recovery in the validated workspace while commands retain the repository execution root.
+- Preserve Hermes skill bodies during migration and resolve assets from the invoking project's workspace. Confine shared-skill backups and restore them after failed migration.
+- Validate saved PowerShell feature numbering before writes. Reject invalid JSON shapes and modes consistently across script variants while preserving explicit per-feature choices.
+- Reject external workspaces as user-facing code repositories. Preserve internal workspace reads and permit standalone workflow execution only when no project exists.
+- Cover public preset and extension updates with shared OMP commands, including fresh runtime content, new names, project isolation, and preserved user edits and ownership.
+- Cover native Codex skills and global OMP migration with artifact conservation, saved choices, continued workspace helpers, and unchanged shared launchers.
+- Document global OMP runtime preset resolution and the shared-launcher exceptions for disabling and removal.
 - Restore Python 3.11 and 3.12 CI coverage while retaining Python 3.13, Python 3.14, and all three operating systems.
+- Apply the future-annotations convention to the configuration command package.
 
 ## [1.0.12] - 2026-09-25
 

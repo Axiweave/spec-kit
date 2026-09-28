@@ -22,9 +22,10 @@ def workflow_resume(
     from . import load_custom_steps
     from .engine import RunState, WorkflowEngine
 
-    project_root = cli._require_specify_project()
+    project = cli._resolve_workflow_project()
+    project_root = project.workspace_root
     load_custom_steps(project_root)
-    engine = WorkflowEngine(project_root)
+    engine = WorkflowEngine(project.repository_root)
     if not json_output:
         # Escape the literal bracket (\[) so Rich renders `[<step id>]` instead
         # of parsing it as a style tag named after the step id -- which it

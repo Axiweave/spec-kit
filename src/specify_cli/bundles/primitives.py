@@ -24,6 +24,8 @@ import os
 from pathlib import Path
 from typing import Protocol
 
+from ..workspace import workspace_root_for
+
 from . import BundlerError
 from .manifest import ComponentRef
 
@@ -326,7 +328,8 @@ class _WorkflowKindManager:
 
         self._root = project_root
         self._allow_network = allow_network
-        self._registry = WorkflowRegistry(project_root)
+        self._workspace = workspace_root_for(project_root)
+        self._registry = WorkflowRegistry(self._workspace)
 
     def is_installed(self, component: ComponentRef) -> bool:
         try:
@@ -392,7 +395,7 @@ class _WorkflowKindManager:
         try:
             from ..workflows.catalog import WorkflowCatalog
 
-            info = WorkflowCatalog(self._root).get_workflow_info(component.id)
+            info = WorkflowCatalog(self._workspace).get_workflow_info(component.id)
         except Exception:  # noqa: BLE001 - catalog unreachable: cannot enforce
             return
         if info:
@@ -416,7 +419,8 @@ class _StepKindManager:
 
         self._root = project_root
         self._allow_network = allow_network
-        self._registry = StepRegistry(project_root)
+        self._workspace = workspace_root_for(project_root)
+        self._registry = StepRegistry(self._workspace)
 
     def is_installed(self, component: ComponentRef) -> bool:
         try:
@@ -474,7 +478,7 @@ class _StepKindManager:
                 # "Step directory already exists".
                 from ..workflows.catalog import StepRegistry
 
-                current = StepRegistry(self._root)
+                current = StepRegistry(self._workspace)
                 if metadata is not None and not current.is_installed(component.id):
                     # Restore the saved entry verbatim rather than via ``add()``,
                     # which would rewrite the metadata it is meant to roll back:

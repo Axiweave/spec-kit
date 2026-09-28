@@ -177,7 +177,7 @@ class TestHermesIntegration(SkillsIntegrationTests):
 
         i = get_integration(self.KEY)
         # Create a foreign skill in the global dir first
-        global_skills_dir = i._hermes_home_skills_dir()
+        global_skills_dir = i.global_skills_dir()
         foreign_dir = global_skills_dir / "other-tool"
         foreign_dir.mkdir(parents=True, exist_ok=True)
         (foreign_dir / "SKILL.md").write_text("# Foreign skill\n")

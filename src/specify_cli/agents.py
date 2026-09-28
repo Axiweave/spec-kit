@@ -8,6 +8,7 @@ command files into agent-specific directories in the correct format.
 
 import os
 import re
+import shlex
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -16,9 +17,10 @@ import yaml
 
 from ._init_options import is_ai_skills_enabled, load_init_options
 from ._invocation_style import get_invocation_prefix
-from ._toml_string import escape_toml_basic as _escape_toml_basic
-from ._toml_string import has_illegal_toml_control as _has_illegal_toml_control
+from .toml_string import escape_toml_basic as _escape_toml_basic
+from .toml_string import has_illegal_toml_control as _has_illegal_toml_control
 from ._utils import relative_extension_path_violation
+from .workspace import confined, workspace_root_for
 
 
 def _build_agent_configs() -> dict[str, Any]:
@@ -244,7 +246,7 @@ class CommandRegistrar:
 
     @staticmethod
     def rewrite_extension_paths(
-        text: str, extension_id: str, extension_dir: Path
+        text: str, extension_id: str, extension_dir: Path, *, markup_only: bool = False
     ) -> str:
         """Rewrite extension-relative paths to their installed locations.
 
@@ -274,6 +276,20 @@ class CommandRegistrar:
         except OSError:
             return text
 
+        if markup_only:
+            def replace_reference(match: re.Match) -> str:
+                path = match.group("path").removeprefix("./")
+                if path.split("/", 1)[0] not in subdirs or not (extension_dir / path).exists():
+                    return match.group(0)
+                quote = match.group("quote")
+                return f"{quote}.specify/extensions/{extension_id}/{path}{quote}"
+
+            return re.sub(
+                r"(?P<quote>[`'\"])(?P<path>(?:(?!(?P=quote))[^\r\n])+)(?P=quote)",
+                replace_reference,
+                text,
+            )
+
         for subdir in subdirs:
             # Only rewrite relative references (subdir/... or ./subdir/...);
             # absolute paths like /subdir/... keep their meaning. Use a
@@ -287,6 +303,77 @@ class CommandRegistrar:
                 text,
             )
         return text
+
+    def render_project_command(self, command_name: str, project_root: Path) -> str:
+        """Compose current project content and resolve declared asset paths."""
+        from .integrations import get_integration
+        from .integrations.base import IntegrationBase
+        from .presets import PresetResolver
+
+        if re.fullmatch(r"speckit\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*", command_name) is None:
+            raise ValueError(f"Invalid command name: {command_name}")
+        content = PresetResolver(project_root).resolve_content(
+            command_name, "command", rewrite_extension_paths=False
+        )
+        if content is None:
+            raise ValueError(f"Command is unavailable in this project: {command_name}")
+        options = load_init_options(project_root)
+        agent = options.get("integration", options.get("ai", "omp"))
+        script_type = options.get("script", "ps" if os.name == "nt" else "sh")
+        workspace = workspace_root_for(project_root)
+        frontmatter, body = self.parse_frontmatter(content)
+        frontmatter = self._adjust_script_paths(frontmatter)
+        scripts = frontmatter.get("scripts", {})
+        if isinstance(scripts, dict):
+            for variant, command in scripts.items():
+                if isinstance(command, str):
+                    command = self.resolve_workspace_paths(command, workspace, variant)
+                    if variant == "ps" and command.startswith("'"):
+                        command = "& " + command
+                    scripts[variant] = command
+        body = self.resolve_workspace_paths(body, workspace, script_type, markup_only=True)
+        integration = get_integration(agent)
+        separator = integration.invoke_separator if integration else "."
+        return IntegrationBase.process_template(
+            self.render_frontmatter(frontmatter) + body,
+            agent, script_type, invoke_separator=separator, project_root=project_root,
+            rewrite_paths=False,
+        )
+
+    @staticmethod
+    def resolve_workspace_paths(
+        text: str, workspace: Path, script_type: str, *, markup_only: bool = False
+    ) -> str:
+        """Resolve explicit metadata paths without guessing paths from prose."""
+        # Only declared script fields and explicitly delimited metadata references
+        # are paths. Plain words such as "scripts/example" retain their meaning.
+        quoted_path = (
+            r"(?P<quote>[`'\"])"
+            r"(?P<interpreter>(?<=`)(?:python(?:\d+(?:\.\d+)*)?|bash|sh|pwsh|powershell)"
+            r"(?:\.exe)?(?:[ \t]+-[A-Za-z0-9-]+)*[ \t]+)?"
+            r"(?P<quoted>\.specify/(?:(?!(?P=quote))[^\r\n])+)(?P=quote)"
+        )
+        pattern = quoted_path
+        if not markup_only:
+            pattern = r"(?<![\w/.-])(?:" + quoted_path + r"|(?P<plain>\.specify/[A-Za-z0-9_./-]+))"
+
+        def replace(match: re.Match) -> str:
+            value = match.group("quoted") or match.group("plain")
+            interpreter = match.group("interpreter") or ""
+            suffix = ""
+            if match.group("quote") == "`":
+                parts = re.split(r"(\s+)", value, maxsplit=1)
+                if parts[0].lower().endswith((".sh", ".ps1", ".py")):
+                    value, suffix = parts[0], "".join(parts[1:])
+            path = str(confined(workspace, value))
+            quoted = "'" + path.replace("'", "''") + "'" if script_type == "ps" else shlex.quote(path)
+            if match.group("quote") == "`":
+                if not interpreter and script_type == "ps" and (suffix.strip() or value.lower().endswith(".ps1")):
+                    quoted = "& " + quoted
+                return f"`{interpreter}{quoted}{suffix}`"
+            return quoted
+
+        return re.sub(pattern, replace, text)
 
     def render_markdown_command(
         self, frontmatter: dict, body: str, source_id: str, context_note: Optional[str] = None
@@ -367,7 +454,7 @@ class CommandRegistrar:
 
     # Control-char detection and basic-string escaping are shared with the
     # gemini/tabnine renderer in ``specify_cli.integrations.base`` via
-    # ``specify_cli._toml_string`` so the two never drift apart.
+    # ``specify_cli.toml_string`` so the two never drift apart.
     _has_illegal_toml_control = staticmethod(_has_illegal_toml_control)
     _render_basic_toml_string = staticmethod(_escape_toml_basic)
 
@@ -531,6 +618,16 @@ class CommandRegistrar:
 
         script_command = scripts.get(script_variant) if script_variant else None
         if script_command:
+            workspace = workspace_root_for(project_root)
+            if workspace != project_root:
+                script_command = CommandRegistrar.rewrite_project_relative_paths(
+                    script_command, extension_id=extension_id
+                )
+                script_command = CommandRegistrar.resolve_workspace_paths(
+                    script_command, workspace, script_variant
+                )
+                if script_variant == "ps" and script_command.startswith("'"):
+                    script_command = "& " + script_command
             if script_variant == "py":
                 script_command = IntegrationBase.build_python_invocation(
                     script_command, project_root
@@ -540,9 +637,13 @@ class CommandRegistrar:
 
         body = body.replace("{ARGS}", "$ARGUMENTS").replace("__AGENT__", agent_name)
 
-        return CommandRegistrar.rewrite_project_relative_paths(
-            body, extension_id=extension_id
-        )
+        body = CommandRegistrar.rewrite_project_relative_paths(body, extension_id=extension_id)
+        workspace = workspace_root_for(project_root)
+        if workspace != project_root:
+            body = CommandRegistrar.resolve_workspace_paths(
+                body, workspace, script_variant, markup_only=True
+            )
+        return body
 
     def _convert_argument_placeholder(
         self, content: str, from_placeholder: str, to_placeholder: str
@@ -560,7 +661,7 @@ class CommandRegistrar:
         return content.replace(from_placeholder, to_placeholder)
 
     @staticmethod
-    def _compute_output_name(
+    def compute_output_name(
         agent_name: str, cmd_name: str, agent_config: Dict[str, Any]
     ) -> str:
         """Compute the on-disk command or skill name for an agent."""
@@ -668,6 +769,21 @@ class CommandRegistrar:
         self._ensure_configs()
         if agent_name not in self.AGENT_CONFIGS:
             raise ValueError(f"Unsupported agent: {agent_name}")
+
+        from .integrations.omp.global_commands import global_commands_enabled, install_global_commands
+
+        if agent_name == "omp" and global_commands_enabled(project_root):
+            names = []
+            for command in commands:
+                source = command.get("file")
+                if relative_extension_path_violation(source):
+                    continue
+                if not confined(source_dir.resolve(), source).is_file():
+                    continue
+                names.extend([command["name"], *(command.get("aliases") or [])])
+            if names:
+                install_global_commands(names=names)
+            return names
 
         agent_config = self.AGENT_CONFIGS[agent_name]
         commands_dir = _resolved_dir or self._resolve_agent_dir(
@@ -812,7 +928,7 @@ class CommandRegistrar:
 
             body = IntegrationBase.resolve_command_refs(body, _sep, _prefix)
 
-            output_name = self._compute_output_name(agent_name, cmd_name, agent_config)
+            output_name = self.compute_output_name(agent_name, cmd_name, agent_config)
 
             if agent_config["extension"] == "/SKILL.md":
                 output = self.render_skill_command(
@@ -890,7 +1006,7 @@ class CommandRegistrar:
             registered.append(cmd_name)
 
             for alias in aliases:
-                alias_output_name = self._compute_output_name(
+                alias_output_name = self.compute_output_name(
                     agent_name, alias, agent_config
                 )
 
@@ -968,6 +1084,18 @@ class CommandRegistrar:
                 if agent_name == "copilot":
                     self.write_copilot_prompt(project_root, alias)
                 registered.append(alias)
+
+        if workspace_root_for(project_root) != project_root:
+            from .integrations.manifest import IntegrationManifest
+
+            manifest = IntegrationManifest(agent_name, project_root)
+            for name in registered:
+                output_name = self.compute_output_name(agent_name, name, agent_config)
+                path = commands_dir / f"{output_name}{agent_config['extension']}"
+                if path.is_relative_to(project_root):
+                    manifest._ignore_entry_point(path.relative_to(project_root).as_posix())
+                if agent_name == "copilot":
+                    manifest._ignore_entry_point(f".github/prompts/{name}.prompt.md")
 
         return registered
 
@@ -1112,6 +1240,15 @@ class CommandRegistrar:
         Returns:
             Dictionary mapping agent names to list of registered commands
         """
+        from .integrations.omp.global_commands import global_commands_enabled
+
+        if global_commands_enabled(project_root) and only_agent in (None, "omp"):
+            names = self.register_commands(
+                "omp", commands, source_id, source_dir, project_root,
+                extension_id=extension_id,
+            )
+            return {"omp": names} if names else {}
+
         results = {}
 
         self._ensure_configs()
@@ -1270,6 +1407,15 @@ class CommandRegistrar:
         Returns:
             Dictionary mapping agent names to list of registered commands
         """
+        from .integrations.omp.global_commands import global_commands_enabled
+
+        if global_commands_enabled(project_root) and only_agent in (None, "omp"):
+            names = self.register_commands(
+                "omp", commands, source_id, source_dir, project_root,
+                extension_id=extension_id,
+            )
+            return {"omp": names} if names else {}
+
         results = {}
         self._ensure_configs()
         extra_agents_set = frozenset(extra_agents) if extra_agents else frozenset()
@@ -1327,6 +1473,10 @@ class CommandRegistrar:
         for agent_name, cmd_names in registered_commands.items():
             if agent_name not in self.AGENT_CONFIGS:
                 continue
+            from .integrations.omp.global_commands import global_commands_enabled
+
+            if agent_name == "omp" and global_commands_enabled(project_root):
+                continue
 
             agent_config = self.AGENT_CONFIGS[agent_name]
             commands_dir = self._resolve_agent_dir(
@@ -1343,7 +1493,7 @@ class CommandRegistrar:
                     dirs_to_clean.append(legacy_dir)
 
             for cmd_name in cmd_names:
-                output_name = self._compute_output_name(
+                output_name = self.compute_output_name(
                     agent_name, cmd_name, agent_config
                 )
 

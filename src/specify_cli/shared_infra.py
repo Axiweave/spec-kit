@@ -353,6 +353,9 @@ def refresh_shared_templates(
     force: bool = False,
 ) -> None:
     """Refresh default-sensitive shared templates without touching scripts."""
+    from .workspace import workspace_root_for
+
+    project_path = workspace_root_for(project_path)
     templates_src = shared_templates_source(core_pack=core_pack, repo_root=repo_root)
     if not templates_src.is_dir():
         return
@@ -405,14 +408,15 @@ def install_shared_infra(
     script_type: str,
     *,
     version: str,
-    core_pack: Path | None,
-    repo_root: Path,
+    core_pack: Path | None = None,
+    repo_root: Path | None = None,
     console: Any,
     force: bool = False,
     invoke_separator: str = ".",
     invoke_prefix: str = "/",
     refresh_managed: bool = False,
     refresh_hint: str | None = None,
+    require_current_scripts: bool = False,
 ) -> bool:
     """Install shared scripts and templates into *project_path*.
 
@@ -425,8 +429,22 @@ def install_shared_infra(
     cannot escape the project root). ``refresh_hint`` is shown after the
     customization warning to tell the user which flag would overwrite their
     customizations.
+
+    ``require_current_scripts`` rejects preserved core helpers unless their
+    bytes match the current bundle. Migration uses this check to avoid an
+    unsafe cutover without overwriting edited or unowned helpers.
     """
     from .integrations.manifest import _sha256, _validate_rel_path
+    from .workspace import workspace_root_for
+
+    if repo_root is None:
+        from ._assets import _locate_core_pack, _repo_root
+
+        repo_root = _repo_root()
+        if core_pack is None:
+            core_pack = _locate_core_pack()
+
+    project_path = workspace_root_for(project_path)
 
     manifest = load_speckit_manifest(project_path, version=version, console=console)
     prior_hashes = dict(manifest.files)
@@ -538,6 +556,21 @@ def install_shared_infra(
                         continue
                     write, bucket = _decide_overwrite(rel, dst_path)
                     if not write:
+                        if require_current_scripts:
+                            source_content = src_path.read_text(encoding="utf-8")
+                            rendered = _resolve_dynamic_command_refs(
+                                IntegrationBase.resolve_command_refs(
+                                    source_content, invoke_separator, invoke_prefix
+                                ),
+                                invoke_separator, invoke_prefix,
+                            )
+                            if dst_path.read_bytes() not in (
+                                source_content.encode("utf-8"), rendered.encode("utf-8"),
+                            ):
+                                raise ValueError(
+                                    f"Core helper contains user content: {rel}. "
+                                    "Save its edits separately and restore the managed helper before retrying the move."
+                                )
                         if bucket == "preserved":
                             preserved_user_files.append(rel)
                         else:
@@ -578,6 +611,14 @@ def install_shared_infra(
                             src_path.stat().st_mode & 0o777,
                         )
                     )
+    if require_current_scripts:
+        if symlinked_files:
+            raise ValueError(
+                f"Cannot refresh core helpers through symlinks: {', '.join(symlinked_files)}. "
+                "Replace the symlinks before retrying the move."
+            )
+        if set(variant_dirs) != scanned_variant_dirs:
+            raise ValueError("The installed CLI lacks required core helpers. Reinstall the CLI before retrying the move.")
 
     templates_src = shared_templates_source(core_pack=core_pack, repo_root=repo_root)
     if templates_src.is_dir():

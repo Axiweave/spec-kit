@@ -1,25 +1,25 @@
 """specify integration helpers — internal utilities shared across command modules."""
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any, Callable
 
 import typer
 from rich.markup import escape
 
-from .._agent_config import SCRIPT_TYPE_CHOICES
 from .._console import console
+from ..workspace import confined, workspace_root_for
 from ..integration_runtime import (
     invoke_prefix_for_integration as _invoke_prefix_for_integration,
     invoke_separator_for_integration as _invoke_separator_for_integration,
+    parse_integration_options as _parse_integration_options_impl,
+    resolve_integration_script_type as _resolve_integration_script_type_impl,
     resolve_integration_options as _resolve_integration_options_impl,
     with_integration_setting as _with_integration_setting,
 )
 from ..integration_state import (
     INTEGRATION_JSON,
     INTEGRATION_STATE_SCHEMA,
-    integration_setting as _integration_setting,
     try_read_integration_json as _try_read_integration_json,
     write_integration_json as _write_integration_json_file,
 )
@@ -48,7 +48,7 @@ def _read_integration_json(project_root: Path) -> dict[str, Any]:
     cannot drift on validation rules. Each error variant is translated into
     the existing loud-fail UX (console message + ``typer.Exit(1)``).
     """
-    path = project_root / INTEGRATION_JSON
+    path = workspace_root_for(project_root) / INTEGRATION_JSON
     state, error = _try_read_integration_json(project_root)
     if error is None:
         return state or {}
@@ -120,7 +120,7 @@ def _clear_init_options_for_integration(project_root: Path, integration_key: str
 
 def _remove_integration_json(project_root: Path) -> None:
     """Remove ``.specify/integration.json`` if it exists."""
-    path = project_root / INTEGRATION_JSON
+    path = confined(workspace_root_for(project_root), INTEGRATION_JSON)
     path.unlink(missing_ok=True)
 
 
@@ -139,28 +139,9 @@ class _SharedTemplateRefreshError(RuntimeError):
 # Script type resolution
 # ---------------------------------------------------------------------------
 
-def _normalize_script_type(script_type: str, source: str) -> str:
-    """Normalize and validate a script type from CLI/config sources."""
-    normalized = script_type.strip().lower()
-    if normalized in SCRIPT_TYPE_CHOICES:
-        return normalized
-    console.print(
-        f"[red]Error:[/red] Invalid script type {script_type!r} from {source}. "
-        f"Expected one of: {', '.join(sorted(SCRIPT_TYPE_CHOICES.keys()))}."
-    )
-    raise typer.Exit(1)
-
-
 def _resolve_script_type(project_root: Path, script_type: str | None) -> str:
-    """Resolve the script type from the CLI flag or init-options.json."""
-    from .. import load_init_options
-    if script_type:
-        return _normalize_script_type(script_type, "--script")
-    opts = load_init_options(project_root)
-    saved = opts.get("script")
-    if isinstance(saved, str) and saved.strip():
-        return _normalize_script_type(saved, ".specify/init-options.json")
-    return "ps" if os.name == "nt" else "sh"
+    """Resolve a CLI script choice with user-facing error handling."""
+    return _resolve_integration_script_type(project_root, {}, "", script_type)
 
 
 def _resolve_integration_script_type(
@@ -170,14 +151,11 @@ def _resolve_integration_script_type(
     script_type: str | None = None,
 ) -> str:
     """Resolve script type for an integration, preferring stored settings."""
-    if script_type:
-        return _normalize_script_type(script_type, "--script")
-
-    stored = _integration_setting(state, key).get("script")
-    if isinstance(stored, str) and stored.strip():
-        return _normalize_script_type(stored, f"{INTEGRATION_JSON} integration_settings.{key}.script")
-
-    return _resolve_script_type(project_root, None)
+    try:
+        return _resolve_integration_script_type_impl(project_root, state, key, script_type)
+    except ValueError as exc:
+        console.print(f"[red]Error:[/red] {escape(str(exc))}")
+        raise typer.Exit(1) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -185,60 +163,12 @@ def _resolve_integration_script_type(
 # ---------------------------------------------------------------------------
 
 def _parse_integration_options(integration: Any, raw_options: str) -> dict[str, Any] | None:
-    """Parse --integration-options string into a dict matching the integration's declared options.
-
-    Returns ``None`` when no options are provided.
-    """
-    import shlex
-    parsed: dict[str, Any] = {}
+    """Parse CLI integration options with user-facing error handling."""
     try:
-        tokens = shlex.split(raw_options)
+        return _parse_integration_options_impl(integration, raw_options)
     except ValueError as exc:
-        # An unbalanced quote (e.g. --integration-options='--commands-dir "foo')
-        # makes shlex raise "No closing quotation". Translate it into the same
-        # clean exit-1 UX as every other bad-input path below rather than
-        # letting a raw traceback escape.
-        console.print(f"[red]Error:[/red] Could not parse integration options: {exc}.")
-        raise typer.Exit(1)
-    declared_options = list(integration.options())
-    declared = {opt.name.lstrip("-"): opt for opt in declared_options}
-    allowed = ", ".join(sorted(opt.name for opt in declared_options))
-    i = 0
-    while i < len(tokens):
-        token = tokens[i]
-        if not token.startswith("-"):
-            console.print(f"[red]Error:[/red] Unexpected integration option value '{escape(token)}'.")
-            if allowed:
-                console.print(f"Allowed options: {allowed}")
-            raise typer.Exit(1)
-        name = token.lstrip("-")
-        value: str | None = None
-        # Handle --name=value syntax
-        if "=" in name:
-            name, value = name.split("=", 1)
-        opt = declared.get(name)
-        if not opt:
-            console.print(f"[red]Error:[/red] Unknown integration option '{escape(token)}'.")
-            if allowed:
-                console.print(f"Allowed options: {allowed}")
-            raise typer.Exit(1)
-        key = name.replace("-", "_")
-        if opt.is_flag:
-            if value is not None:
-                console.print(f"[red]Error:[/red] Option '{opt.name}' is a flag and does not accept a value.")
-                raise typer.Exit(1)
-            parsed[key] = True
-            i += 1
-        elif value is not None:
-            parsed[key] = value
-            i += 1
-        elif i + 1 < len(tokens) and not tokens[i + 1].startswith("-"):
-            parsed[key] = tokens[i + 1]
-            i += 2
-        else:
-            console.print(f"[red]Error:[/red] Option '{opt.name}' requires a value.")
-            raise typer.Exit(1)
-    return parsed or None
+        console.print(f"[red]Error:[/red] {escape(str(exc))}")
+        raise typer.Exit(1) from exc
 
 
 def _resolve_integration_options(
@@ -277,6 +207,8 @@ def _update_init_options_for_integration(
     opts["integration"] = integration.key
     opts["ai"] = integration.key
     opts["speckit_version"] = _get_speckit_version()
+    if integration.key != "omp":
+        opts["command_scope"] = "project"
     if script_type:
         opts["script"] = script_type
     # Whether skills mode is active is owned by each integration via the
@@ -502,8 +434,8 @@ def _resync_manifest_after_registration(
     try:
         changed = False
         for rel in new_manifest.files:
-            abs_path = new_manifest.project_root / rel
             try:
+                abs_path = new_manifest.file_path(rel)
                 if abs_path.is_symlink() or not abs_path.is_file():
                     continue
                 new_manifest.record_existing(rel)

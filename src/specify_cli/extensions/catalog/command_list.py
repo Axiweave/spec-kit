@@ -12,6 +12,7 @@ import typer
 from rich.markup import escape as _escape_markup
 
 from .. import _commands
+from ...workspace import workspace_root_for
 from . import catalog_app
 
 
@@ -54,7 +55,7 @@ def catalog_list():
             "control. Don't flip a discovery-only catalog to install_allowed.[/dim]\n"
         )
 
-    config_path = project_root / ".specify" / "extension-catalogs.yml"
+    config_path = workspace_root_for(project_root) / ".specify" / "extension-catalogs.yml"
     user_config_path = Path.home() / ".specify" / "extension-catalogs.yml"
     if os.environ.get("SPECKIT_CATALOG_URL"):
         _commands.console.print(

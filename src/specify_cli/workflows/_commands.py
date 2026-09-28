@@ -28,8 +28,9 @@ from .._download_security import (
     read_response_limited,
     safe_extract_archive,
 )
-from .._project import _resolve_init_dir_override as _resolve_init_dir_override
+from .._project import ProjectResolutionError, _resolve_project
 from ..shared_infra import verify_archive_sha256
+from ..workspace import workspace_root_for
 
 workflow_app = typer.Typer(
     name="workflow",
@@ -44,6 +45,17 @@ def _error_console(json_output: bool):
     stderr-only error routing already used by ``specify bundle``.
     """
     return err_console if json_output else console
+
+
+def _resolve_workflow_project(*, allow_standalone: bool = False):
+    """Resolve workflow storage without changing the code execution root."""
+    try:
+        project = _resolve_project(allow_standalone=allow_standalone)
+    except ProjectResolutionError as error:
+        err_console.print(f"[red]Error:[/red] {_escape_markup(str(error))}")
+        raise typer.Exit(1)
+    _reject_unsafe_workflow_storage(project.workspace_root)
+    return project
 
 
 def _open_workflow_registry(project_root: Path, out=None):
@@ -908,7 +920,11 @@ def _install_workflow_package(
 def _require_specify_project(*args, **kwargs):
     from .. import _require_specify_project as _f
 
-    project_root = _f(*args, **kwargs)
+    try:
+        project_root = workspace_root_for(_f(*args, **kwargs))
+    except (OSError, ValueError) as error:
+        err_console.print(f"[red]Error:[/red] {_escape_markup(str(error))}")
+        raise typer.Exit(1)
     _reject_unsafe_workflow_storage(project_root)
     return project_root
 

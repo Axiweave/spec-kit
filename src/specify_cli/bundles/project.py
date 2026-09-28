@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from .._project import _resolve_init_dir_override
+from ..workspace import workspace_root_for
 from . import BundlerError
 from .yamlio import ensure_within, load_json
 
@@ -67,12 +68,14 @@ def active_integration(project_root: Path) -> str | None:
     Spec Kit records the chosen integration in ``.specify/integration.json``
     during init. Returns None when it cannot be determined (e.g. agnostic).
     """
-    marker = Path(project_root) / ".specify" / "integration.json"
-    # Confine the read (mirrors records/catalog IO): refuse to follow a
-    # symlinked or traversal-escaping .specify that resolves outside
-    # project_root. An escape is treated as "not determinable".
     try:
-        marker = ensure_within(project_root, marker)
+        workspace_root = workspace_root_for(Path(project_root))
+    except (ValueError, OSError) as exc:
+        raise BundlerError(str(exc)) from exc
+    marker = workspace_root / ".specify" / "integration.json"
+    # An escaping marker is not a usable integration declaration.
+    try:
+        marker = ensure_within(workspace_root, marker)
     except BundlerError:
         return None
     if not marker.exists():

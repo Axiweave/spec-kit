@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from ..workspace import workspace_root_for
+
 
 def _path_has_symlink_component(path: Path) -> bool:
     """Return whether any component of an absolute path is a symlink."""
@@ -42,7 +44,7 @@ def _resolve_run_owner_root(
             and not _path_has_symlink_component(candidate)
             and candidate.is_dir()
         ):
-            return candidate
+            return workspace_root_for(candidate)
         raise ValueError(
             "Installed workflow owner is unavailable; cannot safely resume"
         )

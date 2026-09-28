@@ -9,6 +9,7 @@ import typer
 from rich.markup import escape as _escape_markup
 
 from .. import _commands
+from ...workspace import workspace_root_for
 from . import catalog_app
 from ._helpers import load_catalog_command_config
 
@@ -32,7 +33,7 @@ def catalog_add(
     from .. import ExtensionCatalog, ValidationError
 
     project_root = _commands._require_specify_project()
-    specify_dir = project_root / ".specify"
+    specify_dir = workspace_root_for(project_root) / ".specify"
 
     # Validate URL
     tmp_catalog = ExtensionCatalog(project_root)

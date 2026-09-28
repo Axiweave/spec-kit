@@ -221,12 +221,10 @@ clean_branch_name() {
 }
 
 # ---------------------------------------------------------------------------
-# Source common.sh for resolve_template, json_escape, get_repo_root, has_git.
-#
-# Search locations in priority order:
-#  1. .specify/scripts/bash/common.sh under the project root (installed project)
-#  2. scripts/bash/common.sh under the project root (source checkout fallback)
-#  3. git-common.sh next to this script (minimal fallback — lacks resolve_template)
+# Source core repository and workspace helpers.
+# Source scripts use the source helper before any installed copy.
+# Installed scripts try the installed helper, then the source helper.
+# Keep git-common.sh as a minimal fallback for existing local projects.
 # ---------------------------------------------------------------------------
 SCRIPT_DIR="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -246,7 +244,10 @@ _find_project_root() {
 _common_loaded=false
 _PROJECT_ROOT=$(_find_project_root "$SCRIPT_DIR") || true
 
-if [ -n "$_PROJECT_ROOT" ] && [ -f "$_PROJECT_ROOT/.specify/scripts/bash/common.sh" ]; then
+if [ "$SCRIPT_DIR" = "$_PROJECT_ROOT/extensions/git/scripts/bash" ] && [ -f "$_PROJECT_ROOT/scripts/bash/common.sh" ]; then
+    source "$_PROJECT_ROOT/scripts/bash/common.sh"
+    _common_loaded=true
+elif [ -n "$_PROJECT_ROOT" ] && [ -f "$_PROJECT_ROOT/.specify/scripts/bash/common.sh" ]; then
     source "$_PROJECT_ROOT/.specify/scripts/bash/common.sh"
     _common_loaded=true
 elif [ -n "$_PROJECT_ROOT" ] && [ -f "$_PROJECT_ROOT/scripts/bash/common.sh" ]; then
@@ -299,8 +300,22 @@ fi
 
 cd "$REPO_ROOT"
 
-SPECS_DIR="$REPO_ROOT/specs"
-CONFIG_FILE="$REPO_ROOT/.specify/extensions/git/git-config.yml"
+WORKSPACE_ROOT="$REPO_ROOT"
+if type get_workspace_root >/dev/null 2>&1; then
+    WORKSPACE_ROOT=$(get_workspace_root "$REPO_ROOT") || exit 1
+elif [ -e "$REPO_ROOT/.specify/project.json" ] || [ -L "$REPO_ROOT/.specify/project.json" ]; then
+    echo "Error: External storage requires updated Spec Kit core scripts with workspace support." >&2
+    exit 1
+fi
+
+SPECS_DIR="$WORKSPACE_ROOT/specs"
+CONFIG_FILE="$WORKSPACE_ROOT/.specify/extensions/git/git-config.yml"
+INIT_OPTIONS="$WORKSPACE_ROOT/.specify/init-options.json"
+if type check_workspace_path >/dev/null 2>&1; then
+    check_workspace_path "$WORKSPACE_ROOT" "$SPECS_DIR" || exit 1
+    check_workspace_path "$WORKSPACE_ROOT" "$CONFIG_FILE" || exit 1
+    check_workspace_path "$WORKSPACE_ROOT" "$INIT_OPTIONS" || exit 1
+fi
 
 read_git_config_value() {
     local key="$1"
@@ -313,6 +328,30 @@ read_git_config_value() {
         | sed -E 's/^"//; s/"$//' \
         | sed -E "s/^'//; s/'$//"
 }
+
+# Explicit choices bypass saved modes without changing project configuration.
+if [ -z "${GIT_BRANCH_NAME:-}" ] && [ "$USE_TIMESTAMP" != true ] && [ -z "$BRANCH_NUMBER" ]; then
+    BRANCH_NUMBERING=$(read_git_config_value "branch_numbering")
+    if [ -z "$BRANCH_NUMBERING" ]; then
+        BRANCH_NUMBERING=sequential
+        if [ -f "$INIT_OPTIONS" ]; then
+            if command -v jq >/dev/null 2>&1; then
+                BRANCH_NUMBERING=$(jq -r 'if has("feature_numbering") then .feature_numbering else "sequential" end' "$INIT_OPTIONS") || exit 1
+            elif type _python3_command >/dev/null 2>&1 && PYTHON_SPEC=$(_python3_command); then
+                read -r -a PYTHON_CMD <<< "$PYTHON_SPEC"
+                BRANCH_NUMBERING=$("${PYTHON_CMD[@]}" -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("feature_numbering", "sequential"))' "$INIT_OPTIONS") || exit 1
+            else
+                echo "Error: Reading saved numbering requires jq or updated Spec Kit core scripts: $INIT_OPTIONS" >&2
+                exit 1
+            fi
+        fi
+    fi
+    case "$BRANCH_NUMBERING" in
+        timestamp) USE_TIMESTAMP=true ;;
+        sequential) ;;
+        *) echo "Error: Invalid branch numbering: $BRANCH_NUMBERING. Use sequential or timestamp." >&2; exit 1 ;;
+    esac
+fi
 
 branch_token() {
     local value="$1"

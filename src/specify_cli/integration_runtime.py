@@ -2,14 +2,75 @@
 
 from __future__ import annotations
 
+import os
+import shlex
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from ._invocation_style import get_invocation_prefix
+from ._agent_config import SCRIPT_TYPE_CHOICES
+from ._init_options import load_init_options
 from .integration_state import integration_setting, integration_settings
 
 
 ParseOptions = Callable[[Any, str], dict[str, Any] | None]
+
+
+def parse_integration_options(integration: Any, raw_options: str) -> dict[str, Any] | None:
+    """Parse declared integration options or raise ValueError."""
+    try:
+        tokens = shlex.split(raw_options)
+    except ValueError as exc:
+        raise ValueError(f"Could not parse integration options: {exc}.") from exc
+    declared = {opt.name.lstrip("-"): opt for opt in integration.options()}
+    allowed = ", ".join(sorted(opt.name for opt in declared.values()))
+    parsed: dict[str, Any] = {}
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if not token.startswith("-"):
+            raise ValueError(f"Unexpected integration option value '{token}'.\nAllowed options: {allowed}")
+        name, separator, value = token.lstrip("-").partition("=")
+        option = declared.get(name)
+        if option is None:
+            raise ValueError(f"Unknown integration option '{token}'.\nAllowed options: {allowed}")
+        key = name.replace("-", "_")
+        if option.is_flag:
+            if separator:
+                raise ValueError(f"Option '{option.name}' is a flag and does not accept a value.")
+            parsed[key] = True
+        elif separator:
+            parsed[key] = value
+        elif index + 1 < len(tokens) and not tokens[index + 1].startswith("-"):
+            index += 1
+            parsed[key] = tokens[index]
+        else:
+            raise ValueError(f"Option '{option.name}' requires a value.")
+        index += 1
+    return parsed or None
+
+
+def resolve_integration_script_type(
+    project_root: Path, state: dict[str, Any], key: str, script_type: str | None = None,
+) -> str:
+    """Resolve explicit, per-integration, saved, then platform script choices."""
+    value, source = script_type, "--script"
+    if not value:
+        value = integration_setting(state, key).get("script")
+        source = f".specify/integration.json integration_settings.{key}.script"
+        if not isinstance(value, str) or not value.strip():
+            value = load_init_options(project_root).get("script")
+            source = ".specify/init-options.json"
+        if not isinstance(value, str) or not value.strip():
+            return "ps" if os.name == "nt" else "sh"
+    normalized = value.strip().lower()
+    if normalized not in SCRIPT_TYPE_CHOICES:
+        raise ValueError(
+            f"Invalid script type {value!r} from {source}. "
+            f"Expected one of: {', '.join(sorted(SCRIPT_TYPE_CHOICES))}."
+        )
+    return normalized
 
 
 def resolve_integration_options(
@@ -18,7 +79,7 @@ def resolve_integration_options(
     key: str,
     raw_options: str | None,
     *,
-    parse_options: ParseOptions,
+    parse_options: ParseOptions = parse_integration_options,
 ) -> tuple[str | None, dict[str, Any] | None]:
     """Resolve raw and parsed options for an integration operation."""
     if raw_options is not None:

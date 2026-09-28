@@ -19,6 +19,7 @@ from .._download_security import (
     is_https_or_localhost_http,
 )
 from ._manifest import PresetError, PresetValidationError
+from ..workspace import workspace_root_for
 
 
 @dataclass
@@ -48,7 +49,7 @@ class PresetCatalog:
         Args:
             project_root: Root directory of the spec-kit project
         """
-        self.project_root = project_root
+        self.project_root = project_root = workspace_root_for(project_root)
         self.presets_dir = project_root / ".specify" / "presets"
         self.cache_dir = self.presets_dir / ".cache"
         self.cache_file = self.cache_dir / "catalog.json"

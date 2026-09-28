@@ -15,7 +15,9 @@ from pathlib import Path
 try:
     from common import (
         TemplateResolutionError,
+        confined_workspace_path,
         get_repo_root,
+        get_workspace_root,
         persist_feature_json,
         resolve_template_content,
     )
@@ -23,7 +25,9 @@ except ImportError:  # pragma: no cover - direct execution from unusual cwd
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from common import (
         TemplateResolutionError,
+        confined_workspace_path,
         get_repo_root,
+        get_workspace_root,
         persist_feature_json,
         resolve_template_content,
     )
@@ -256,7 +260,27 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(list(argv if argv is not None else sys.argv[1:]), argv0)
 
     repo_root = get_repo_root(Path(__file__))
-    specs_dir = repo_root / "specs"
+    workspace_root = get_workspace_root(repo_root, report=True)
+    use_timestamp = args.use_timestamp
+    if not use_timestamp and not args.branch_number:
+        options_path = workspace_root / ".specify" / "init-options.json"
+        if workspace_root != repo_root:
+            confined_workspace_path(workspace_root, options_path)
+        if options_path.is_file():
+            try:
+                options = json.loads(options_path.read_text(encoding="utf-8"))
+                if not isinstance(options, dict):
+                    raise ValueError("Project choices must be a JSON object.")
+                numbering = options.get("feature_numbering", "sequential")
+                if numbering not in ("sequential", "timestamp"):
+                    raise ValueError("Feature numbering must be sequential or timestamp.")
+                use_timestamp = numbering == "timestamp"
+            except (OSError, UnicodeError, ValueError) as exc:
+                print(f"ERROR: Cannot read project choices at {options_path}: {exc}", file=sys.stderr)
+                return 1
+    specs_dir = workspace_root / "specs"
+    if workspace_root != repo_root:
+        confined_workspace_path(workspace_root, specs_dir)
     if not args.dry_run:
         specs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -280,7 +304,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         branch_number = ""
 
-    if args.use_timestamp:
+    if use_timestamp:
         feature_num = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
     else:
         if branch_number:
@@ -373,10 +397,13 @@ def main(argv: list[str] | None = None) -> int:
 
     feature_dir = specs_dir / branch_name
     spec_file = feature_dir / "spec.md"
+    if workspace_root != repo_root:
+        confined_workspace_path(workspace_root, feature_dir)
+        confined_workspace_path(workspace_root, spec_file)
 
     if not args.dry_run:
         if feature_dir.is_dir() and not args.allow_existing:
-            if args.use_timestamp:
+            if use_timestamp:
                 print(
                     f"Error: Feature directory '{feature_dir}' already exists. "
                     "Rerun to get a new timestamp or use a different --short-name.",
@@ -414,8 +441,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 spec_file.touch()
 
-        # Persist to .specify/feature.json so downstream commands can find the
-        # feature, unless the orchestrator opted out via SPECIFY_FEATURE_NO_PERSIST (#4129).
+        # Save the active feature unless the orchestrator disables persistence.
         if os.environ.get("SPECIFY_FEATURE_NO_PERSIST", "") not in ("1", "true"):
             persist_feature_json(repo_root, f"specs/{branch_name}")
 

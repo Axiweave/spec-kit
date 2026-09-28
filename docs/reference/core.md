@@ -17,6 +17,10 @@ specify init [<project_name>]
 | `--force`                | Force merge/overwrite when initializing in an existing directory         |
 | `--ignore-agent-tools`   | Skip checks for AI coding agent CLI tools                                |
 | `--preset <id>`          | Install a preset during initialization                                   |
+| `--storage local\|external` | Keep Spec Kit assets in the repository or use a separate workspace |
+| `--workspace <path>` | Select an exact external workspace. Conflicts with `--storage local` |
+| `--global-commands` | Use one shared OMP command set without repository-local command copies |
+| `--feature-numbering sequential\|timestamp` | Save the project's feature-directory numbering mode |
 
 Creates a new Spec Kit project with the necessary directory structure, templates, scripts, and AI coding agent integration files.
 
@@ -25,7 +29,9 @@ Creates a new Spec Kit project with the necessary directory structure, templates
 
 Use `<project_name>` to create a new directory, or `--here` (or `.`) to initialize in the current directory. If the directory already has files, use `--force` to merge without confirmation.
 
-When `--integration` is omitted, interactive terminals prompt you to choose an integration. Non-interactive sessions, such as CI or piped runs, default to GitHub Copilot; pass `--integration <key>` to choose a different integration explicitly, or set `SPECKIT_INTEGRATION_DEFAULT` to change the fallback (see [Environment Variables](#environment-variables)).
+For new projects, setup uses explicit options, then the integration environment override, then personal defaults.
+Unset choices prompt in interactive terminals.
+Non-interactive setup uses local storage, sequential numbering, the platform script type, and GitHub Copilot when no other choice applies.
 
 ### Examples
 
@@ -46,17 +52,154 @@ specify init my-project --integration copilot --script ps
 specify init my-project --integration copilot --preset compliance
 ```
 
+### External workspaces
+
+```bash
+specify init my-project --integration omp --storage external --workspace "$HOME/speckit-specs/my-project"
+```
+
+External setup places scripts, templates, project context, workflow state, and feature artifacts in the selected workspace.
+The code repository keeps `.specify/project.json` and required agent entry points.
+The locator contains a stable project ID, not a machine-specific path.
+Generated local entry points have repository ignore rules.
+
+Each project owns a distinct workspace. Setup refuses occupied or overlapping explicit destinations.
+Without `--workspace`, external setup chooses a unique child of the saved `storage_root`, or suggests a directory under `~/speckit-specs/`.
+An unavailable or foreign workspace produces an error instead of a repository-local fallback.
+
+Run `specify project info --json` from the code repository to inspect its effective roots and active feature.
+Git and workflow shell commands keep the code repository as their working directory.
+External scripts recover feature selection from the machine-local project record.
+Local projects retain `.specify/feature.json` and existing absolute feature overrides.
+In external mode, feature overrides must remain inside the selected workspace.
+
+Machine records use `$XDG_DATA_HOME/specify/projects/`, or `~/.local/share/specify/projects/` on Unix when unset.
+Windows uses the per-user local application-data directory when XDG is unset.
+Create a separate workspace backup. External storage does not provide synchronization or erase earlier Git history.
+
+### Personal defaults
+
+```bash
+specify config set storage_root "~/speckit-specs"
+specify config set feature_numbering timestamp
+specify config set integration omp
+specify config set script py
+specify config get storage_root
+specify config clear script
+```
+
+These commands work outside a project.
+`get` prints the saved string, or an empty value when absent.
+`set <key> ""` and `clear <key>` restore interactive prompting for that choice.
+Valid numbering modes are `sequential` and `timestamp`. Valid script types are `sh`, `ps`, and `py`.
+The integration must be a registered integration key.
+
+On Unix and macOS, defaults use `$XDG_CONFIG_HOME/specify/config.json`, or `~/.config/specify/config.json` when unset.
+Windows uses `%APPDATA%/specify/config.json`.
+Updates preserve unknown fields and replace the file atomically.
+Malformed or unreadable files block updates instead of losing saved data.
+
+A nonempty `storage_root` selects external storage for new projects.
+Setup expands `~` without changing the saved string.
+Explicit `--storage local` and `--workspace` override that location choice.
+`SPECKIT_INTEGRATION_DEFAULT` overrides the personal integration value unless `--integration` is explicit.
+Changed personal defaults do not change an existing project's workspace or saved choices, including during forced reinitialization.
+
+### Feature and branch numbering
+
+Feature creation reads `feature_numbering` from the workspace's `.specify/init-options.json`, not from current personal defaults.
+An explicit per-feature number or timestamp choice overrides that saved mode without changing it.
+
+The Git extension uses this precedence:
+
+1. An exact `GIT_BRANCH_NAME`.
+2. An explicit timestamp flag.
+3. An explicit number, including zero.
+4. A nonempty `branch_numbering` in `.specify/extensions/git/git-config.yml`.
+5. The project's `feature_numbering`.
+6. `sequential` when the project has no saved mode.
+
+New Git configuration leaves `branch_numbering` empty so it inherits the project mode.
+A nonempty value selects a separate branch mode.
+Branch creation never changes the active feature directory.
+
+### Move an existing local project
+
+Stop active agents and workflows before a move.
+Choose an absent or empty destination outside the code repository.
+
+```bash
+# Interactive cleanup consent
+specify project move "$HOME/speckit-specs/my-project"
+
+# Alternative: explicit consent for noninteractive use
+specify project move "$HOME/speckit-specs/my-project" --confirm-remove-local
+```
+
+Spec Kit copies and verifies local metadata, feature artifacts, and the saved active feature before it asks to remove originals.
+The preview lists every copied file and its verified destination.
+The explicit flag supplies cleanup consent after verification.
+Successful moves leave only the repository locator and required native agent files.
+The move preserves personal defaults and does not rewrite Git history.
+
+During cutover, Spec Kit refreshes unchanged managed helpers and stock feature-selection instructions from the installed CLI.
+It preserves edited context, templates, command prose, and native metadata.
+It does not claim ownership of user edits.
+Edited or unowned helpers must already match the current bundle.
+Otherwise, the move fails and keeps both copies for recovery.
+Save helper edits separately before you restore managed helpers and retry.
+
+A refusal leaves the local project usable and retains the verified staged copy.
+Inspect that copy before retrying with an empty destination.
+Cutover failures restore local state and report recovery paths.
+If recovery itself fails, keep both copies and the reported recovery directory.
+
+Migration refuses source symlinks and saved active features outside the repository before staging.
+Replace source symlinks with local copies before migration.
+For an outside feature, copy it into the repository and update local `.specify/feature.json` to select that copy.
+Projects that remain local retain their existing absolute feature overrides.
+
+### Relink a workspace
+
+```bash
+specify project link "/path/to/existing/workspace"
+specify project info --json
+```
+
+Run these commands from the code repository after a clone, rename, or machine change.
+The link command verifies the workspace identity before it updates the machine-local record.
+It does not change the shared locator or read personal setup defaults.
+A new machine record has no active feature. Select a feature explicitly before a feature-dependent command.
+
+### Shared OMP commands
+
+```bash
+specify integration install omp --global
+specify init my-project --integration omp --global-commands --storage external
+specify project command speckit.specify --json
+```
+
+Global installation works outside a project and targets the active OMP profile's command directory.
+The launchers contain no project content.
+Each invocation resolves the current project's command, configuration, presets, extensions, and feature selection.
+The JSON response contains `content`, `repository_root`, `workspace_root`, and `feature_dir`.
+
+Use `specify integration upgrade omp --global` or `specify integration uninstall omp --global` to manage the shared set.
+These commands preserve unrelated files and edited launchers, including with `--force`.
+Project or add-on removal does not remove shared launchers that another project can use.
+Other integrations do not support `--global` or `--global-commands`.
+
 ### Environment Variables
 
 | Variable          | Description                                                              |
 | ----------------- | ------------------------------------------------------------------------ |
 | `SPECKIT_INTEGRATION_DEFAULT` | Override the fallback integration used by `specify init` when `--integration` is omitted (interactive prompt default and non-interactive fallback). Set it to any registered integration key (e.g. `gemini`, `claude`). An unrecognized value is ignored with a warning and the built-in default (`copilot`) is used. An explicit `--integration <key>` always takes precedence. |
-| `SPECIFY_INIT_DIR` | Target a member project from outside its directory (e.g. a monorepo root) without `cd`, for non-interactive / CI use. Set it to the **project root** — the directory *containing* `.specify/` (relative paths resolve against the current directory). The path must exist and contain `.specify/`, otherwise the command errors and does **not** fall back to the current directory. Resolved once in the core root helper (`get_repo_root` in Bash, `Get-RepoRoot` in PowerShell), so it is honored by the core feature scripts (`/speckit.plan`, `/speckit.tasks`, …) and the Git extension's feature-branch creation, which inherit it. The `specify` CLI applies the **same** validation rules to every project-scoped subcommand (`specify integration …`, `specify extension …`, `specify workflow …`, `specify preset …`, and the rest that operate on a `.specify/` project), so those can target a member project too. When unset, Bash/PowerShell helpers keep their existing upward search; the `specify` CLI keeps its project-scoped resolver cwd-only unless a command explicitly defines broader detection (for example, bundle commands). |
-| `SPECIFY_FEATURE_DIRECTORY` | Override the active feature directory *within* the resolved project (takes precedence over `.specify/feature.json`). Relative paths resolve under the project root. Combine with `SPECIFY_INIT_DIR` to pick both the project and the feature non-interactively. |
-| `SPECIFY_FEATURE` | Explicitly override the active feature **label** (e.g. `001-photo-albums`) — the identifier the core helpers report as the current feature/branch (`get_current_branch` in Bash, `Get-CurrentBranch` in PowerShell). Those helpers never inspect Git: when the variable is set they return it verbatim, and when it is unset they return an empty string. The basename fallback happens later — `get_feature_paths` / `Get-FeaturePathsEnv` substitute the resolved feature directory's basename so the reported label is still usable — so calling the named helpers directly does **not** give you that fallback. You set it yourself: the Bash and Python feature scripts only **print** a commented `export SPECIFY_FEATURE=…` / `$env:SPECIFY_FEATURE = …` hint for you to run, because a child process cannot change its parent's environment, and `/speckit.specify` persists `feature_directory` to `.specify/feature.json` instead of setting this variable. (The PowerShell feature scripts do assign `$env:SPECIFY_FEATURE`, but that only reaches you when the script runs inside your current PowerShell session.) It does **not** locate the feature directory: with only `SPECIFY_FEATURE` set, `get_feature_paths` fails with *"Feature directory not found. Set `SPECIFY_FEATURE_DIRECTORY` or run the specify command to create `.specify/feature.json`."* Use `SPECIFY_FEATURE_DIRECTORY` (above) or `.specify/feature.json` to select the directory. |
-| `SPECIFY_FEATURE_NO_PERSIST` | Set to `1` or `true` to stop every core script from writing `.specify/feature.json`, even when it would otherwise persist `SPECIFY_FEATURE_DIRECTORY` on read. Useful when multiple agents run concurrently against the same checkout, each with its own `SPECIFY_FEATURE_DIRECTORY`: without it, each invocation's persist step can overwrite another agent's pinned feature directory. |
+| `SPECIFY_INIT_DIR` | Select the code repository explicitly, including from a monorepo root. Relative values resolve from cwd. The directory must contain `.specify/`. Invalid values fail without fallback. Without the override, core scripts and project CLI commands search upward from cwd. |
+| `SPECIFY_FEATURE_DIRECTORY` | Override saved feature selection. Relative paths resolve under the workspace. External selections must stay inside that workspace. Local mode retains absolute overrides. |
+| `SPECIFY_FEATURE` | Override the reported feature label, independently of Git. This does not select a feature directory. Use `SPECIFY_FEATURE_DIRECTORY` or saved feature selection for that purpose. |
+| `SPECIFY_FEATURE_NO_PERSIST` | Set to `1` or `true` to prevent scripts from saving active-feature changes. Applies to local `.specify/feature.json` and external machine-local records. Use it for independent concurrent selections. |
 
-> **Two resolution axes.** `SPECIFY_INIT_DIR` selects the **project** (which directory contains `.specify/`); `SPECIFY_FEATURE_DIRECTORY` / `.specify/feature.json` select the **feature** within that project. They are independent — project first, then feature.
+> **Three resolution axes.** `SPECIFY_INIT_DIR` selects the code repository. Its storage locator selects the workspace. Explicit or saved feature selection selects the feature. Local projects use the repository as their workspace.
 >
 > **Version control.** `specify init` scaffolds a managed `.specify/.gitignore` that excludes machine-local state — `feature.json` (the current-feature pointer, rewritten on every feature switch) and per-machine extension `extensions/*/local-config.yml` overrides — while leaving everything else under `.specify/` (constitution, templates, scripts, extension config) shareable so teams stay aligned. Like the rest of `.specify/`'s shared scripts and templates, the file is tracked in the shared-infrastructure manifest: your edits are preserved on re-init and `specify init --here --force` restores the managed content. It is intentionally left in place by `specify integration uninstall`, which only removes the uninstalled agent's own files.
 >

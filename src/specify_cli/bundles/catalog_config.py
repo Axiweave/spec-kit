@@ -10,6 +10,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 import re
 
+from ..workspace import workspace_root_for
 from . import BundlerError
 from .yamlio import dump_yaml, ensure_within, load_yaml
 from .catalogs import (
@@ -29,14 +30,16 @@ _WINDOWS_DRIVE_RE = re.compile(r"^[A-Za-z]:[\\/]")
 
 
 def _config_path(project_root: Path) -> Path:
-    return Path(project_root) / ".specify" / CONFIG_FILENAME
+    try:
+        return workspace_root_for(Path(project_root)) / ".specify" / CONFIG_FILENAME
+    except (ValueError, OSError) as exc:
+        raise BundlerError(str(exc)) from exc
 
 
 def _read(project_root: Path) -> list[dict]:
-    # Confine the read (parity with the write path's within= guard): refuse to
-    # follow a symlinked or traversal-escaping .specify that resolves outside
-    # project_root.
-    path = ensure_within(project_root, _config_path(project_root))
+    path = _config_path(project_root)
+    # The unresolved path retains the workspace root for confinement.
+    path = ensure_within(path.parent.parent, path)
     if not path.exists():
         return []
     # ``load_yaml`` returns ``{}`` only for an empty document and the raw parse
@@ -80,7 +83,8 @@ def _read(project_root: Path) -> list[dict]:
 
 def _write(project_root: Path, catalogs: list[dict]) -> None:
     payload = {"schema_version": CONFIG_SCHEMA_VERSION, "catalogs": catalogs}
-    dump_yaml(_config_path(project_root), payload, within=project_root)
+    path = _config_path(project_root)
+    dump_yaml(path, payload, within=path.parent.parent)
 
 
 def _slug(value: str) -> str:

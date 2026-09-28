@@ -616,7 +616,7 @@ class TestExtensionUpdateCLI:
                 agent_name, agent_cfg, project_dir
             )
             for cmd_name in cmd_names:
-                output_name = AgentRegistrar._compute_output_name(agent_name, cmd_name, agent_cfg)
+                output_name = AgentRegistrar.compute_output_name(agent_name, cmd_name, agent_cfg)
                 cmd_path = commands_dir / f"{output_name}{agent_cfg['extension']}"
                 command_files.append(cmd_path)
 

@@ -9,6 +9,7 @@ import typer
 from rich.markup import escape as _escape_markup
 
 from ..._console import console
+from ...workspace import workspace_root_for
 from . import catalog_app
 
 
@@ -43,7 +44,7 @@ def preset_catalog_list():
         console.print(f"     Install: {install_str}")
         console.print()
 
-    config_path = project_root / ".specify" / "preset-catalogs.yml"
+    config_path = workspace_root_for(project_root) / ".specify" / "preset-catalogs.yml"
     user_config_path = Path.home() / ".specify" / "preset-catalogs.yml"
     if os.environ.get("SPECKIT_PRESET_CATALOG_URL"):
         console.print(

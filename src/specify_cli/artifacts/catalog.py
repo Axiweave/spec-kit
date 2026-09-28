@@ -73,7 +73,7 @@ def _resolve_script_reference(script_root: Path, token: str) -> Path | None:
     return candidate if candidate.is_file() else None
 
 
-def _locate_shared_asset_dir(subdir: str) -> Path | None:
+def locate_shared_asset_dir(subdir: str) -> Path | None:
     """Locate a core asset directory without changing shared asset behavior."""
     if subdir not in {"commands", "scripts", "templates"}:
         return None
@@ -976,7 +976,7 @@ class ArtifactCatalog:
         from ..presets import PresetResolver
 
         project_commands_dir = _project_core_asset_root(self.project_root, "commands")
-        bundled_commands_dir = _locate_shared_asset_dir("commands")
+        bundled_commands_dir = locate_shared_asset_dir("commands")
         command_dirs = tuple(
             directory
             for directory in (project_commands_dir, bundled_commands_dir)
@@ -1006,7 +1006,7 @@ class ArtifactCatalog:
         seen_templates: set[str] = set()
         for directory in (
             _project_core_asset_root(self.project_root, "templates"),
-            _locate_shared_asset_dir("templates"),
+            locate_shared_asset_dir("templates"),
         ):
             if directory is None:
                 continue
@@ -1021,7 +1021,7 @@ class ArtifactCatalog:
 
         for directory in (
             _project_core_asset_root(self.project_root, "scripts"),
-            _locate_shared_asset_dir("scripts"),
+            locate_shared_asset_dir("scripts"),
         ):
             if directory is None:
                 continue
@@ -1039,7 +1039,7 @@ class ArtifactCatalog:
             directory
             for directory in (
                 _project_core_asset_root(self.project_root, "commands"),
-                _locate_shared_asset_dir("commands"),
+                locate_shared_asset_dir("commands"),
             )
             if directory is not None
         )
@@ -1047,7 +1047,7 @@ class ArtifactCatalog:
             directory
             for directory in (
                 _project_core_asset_root(self.project_root, "scripts"),
-                _locate_shared_asset_dir("scripts"),
+                locate_shared_asset_dir("scripts"),
             )
             if directory is not None
         )

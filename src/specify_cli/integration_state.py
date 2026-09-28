@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .workspace import confined, workspace_root_for
+
 
 INTEGRATION_JSON = ".specify/integration.json"
 INTEGRATION_STATE_SCHEMA = 1
@@ -34,7 +36,11 @@ def _read_integration_json_data(
     ``(None, None)`` when the file is absent, and ``(None, error)`` for parse,
     schema, encoding, or filesystem failures.
     """
-    path = project_root / INTEGRATION_JSON
+    try:
+        workspace = workspace_root_for(project_root)
+        path = confined(workspace, INTEGRATION_JSON)
+    except (OSError, ValueError, RuntimeError) as exc:
+        return None, IntegrationReadError(kind="os", detail=str(exc))
     # Avoid Path.exists() / Path.is_file() as a pre-check: both return False
     # on some OSErrors (e.g. permission errors during stat), which would
     # silently treat an unreadable-but-present file as missing. Attempt the
@@ -224,7 +230,8 @@ def write_integration_json(
     settings: dict[str, dict[str, Any]] | None = None,
 ) -> None:
     """Write ``.specify/integration.json`` with legacy-compatible state."""
-    dest = project_root / INTEGRATION_JSON
+    workspace = workspace_root_for(project_root)
+    dest = confined(workspace, INTEGRATION_JSON)
     dest.parent.mkdir(parents=True, exist_ok=True)
 
     integration_key = clean_integration_key(integration_key)

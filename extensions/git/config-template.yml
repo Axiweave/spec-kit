@@ -1,8 +1,8 @@
 # Git Branching Workflow Extension Configuration
 # Copied to .specify/extensions/git/git-config.yml on install
 
-# Branch numbering strategy: "sequential" (001, 002, ...) or "timestamp" (YYYYMMDD-HHMMSS)
-branch_numbering: sequential
+# Empty inherits the project's feature numbering. Set sequential or timestamp to override it.
+branch_numbering: ""
 
 # Optional branch name template. Leave empty for the default "{number}-{slug}".
 # Supported tokens: {author}, {app}, {number}, {slug}

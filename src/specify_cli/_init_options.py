@@ -5,6 +5,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Union
 
+from .workspace import workspace_root_for
+
 
 INIT_OPTIONS_FILE = ".specify/init-options.json"
 
@@ -21,7 +23,7 @@ MISSING_INIT_OPTIONS_FILE = _MissingInitOptionsFile()
 
 def save_init_options(project_path: Path, options: dict[str, Any]) -> None:
     """Persist the CLI options used during ``specify init``."""
-    dest = project_path / INIT_OPTIONS_FILE
+    dest = workspace_root_for(project_path) / INIT_OPTIONS_FILE
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_text(
         json.dumps(options, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
@@ -31,7 +33,7 @@ def save_init_options(project_path: Path, options: dict[str, Any]) -> None:
 
 def load_init_options(project_path: Path) -> dict[str, Any]:
     """Load persisted init options, returning an empty dict when unavailable."""
-    path = project_path / INIT_OPTIONS_FILE
+    path = workspace_root_for(project_path) / INIT_OPTIONS_FILE
     if not path.exists():
         return {}
     try:
@@ -68,7 +70,7 @@ def resolve_active_agent_for_registration(
       or pass a non-string key into agent-config lookups.
     - Returns the active agent key (a non-empty string) otherwise.
     """
-    path = project_path / INIT_OPTIONS_FILE
+    path = workspace_root_for(project_path) / INIT_OPTIONS_FILE
     # A dangling symlink's target doesn't exist, so Path.exists() (which
     # follows symlinks) returns False even though the path itself is
     # present as a broken/corrupted entry. Treat any symlink as "present"

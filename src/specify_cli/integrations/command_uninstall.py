@@ -15,11 +15,17 @@ from ._helpers import _MANIFEST_READ_ERRORS, _clear_init_options_for_integration
 def integration_uninstall(
     key: str = typer.Argument(None, help="Integration key to uninstall (default: current integration)"),
     force: bool = typer.Option(False, "--force", help="Remove files even if modified"),
+    global_install: bool = typer.Option(False, "--global", help="Remove unchanged shared OMP commands without a project"),
 ):
     """Uninstall an integration, safely preserving modified files."""
     from . import get_integration
     from .manifest import IntegrationManifest
     from .. import _require_specify_project
+
+    if global_install:
+        from .omp.global_commands import run_global_command
+        run_global_command(key, "uninstall")
+        return
 
     project_root = _require_specify_project()
     current = _read_integration_json(project_root)
@@ -38,7 +44,7 @@ def integration_uninstall(
 
     integration = get_integration(key)
 
-    manifest_path = project_root / ".specify" / "integrations" / f"{key}.manifest.json"
+    manifest_path = IntegrationManifest(key, project_root).manifest_path
     if not manifest_path.exists():
         console.print(f"[yellow]No manifest found for integration '{key}'. Nothing to uninstall.[/yellow]")
         remaining = [installed for installed in installed_keys if installed != key]

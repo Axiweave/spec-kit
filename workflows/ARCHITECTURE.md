@@ -77,6 +77,17 @@ When a `gate` step pauses execution, the engine persists `current_step_index` an
 > the parent control-flow step and its nested body. A nested step-path
 > stack for exact resume is a planned enhancement.
 
+### Repository and Workspace Roots
+
+`WorkflowEngine.project_root` remains the code repository and supplies the working directory for shell and agent steps.
+`WorkflowEngine.workspace_root` stores workflow definitions, registries, overlays, custom steps, and run state under `.specify/workflows/`.
+Local projects use the same directory for both roots.
+External projects resolve and verify the workspace before workflow access.
+Root-only management commands, such as listing installed workflows, validate these roots without parsing the active feature selection.
+
+A direct workflow file outside a project keeps the invoking directory for execution and run state.
+A direct workflow file inside an external project cannot bypass a missing workspace mapping or a foreign workspace identity.
+
 ## Step Types
 
 The engine ships with 12 built-in step types, each in its own subpackage under `src/specify_cli/workflows/step/`:

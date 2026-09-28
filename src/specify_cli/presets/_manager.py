@@ -14,6 +14,7 @@ from .._download_security import safe_extract_archive
 from .._init_options import is_ai_skills_enabled, resolve_active_agent_for_registration
 from .._utils import version_satisfies
 from ..extensions import REINSTALL_COMMAND, normalize_priority
+from ..workspace import workspace_root_for
 from ..shared_infra import (
     _ensure_safe_shared_destination,
     _ensure_safe_shared_directory,
@@ -160,7 +161,8 @@ class PresetManager(_PresetCommandMethods, _PresetSkillMethods):
             project_root: Path to project root directory
         """
         self.project_root = project_root
-        self.presets_dir = project_root / ".specify" / "presets"
+        self.workspace_root = workspace_root_for(project_root)
+        self.presets_dir = self.workspace_root / ".specify" / "presets"
         self.registry = PresetRegistry(self.presets_dir)
 
     def check_compatibility(
@@ -261,7 +263,7 @@ class PresetManager(_PresetCommandMethods, _PresetSkillMethods):
         if not declared:
             return []
 
-        extensions_dir = self.project_root / ".specify" / "extensions"
+        extensions_dir = self.workspace_root / ".specify" / "extensions"
         try:
             from . import ExtensionRegistry
 
@@ -540,16 +542,16 @@ class PresetManager(_PresetCommandMethods, _PresetSkillMethods):
             return
 
         memory_constitution = (
-            self.project_root / ".specify" / "memory" / "constitution.md"
+            self.workspace_root / ".specify" / "memory" / "constitution.md"
         )
         if not memory_constitution.exists() and not create_if_missing:
             return
         resolver = PresetResolver(self.project_root)
         if memory_constitution.exists() and not _constitution_is_generated(
-            self.project_root, memory_constitution, resolver
+            self.workspace_root, memory_constitution, resolver
         ):
             return
-        _materialize_constitution_template(self.project_root, memory_constitution)
+        _materialize_constitution_template(self.workspace_root, memory_constitution)
 
     def install_from_archive(
         self,
@@ -711,11 +713,11 @@ class PresetManager(_PresetCommandMethods, _PresetSkillMethods):
         )
         if metadata and isinstance(metadata.get("version"), str):
             memory_constitution = (
-                self.project_root / ".specify" / "memory" / "constitution.md"
+                self.workspace_root / ".specify" / "memory" / "constitution.md"
             )
             removed_constitution = removed_constitution or (
                 _constitution_provenance_matches_preset(
-                    self.project_root,
+                    self.workspace_root,
                     memory_constitution,
                     pack_id,
                     metadata["version"],

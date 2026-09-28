@@ -44,6 +44,16 @@ Agent-specific native events can be declared on the integration. Set
 `multi_install_safe = True` only for a static, non-overlapping agent root and
 command directory; shared dynamic paths are not safe by default.
 
+`integration_runtime` owns option parsing, saved script choices, and invocation
+style. CLI adapters add user-facing error handling. Migration uses these public
+functions instead of command-private helpers. The shared installer locates its
+own bundled assets when callers do not supply source paths.
+
+Hermes owns its shared skill directory through `global_skills_dir()`. Shared
+skills resolve workspace assets from the invoking repository. Migration adds
+project-independent instructions without replacing existing skill bodies.
+Its rollback includes these confined shared files, but not global OMP launchers.
+
 ## Output flavors
 
 Choose the smallest base class that matches the agent's native format. The

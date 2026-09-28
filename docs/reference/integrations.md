@@ -68,6 +68,43 @@ Use the form exposed by your agent. Copilot's default skills are installed under
 `--integration-options="--commands"`. In that layout, Copilot CLI can select an
 agent through `/agents` or address it directly in a prompt.
 
+## External workspaces and global OMP commands
+
+In external mode, the workspace owns integration manifests, shared scripts, templates, and event dispatchers.
+The repository keeps required native launch files and native event configuration.
+Generated launch files have repository ignore rules. Native event handlers still run from the repository.
+
+`specify project move PATH` retains the existing command scope.
+It adds workspace-resolution instructions to local commands and refreshes native event paths.
+It preserves edited command bodies, unknown fields, and comments.
+An edited event dispatcher or plugin that cannot change safely blocks the move instead of losing user edits.
+Global OMP launchers remain unchanged.
+
+OMP also supports a shared user command set:
+
+```bash
+specify integration install omp --global
+specify init my-project --integration omp --global-commands --storage external
+specify integration upgrade omp --global
+specify integration uninstall omp --global
+```
+
+Global operations work outside a project. Other integrations reject these global options.
+OMP's active profile selects the command directory.
+`OMP_PROFILE` takes precedence over `PI_PROFILE`.
+Named profiles use `~/.omp/profiles/<name>/agent/commands` and ignore `PI_CODING_AGENT_DIR`.
+The default profile uses `PI_CODING_AGENT_DIR/commands` when set, or `~/.omp/agent/commands`.
+
+Each global launcher resolves `specify project command <name> --json` from the invoking repository.
+It contains no project path or project-owned template.
+Project presets and extensions supply the current content, including shared command names with different content in different projects.
+
+The global manifest tracks each command directory separately.
+Install, upgrade, and uninstall preserve edited and unrelated files, even with `--force`.
+Project integration or extension removal leaves shared launchers intact.
+Use an explicit global uninstall to remove unchanged shared launchers.
+Use `specify project info --json` to locate each project's workspace for a separate backup.
+
 ## List Available Integrations
 
 ```bash

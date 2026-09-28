@@ -54,22 +54,169 @@ resolve_specify_init_dir() {
 # Get repository root, prioritizing .specify directory
 # This prevents using a parent repository when spec-kit is initialized in a subdirectory
 get_repo_root() {
-    # Explicit project override wins (see resolve_specify_init_dir).
-    if [[ -n "${SPECIFY_INIT_DIR:-}" ]]; then
-        resolve_specify_init_dir
-        return
-    fi
-
-    # First, look for .specify directory (spec-kit's own marker)
     local specify_root
-    if specify_root=$(find_specify_root); then
-        echo "$specify_root"
-        return
+    if [[ -n "${SPECIFY_INIT_DIR:-}" ]]; then
+        specify_root=$(resolve_specify_init_dir) || return 1
+    elif ! specify_root=$(find_specify_root); then
+        # Keep the installed-script fallback for existing local projects.
+        local script_dir
+        script_dir="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || return 1
+        specify_root="$(cd "$script_dir/../../.." && pwd)" || return 1
     fi
+    if [[ -e "$specify_root/.specify/workspace.json" && ! -e "$specify_root/.specify/project.json" ]]; then
+        echo "ERROR: Run from the code repository or set SPECIFY_INIT_DIR to its path." >&2
+        return 1
+    fi
+    printf '%s\n' "$specify_root"
+}
 
-    # Final fallback to script location
-    local script_dir="$(CDPATH="" cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    (cd "$script_dir/../../.." && pwd)
+# Parse external storage records without importing the installed CLI package.
+# jq and the existing Python launcher fallback both enforce the same schema.
+_storage_json() {
+    local file="$1" kind="$2" field="$3" value="${4:-}"
+    if [[ ! -f "$file" || -L "$file" ]]; then
+        echo "ERROR: Missing or unsafe storage record: $file. Relink the external workspace." >&2
+        return 1
+    fi
+    if command -v jq >/dev/null 2>&1; then
+        jq -ers --arg kind "$kind" --arg field "$field" --arg value "$value" '
+            def text: type == "string" and (test("[\u0000-\u001f]") | not);
+            def absolute: startswith("/") or test("^[A-Za-z]:[/\\\\]");
+            def uuid: text and test("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
+            if length != 1 then error("Expected one storage record") else .[0] end |
+            if type != "object" or .schema_version != 1 then error("Invalid storage schema") else . end |
+            if $kind == "record" then
+                if (.workspace | text and absolute) and
+                    (.active_feature == null or (.active_feature | text and (absolute | not)))
+                then . else error("Invalid workspace or active feature") end
+            else
+                if (.project_id | uuid) and ($kind != "locator" or .storage == "external")
+                then . else error("Invalid project identity") end
+            end |
+            if $field == "update" then .active_feature = $value
+            else .[$field] // "" end
+        ' "$file" && return 0
+    else
+        local python_spec
+        local -a python_cmd=()
+        if python_spec=$(_python3_command); then
+            read -r -a python_cmd <<< "$python_spec"
+            "${python_cmd[@]}" - "$file" "$kind" "$field" "$value" <<'PY' && return 0
+import json
+import re
+import sys
+
+path, kind, field, value = sys.argv[1:]
+def text(value):
+    return isinstance(value, str) and not any(ord(c) < 32 for c in value)
+def absolute(value):
+    return value.startswith("/") or bool(re.match(r"^[A-Za-z]:[/\\]", value))
+try:
+    with open(path, encoding="utf-8") as stream:
+        data = json.load(stream)
+    if not isinstance(data, dict) or type(data.get("schema_version")) is not int or data["schema_version"] != 1:
+        raise ValueError("Invalid storage schema")
+    if kind == "record":
+        workspace = data.get("workspace")
+        active = data.get("active_feature")
+        if not text(workspace) or not absolute(workspace):
+            raise ValueError("Invalid workspace path")
+        if active is not None and (not text(active) or absolute(active)):
+            raise ValueError("Invalid active feature")
+    else:
+        project_id = data.get("project_id")
+        if not text(project_id) or not re.fullmatch(r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", project_id):
+            raise ValueError("Invalid project identity")
+        if kind == "locator" and data.get("storage") != "external":
+            raise ValueError("Invalid storage mode")
+    if field == "update":
+        data["active_feature"] = value
+        print(json.dumps(data))
+    else:
+        print(data.get(field) or "")
+except (OSError, ValueError) as exc:
+    print(f"ERROR: {exc}", file=sys.stderr)
+    sys.exit(1)
+PY
+        else
+            echo "ERROR: External storage requires jq or Python 3 to read JSON safely." >&2
+        fi
+    fi
+    echo "ERROR: Invalid storage record: $file. Relink the external workspace." >&2
+    return 1
+}
+
+# Resolve existing directory symlinks and preserve nonexistent path suffixes.
+# Reject traversal and file symlinks before any external content write.
+workspace_path() {
+    local root="$1" path="$2" suffix="" resolved
+    if [[ "$path" =~ ^[A-Za-z]:[/\\] ]] && command -v cygpath >/dev/null 2>&1; then
+        path=$(cygpath -u "$path") || return 1
+    fi
+    [[ "$path" == /* ]] || path="$root/$path"
+    case "/$path/" in
+        */../*) echo "ERROR: Workspace path contains traversal: $path" >&2; return 1 ;;
+    esac
+    local ancestor="$path"
+    while [[ ! -d "$ancestor" ]]; do
+        if [[ -L "$ancestor" ]]; then
+            echo "ERROR: Unsafe workspace symlink: $ancestor" >&2
+            return 1
+        fi
+        suffix="/${ancestor##*/}$suffix"
+        ancestor="${ancestor%/*}"
+        [[ -n "$ancestor" ]] || ancestor="/"
+    done
+    resolved="$(CDPATH="" cd -- "$ancestor" && pwd -P)$suffix" || return 1
+    if [[ "$resolved" != "$root" && "$resolved" != "$root/"* ]]; then
+        echo "ERROR: Path leaves the selected workspace $root: $path" >&2
+        return 1
+    fi
+    printf '%s\n' "$resolved"
+}
+
+# Keep the code repository separate from its mutable Spec Kit workspace.
+load_workspace_context() {
+    local repo_root="$1" locator="$1/.specify/project.json"
+    WORKSPACE_ROOT="$repo_root"
+    PROJECT_RECORD=""
+    if [[ ! -e "$locator" && ! -L "$locator" ]]; then
+        return 0
+    fi
+    local project_id data_root selected identity
+    project_id=$(_storage_json "$locator" locator project_id) || return 1
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*) data_root="${XDG_DATA_HOME:-${LOCALAPPDATA:-$HOME/AppData/Local}}" ;;
+        *) data_root="${XDG_DATA_HOME:-$HOME/.local/share}" ;;
+    esac
+    PROJECT_RECORD="$data_root/specify/projects/$project_id.json"
+    selected=$(_storage_json "$PROJECT_RECORD" record workspace) || return 1
+    if [[ ! -d "$selected" || ! -r "$selected" || ! -w "$selected" || ! -x "$selected" ]]; then
+        echo "ERROR: External workspace is unavailable: $selected. Relink the workspace." >&2
+        return 1
+    fi
+    WORKSPACE_ROOT="$(CDPATH="" cd -- "$selected" && pwd -P)" || return 1
+    workspace_path "$WORKSPACE_ROOT" ".specify" >/dev/null || return 1
+    identity=$(_storage_json "$WORKSPACE_ROOT/.specify/workspace.json" identity project_id) || return 1
+    if [[ "$identity" != "$project_id" ]]; then
+        echo "ERROR: External workspace belongs to another project: $selected. Relink the workspace." >&2
+        return 1
+    fi
+}
+
+get_workspace_root() {
+    load_workspace_context "$1" || return 1
+    if [[ -n "$PROJECT_RECORD" ]]; then
+        printf '[specify] Workspace: %s\n' "$WORKSPACE_ROOT" >&2
+    fi
+    printf '%s\n' "$WORKSPACE_ROOT"
+}
+
+# Local projects keep their existing path behavior.
+check_workspace_path() {
+    if [[ -f "$1/.specify/workspace.json" ]]; then
+        workspace_path "$1" "$2" >/dev/null || return 1
+    fi
 }
 
 # Get current feature name from explicit state only.
@@ -128,13 +275,32 @@ read_feature_json_feature_directory() {
     return 0
 }
 
-# Persist a feature_directory value to .specify/feature.json.
+# Persist a feature selection to its local pointer or external machine record.
 # Writes only when the file is missing or the value differs from what's stored.
 # Accepts the raw (possibly relative) path — callers should pass the original
 # user-supplied value, not the normalized absolute path.
 _persist_feature_json() {
     local repo_root="$1"
     local feature_dir_value="$2"
+    if [[ -e "$repo_root/.specify/project.json" || -L "$repo_root/.specify/project.json" ]]; then
+        load_workspace_context "$repo_root" || return 1
+        feature_dir_value=$(workspace_path "$WORKSPACE_ROOT" "$feature_dir_value") || return 1
+        if [[ "$feature_dir_value" == "$WORKSPACE_ROOT" ]]; then
+            feature_dir_value="."
+        else
+            feature_dir_value="${feature_dir_value#"$WORKSPACE_ROOT/"}"
+        fi
+        local current_value temporary
+        current_value=$(_storage_json "$PROJECT_RECORD" record active_feature) || return 1
+        [[ "$current_value" != "$feature_dir_value" ]] || return 0
+        temporary=$(mktemp "$PROJECT_RECORD.XXXXXX") || return 1
+        if ! _storage_json "$PROJECT_RECORD" record update "$feature_dir_value" > "$temporary"; then
+            rm -f "$temporary"
+            return 1
+        fi
+        mv -f "$temporary" "$PROJECT_RECORD"
+        return
+    fi
     local fj="$repo_root/.specify/feature.json"
 
     # Strip repo_root prefix if the value is absolute and under repo_root
@@ -181,22 +347,37 @@ get_feature_paths() {
     # get_repo_root propagates as a hard error instead of being masked by `local`.
     local repo_root
     repo_root=$(get_repo_root) || return 1
+    load_workspace_context "$repo_root" || return 1
+    local workspace_root="$WORKSPACE_ROOT" project_record="$PROJECT_RECORD"
+    if [[ -n "$project_record" ]]; then
+        printf '[specify] Workspace: %s\n' "$workspace_root" >&2
+    fi
     local current_branch
     current_branch=$(get_current_branch)
 
     # Resolve feature directory.  Priority:
     #   1. SPECIFY_FEATURE_DIRECTORY env var (explicit override)
-    #   2. .specify/feature.json "feature_directory" key (persisted by specify command)
+    #   2. External machine record, or local .specify/feature.json
     #   3. Error — no feature context available
     local feature_dir
     if [[ -n "${SPECIFY_FEATURE_DIRECTORY:-}" ]]; then
         feature_dir="$SPECIFY_FEATURE_DIRECTORY"
-        # Normalize relative paths to absolute under repo root
-        [[ "$feature_dir" != /* ]] && feature_dir="$repo_root/$feature_dir"
-        # Persist to feature.json so future sessions without the env var still
-        # work — unless the caller opted out for read-only resolution (#3025).
-        if [[ "$no_persist" != true ]]; then
-            _persist_feature_json "$repo_root" "$SPECIFY_FEATURE_DIRECTORY"
+        if [[ -n "$project_record" ]]; then
+            feature_dir=$(workspace_path "$workspace_root" "$feature_dir") || return 1
+        else
+            [[ "$feature_dir" != /* ]] && feature_dir="$workspace_root/$feature_dir"
+        fi
+    elif [[ -n "$project_record" ]]; then
+        local saved_feature
+        saved_feature=$(_storage_json "$project_record" record active_feature) || return 1
+        if [[ -z "$saved_feature" ]]; then
+            echo "ERROR: No active feature in $workspace_root. Set SPECIFY_FEATURE_DIRECTORY or create a feature." >&2
+            return 1
+        fi
+        feature_dir=$(workspace_path "$workspace_root" "$saved_feature") || return 1
+        if [[ ! -d "$feature_dir" ]]; then
+            echo "ERROR: Saved feature does not exist: $feature_dir. Select an existing feature." >&2
+            return 1
         fi
     elif [[ -f "$repo_root/.specify/feature.json" ]]; then
         local _fd
@@ -214,6 +395,16 @@ get_feature_paths() {
         return 1
     fi
 
+    if [[ -n "$project_record" ]]; then
+        local artifact
+        for artifact in spec.md plan.md tasks.md research.md data-model.md quickstart.md contracts; do
+            workspace_path "$workspace_root" "$feature_dir/$artifact" >/dev/null || return 1
+        done
+    fi
+    if [[ -n "${SPECIFY_FEATURE_DIRECTORY:-}" && "$no_persist" != true ]]; then
+        _persist_feature_json "$repo_root" "$SPECIFY_FEATURE_DIRECTORY" || return 1
+    fi
+
     # When no branch context exists (no SPECIFY_FEATURE, feature resolved via
     # SPECIFY_FEATURE_DIRECTORY or feature.json), fall back to the feature
     # directory basename so CURRENT_BRANCH is a usable identifier rather than
@@ -226,6 +417,7 @@ get_feature_paths() {
     # Use printf '%q' to safely quote values, preventing shell injection
     # via crafted branch names or paths containing special characters
     printf 'REPO_ROOT=%q\n' "$repo_root"
+    printf 'WORKSPACE_ROOT=%q\n' "$workspace_root"
     printf 'CURRENT_BRANCH=%q\n' "$current_branch"
     printf 'FEATURE_DIR=%q\n' "$feature_dir"
     printf 'FEATURE_SPEC=%q\n' "$feature_dir/spec.md"
@@ -244,6 +436,7 @@ has_jq() {
 
 get_invoke_separator() {
     local repo_root="${1:-$(get_repo_root)}"
+    repo_root=$(get_workspace_root "$repo_root") || return 1
     if [[ "${_SPECIFY_INVOKE_SEPARATOR_CACHE_REPO_ROOT:-}" == "$repo_root" && -n "${_SPECIFY_INVOKE_SEPARATOR_CACHE_VALUE:-}" ]]; then
         printf '%s\n' "$_SPECIFY_INVOKE_SEPARATOR_CACHE_VALUE"
         return 0
@@ -508,18 +701,25 @@ for _, ext_id in sorted(ranked):
 resolve_template() {
     local template_name="$1"
     local repo_root="$2"
+    repo_root=$(get_workspace_root "$repo_root") || return 2
     local base="$repo_root/.specify/templates"
+    local asset
+    for asset in templates presets extensions; do
+        check_workspace_path "$repo_root" "$repo_root/.specify/$asset" || return 2
+    done
 
     case "$template_name" in ""|*[!a-z0-9-]*) return 1 ;; esac
 
     # Priority 1: Project overrides
     local override="$base/overrides/${template_name}.md"
+    check_workspace_path "$repo_root" "$override" || return 2
     [ -f "$override" ] && echo "$override" && return 0
 
     # Priority 2: Installed presets (sorted by priority from .registry)
     local presets_dir="$repo_root/.specify/presets"
     if [ -d "$presets_dir" ]; then
         local registry_file="$presets_dir/.registry"
+        check_workspace_path "$repo_root" "$registry_file" || return 2
         local python_spec=""
         local -a python_cmd=()
         if python_spec=$(_python3_command); then
@@ -554,8 +754,10 @@ except Exception:
                     # python3 succeeded and returned preset IDs — search in priority order
                     while IFS= read -r preset_id; do
                         local candidate="$presets_dir/$preset_id/templates/${template_name}.md"
+                        check_workspace_path "$repo_root" "$candidate" || return 2
                         [ -f "$candidate" ] && echo "$candidate" && return 0
                         candidate="$presets_dir/$preset_id/${template_name}.md"
+                        check_workspace_path "$repo_root" "$candidate" || return 2
                         [ -f "$candidate" ] && echo "$candidate" && return 0
                     done <<< "$sorted_presets"
                 fi
@@ -565,8 +767,10 @@ except Exception:
                 for preset in "$presets_dir"/*/; do
                     [ -d "$preset" ] || continue
                     local candidate="$preset/templates/${template_name}.md"
+                    check_workspace_path "$repo_root" "$candidate" || return 2
                     [ -f "$candidate" ] && echo "$candidate" && return 0
                     candidate="$preset/${template_name}.md"
+                    check_workspace_path "$repo_root" "$candidate" || return 2
                     [ -f "$candidate" ] && echo "$candidate" && return 0
                 done
             fi
@@ -575,8 +779,10 @@ except Exception:
             for preset in "$presets_dir"/*/; do
                 [ -d "$preset" ] || continue
                 local candidate="$preset/templates/${template_name}.md"
+                check_workspace_path "$repo_root" "$candidate" || return 2
                 [ -f "$candidate" ] && echo "$candidate" && return 0
                 candidate="$preset/${template_name}.md"
+                check_workspace_path "$repo_root" "$candidate" || return 2
                 [ -f "$candidate" ] && echo "$candidate" && return 0
             done
         fi
@@ -585,6 +791,7 @@ except Exception:
     # Priority 3: Extension-provided templates
     local ext_dir="$repo_root/.specify/extensions"
     if [ -d "$ext_dir" ]; then
+        check_workspace_path "$repo_root" "$ext_dir/.registry" || return 2
         local sorted_extensions=""
         if ! sorted_extensions=$(_sorted_extension_ids "$ext_dir"); then
             return 2
@@ -594,12 +801,14 @@ except Exception:
             local ext="$ext_dir/$extension_id"
             local candidate="$ext/templates/${template_name}.md"
             [ -f "$candidate" ] || candidate="$ext/${template_name}.md"
+            check_workspace_path "$repo_root" "$candidate" || return 2
             [ -f "$candidate" ] && echo "$candidate" && return 0
         done <<< "$sorted_extensions"
     fi
 
     # Priority 4: Core templates
     local core="$base/${template_name}.md"
+    check_workspace_path "$repo_root" "$core" || return 2
     [ -f "$core" ] && echo "$core" && return 0
 
     # Template not found in any location.
@@ -617,7 +826,12 @@ except Exception:
 resolve_template_content() {
     local template_name="$1"
     local repo_root="$2"
+    repo_root=$(get_workspace_root "$repo_root") || return 2
     local base="$repo_root/.specify/templates"
+    local asset
+    for asset in templates presets extensions; do
+        check_workspace_path "$repo_root" "$repo_root/.specify/$asset" || return 2
+    done
 
     case "$template_name" in ""|*[!a-z0-9-]*) return 1 ;; esac
 
@@ -628,6 +842,7 @@ resolve_template_content() {
     # Priority 1: Project overrides (always "replace")
     local override="$base/overrides/${template_name}.md"
     if [ -f "$override" ]; then
+        check_workspace_path "$repo_root" "$override" || return 2
         if ! cat "$override"; then
             echo "Error: failed to read template layer $override" >&2
             return 2
@@ -641,6 +856,7 @@ resolve_template_content() {
     local presets_dir="$repo_root/.specify/presets"
     if [ -d "$presets_dir" ]; then
         local registry_file="$presets_dir/.registry"
+        check_workspace_path "$repo_root" "$registry_file" || return 2
         local sorted_presets=""
         local registry_parsed=false
         local python_spec=""
@@ -687,6 +903,7 @@ except Exception:
                 local strategy="replace"
                 local manifest_file=""
                 local manifest="$presets_dir/$preset_id/preset.yml"
+                check_workspace_path "$repo_root" "$manifest" || return 2
                 local manifest_declared=false
                 if [ -f "$manifest" ]; then
                     if [ "${#python_cmd[@]}" -eq 0 ]; then
@@ -793,6 +1010,7 @@ except Exception as exc:
                     fi
                 fi
                 if [ -n "$candidate" ]; then
+                    check_workspace_path "$repo_root" "$candidate" || return 2
                     layer_paths+=("$candidate")
                     layer_strategies+=("$strategy")
                     if [ "$strategy" = "replace" ]; then
@@ -807,6 +1025,7 @@ except Exception as exc:
     # Priority 3: Extension-provided templates (always "replace")
     local ext_dir="$repo_root/.specify/extensions"
     if [ "$effective_base_found" = false ] && [ -d "$ext_dir" ]; then
+        check_workspace_path "$repo_root" "$ext_dir/.registry" || return 2
         local sorted_extensions=""
         if ! sorted_extensions=$(_sorted_extension_ids "$ext_dir"); then
             return 2
@@ -817,6 +1036,7 @@ except Exception as exc:
             local candidate="$ext/templates/${template_name}.md"
             [ -f "$candidate" ] || candidate="$ext/${template_name}.md"
             if [ -f "$candidate" ]; then
+                check_workspace_path "$repo_root" "$candidate" || return 2
                 layer_paths+=("$candidate")
                 layer_strategies+=("replace")
                 effective_base_found=true
@@ -828,6 +1048,7 @@ except Exception as exc:
     # Priority 4: Core templates (always "replace")
     local core="$base/${template_name}.md"
     if [ "$effective_base_found" = false ] && [ -f "$core" ]; then
+        check_workspace_path "$repo_root" "$core" || return 2
         layer_paths+=("$core")
         layer_strategies+=("replace")
     fi

@@ -28,12 +28,17 @@ If the user explicitly provided `GIT_BRANCH_NAME` (e.g., via environment variabl
 
 ## Branch Numbering Mode
 
-Determine the branch numbering strategy by checking configuration in this order:
+Let the script resolve saved numbering from the workspace configuration:
 
-1. Check `.specify/extensions/git/git-config.yml` for `branch_numbering` value
-2. Check `.specify/init-options.json` for `feature_numbering` value (inherit from core)
-3. Check `.specify/init-options.json` for `branch_numbering` value (deprecated, backward compatibility — will be removed in a future release)
-4. Default to `sequential` if none of the above exist
+1. Use a nonempty `branch_numbering` from `.specify/extensions/git/git-config.yml` as an explicit branch override.
+2. Otherwise, use `feature_numbering` from `.specify/init-options.json`.
+3. If the project has no saved mode, use `sequential`.
+
+Generated extension configuration leaves `branch_numbering` empty so it inherits the project mode.
+Do not read personal setup defaults during branch creation.
+Only pass a number or timestamp flag when the user explicitly requests that per-feature choice.
+An explicit timestamp beats an explicit number. `GIT_BRANCH_NAME` overrides both.
+Branch creation does not select or change the active feature directory.
 
 ## Branch Name Template
 
@@ -55,16 +60,17 @@ Generate a concise short name (2-4 words) for the branch:
 - Use action-noun format when possible (e.g., "add-user-auth", "fix-payment-bug")
 - Preserve technical terms and acronyms (OAuth2, API, JWT, etc.)
 
-Run the appropriate script based on your platform:
+Use the project's saved script type.
+Run its workspace script from the code repository:
 
 - **Bash**: `.specify/extensions/git/scripts/bash/create-new-feature-branch.sh --json --short-name "<short-name>" "<feature description>"`
-- **Bash (timestamp)**: `.specify/extensions/git/scripts/bash/create-new-feature-branch.sh --json --timestamp --short-name "<short-name>" "<feature description>"`
 - **PowerShell**: `.specify/extensions/git/scripts/powershell/create-new-feature-branch.ps1 -Json -ShortName "<short-name>" "<feature description>"`
-- **PowerShell (timestamp)**: `.specify/extensions/git/scripts/powershell/create-new-feature-branch.ps1 -Json -Timestamp -ShortName "<short-name>" "<feature description>"`
+- **Python**: `python3 .specify/extensions/git/scripts/python/create_new_feature_branch.py --json --short-name "<short-name>" "<feature description>"`
 
 **IMPORTANT**:
-- Do NOT pass `--number` — the script determines the correct next number automatically
-- Always include the JSON flag (`--json` for Bash, `-Json` for PowerShell) so the output can be parsed reliably
+- Unless the user requests an override, let the script choose the next number from workspace features and repository branches.
+- For an explicit override, pass `--number` or `--timestamp`. PowerShell uses `-Number` or `-Timestamp`.
+- Always include `--json` for Bash or Python, or `-Json` for PowerShell.
 - You must only ever run this script once per feature
 - The JSON output will contain `BRANCH_NAME` and `FEATURE_NUM`
 - Do not manually expand `branch_template`; the script reads the git extension config and applies it consistently

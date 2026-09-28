@@ -2,8 +2,7 @@
 # Git extension: create-new-feature-branch.ps1
 # Creates a git feature branch only. The feature directory and spec file
 # are created by the core create-new-feature.ps1 script.
-# Sources common.ps1 from the project's installed scripts, falling back to
-# git-common.ps1 for minimal git helpers.
+# Uses core workspace helpers, with minimal Git helpers for local-only installs.
 [CmdletBinding()]
 param(
     [switch]$Json,
@@ -180,10 +179,10 @@ function ConvertTo-CleanBranchName {
 
 # ---------------------------------------------------------------------------
 # Source common.ps1 from the project's installed scripts.
-# Search locations in priority order:
+# Prefer the source helper for source scripts. Otherwise, search these locations:
 #  1. .specify/scripts/powershell/common.ps1 under the project root
 #  2. scripts/powershell/common.ps1 under the project root (source checkout)
-#  3. git-common.ps1 next to this script (minimal fallback)
+#  3. git-common.ps1 next to this script (local-only fallback)
 # ---------------------------------------------------------------------------
 function Find-ProjectRoot {
     param([string]$StartDir)
@@ -195,7 +194,7 @@ function Find-ProjectRoot {
             }
         }
         $parent = Split-Path $current -Parent
-        if ($parent -eq $current) { return $null }
+        if (-not $parent -or $parent -eq $current) { return $null }
         $current = $parent
     }
 }
@@ -208,6 +207,9 @@ if ($projectRoot) {
         (Join-Path $projectRoot ".specify/scripts/powershell/common.ps1"),
         (Join-Path $projectRoot "scripts/powershell/common.ps1")
     )
+    if ($PSScriptRoot -eq (Join-Path $projectRoot 'extensions/git/scripts/powershell')) {
+        [array]::Reverse($candidates)
+    }
     foreach ($candidate in $candidates) {
         if (Test-Path $candidate) {
             . $candidate
@@ -223,45 +225,46 @@ if (-not $commonLoaded -and (Test-Path "$PSScriptRoot/git-common.ps1")) {
 }
 
 if (-not $commonLoaded) {
-    throw "Unable to locate common script file. Please ensure the Specify core scripts are installed."
+    throw "Cannot locate common.ps1. Install the Spec Kit core scripts."
 }
 
-# SPECIFY_INIT_DIR is resolved (and validated) by the core resolver. If only the
-# minimal git-common.ps1 was loaded, or an older core common.ps1 without the
-# resolver was loaded, refuse rather than silently falling back to the wrong root.
 if ($env:SPECIFY_INIT_DIR -and -not (Get-Command Resolve-SpecifyInitDir -CommandType Function -ErrorAction SilentlyContinue)) {
-    throw "SPECIFY_INIT_DIR requires updated Spec Kit core scripts (common.ps1 with Resolve-SpecifyInitDir), which were not found."
+    throw "SPECIFY_INIT_DIR requires updated Spec Kit core scripts with Resolve-SpecifyInitDir."
 }
-
-# Resolve repository root. When the core scripts are present, Get-RepoRoot
-# honors SPECIFY_INIT_DIR (the explicit project override for non-interactive /
-# CI use) and hard-fails on an invalid value with no silent fallback.
-if (Get-Command Get-RepoRoot -ErrorAction SilentlyContinue) {
+if (Get-Command Get-RepoRoot -CommandType Function -ErrorAction SilentlyContinue) {
     $repoRoot = Get-RepoRoot
-} elseif ($projectRoot) {
-    $repoRoot = $projectRoot
 } else {
-    throw "Could not determine repository root."
+    $repoRoot = Find-ProjectRoot -StartDir (Get-Location).Path
+    if (-not $repoRoot) { $repoRoot = $projectRoot }
+    if (-not $repoRoot) { throw "Cannot determine the repository root." }
 }
 
-# Check if git is available
-if (Get-Command Test-HasGit -ErrorAction SilentlyContinue) {
-    # Call without parameters for compatibility with core common.ps1 (no -RepoRoot param)
-    # and git-common.ps1 (has -RepoRoot param with default).
-    $hasGit = Test-HasGit
-} else {
-    try {
-        git -C $repoRoot rev-parse --is-inside-work-tree 2>$null | Out-Null
-        $hasGit = ($LASTEXITCODE -eq 0)
-    } catch {
-        $hasGit = $false
-    }
+$storage = $null
+if ((Get-Command Get-StorageContext -CommandType Function -ErrorAction SilentlyContinue) -and
+    (Get-Command Resolve-StoragePath -CommandType Function -ErrorAction SilentlyContinue)) {
+    $storage = Get-StorageContext -RepoRoot $repoRoot
+} elseif ((Get-Item -LiteralPath (Join-Path $repoRoot '.specify/project.json') -Force -ErrorAction SilentlyContinue) -or
+    (Get-Item -LiteralPath (Join-Path $repoRoot '.specify/workspace.json') -Force -ErrorAction SilentlyContinue)) {
+    throw "External workspaces require updated Spec Kit core scripts with workspace support."
+}
+
+# Keep Git commands in the code repository, not the workspace.
+try {
+    git -C $repoRoot rev-parse --is-inside-work-tree 2>$null | Out-Null
+    $hasGit = ($LASTEXITCODE -eq 0)
+} catch {
+    $hasGit = $false
 }
 
 Set-Location $repoRoot
 
-$specsDir = Join-Path $repoRoot 'specs'
-$configFile = Join-Path $repoRoot ".specify/extensions/git/git-config.yml"
+if ($storage) {
+    $specsDir = Resolve-StoragePath $storage 'specs'
+    $configFile = Resolve-StoragePath $storage '.specify/extensions/git/git-config.yml'
+} else {
+    $specsDir = Join-Path $repoRoot 'specs'
+    $configFile = Join-Path $repoRoot '.specify/extensions/git/git-config.yml'
+}
 
 function Read-GitConfigValue {
     param([string]$Key)
@@ -276,6 +279,32 @@ function Read-GitConfigValue {
         }
     }
     return ''
+}
+
+# Explicit choices bypass saved modes without changing project configuration.
+if (-not $env:GIT_BRANCH_NAME -and -not $Timestamp -and -not $PSBoundParameters.ContainsKey('Number')) {
+    $mode = Read-GitConfigValue -Key 'branch_numbering'
+    if (-not $mode) {
+        $mode = 'sequential'
+        $optionsPath = if ($storage) {
+            Resolve-StoragePath $storage '.specify/init-options.json'
+        } else {
+            Join-Path $repoRoot '.specify/init-options.json'
+        }
+        if (Test-Path -LiteralPath $optionsPath -PathType Leaf) {
+            $options = [System.IO.File]::ReadAllText($optionsPath, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+            if ($options -isnot [PSCustomObject]) {
+                throw "Project init-options.json must contain a JSON object."
+            }
+            if ($options.PSObject.Properties['feature_numbering']) {
+                $mode = $options.feature_numbering
+            }
+        }
+    }
+    if ($mode -isnot [string] -or $mode -cnotin @('sequential', 'timestamp')) {
+        throw "Invalid numbering mode '$mode'. Use sequential or timestamp."
+    }
+    $Timestamp = $mode -ceq 'timestamp'
 }
 
 function ConvertTo-BranchToken {
@@ -462,7 +491,7 @@ if ($env:GIT_BRANCH_NAME) {
     # `-ne 0`) so an explicit `-Number 0` is also detected, matching the bash twin's
     # `[ -n "$BRANCH_NUMBER" ]` check.
     if ($Timestamp -and $PSBoundParameters.ContainsKey('Number')) {
-        Write-Warning "[specify] Warning: -Number is ignored when -Timestamp is used"
+        [Console]::Error.WriteLine("[specify] Warning: -Number is ignored when -Timestamp is used")
         $Number = 0
     }
 

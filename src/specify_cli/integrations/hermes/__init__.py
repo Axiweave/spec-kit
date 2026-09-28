@@ -55,9 +55,18 @@ class HermesIntegration(SkillsIntegration):
     # -- Helpers -----------------------------------------------------------
 
     @staticmethod
-    def _hermes_home_skills_dir() -> Path:
+    def global_skills_dir() -> Path:
         """Return ``~/.hermes/skills/`` — the global skills directory."""
-        return Path.home() / ".hermes" / "skills"
+        home = Path.home().resolve()
+        root = home / ".hermes" / "skills"
+        for directory in (root.parent, root):
+            if directory.is_symlink():
+                raise ValueError(f"Hermes skill directory must not be a symlink: {directory}")
+        return root
+
+    def post_process_skill_content(self, content: str) -> str:
+        """Resolve shared skill assets from the invoking project's workspace."""
+        return self.add_workspace_note(super().post_process_skill_content(content))
 
     # -- Options -----------------------------------------------------------
 
@@ -110,7 +119,7 @@ class HermesIntegration(SkillsIntegration):
             else "$ARGUMENTS"
         )
 
-        global_skills_dir = self._hermes_home_skills_dir()
+        global_skills_dir = self.global_skills_dir()
         global_skills_dir.mkdir(parents=True, exist_ok=True)
 
         created: list[Path] = []
@@ -155,7 +164,6 @@ class HermesIntegration(SkillsIntegration):
                 script_type,
                 arg_placeholder,
                 invoke_separator=self.invoke_separator,
-                project_root=project_root,
             )
             # Strip the processed frontmatter — we rebuild it for skills.
             # Scan for the closing ``---`` on its own line rather than
@@ -253,7 +261,7 @@ class HermesIntegration(SkillsIntegration):
         # Remove all global Hermes skills for speckit — these are always
         # removed on uninstall regardless of the force flag, matching the
         # standard behaviour where all integration files are cleaned up.
-        global_skills_dir = self._hermes_home_skills_dir()
+        global_skills_dir = self.global_skills_dir()
         if global_skills_dir.is_dir():
             for skill_dir in sorted(global_skills_dir.iterdir()):
                 if skill_dir.is_dir() and skill_dir.name.startswith("speckit-"):

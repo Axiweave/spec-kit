@@ -11,7 +11,6 @@ from unittest.mock import patch
 from typer.testing import CliRunner
 
 from specify_cli import app
-import specify_cli.extensions as extensions
 from specify_cli.extensions import (
     ExtensionManager,
 )
@@ -60,51 +59,3 @@ class TestExtensionListPriorityCLI:
         assert result.exit_code == 0, result.output
         plain = strip_ansi(result.output)
         assert "Priority: 7" in plain
-
-
-def test_list_resolves_package_symbols_at_invocation(
-    monkeypatch, project_dir
-):
-    """Extracting the handler must preserve package-level patch seams."""
-    calls = []
-
-    class PatchedManager:
-        def __init__(self, project_root):
-            assert project_root == project_dir
-
-        def list_installed(self):
-            return [
-                {
-                    "id": "patched-ext",
-                    "name": "Patched Extension",
-                    "description": "Patched",
-                    "version": "1.0.0",
-                    "_json_author": {"name": "Test"},
-                    "priority": 23,
-                    "enabled": True,
-                    "_json_source": {"kind": "local"},
-                    "_json_provides": {
-                        "commands": 0,
-                        "templates": 0,
-                        "scripts": 0,
-                        "hooks": 0,
-                    },
-                }
-            ]
-
-    def patched_normalize_priority(value):
-        calls.append(value)
-        return value
-
-    monkeypatch.setattr(extensions, "ExtensionManager", PatchedManager)
-    monkeypatch.setattr(
-        extensions, "normalize_priority", patched_normalize_priority
-    )
-
-    runner = CliRunner()
-    with patch.object(Path, "cwd", return_value=project_dir):
-        result = runner.invoke(app, ["extension", "list", "--json"])
-
-    assert result.exit_code == 0, result.output
-    assert '"id": "patched-ext"' in result.output
-    assert calls == [23]

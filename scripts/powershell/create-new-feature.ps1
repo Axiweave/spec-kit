@@ -111,10 +111,32 @@ function Get-FittedBranchName {
 
 # Use common.ps1 functions which prioritize .specify
 $repoRoot = Get-RepoRoot
+$storage = Get-StorageContext -RepoRoot $repoRoot
+
+# Explicit per-feature choices take precedence over saved project choices.
+$hasNumber = $PSBoundParameters.ContainsKey('Number') -and $Number -ne ''
+if (-not $Timestamp -and -not $hasNumber) {
+    $optionsPath = Resolve-StoragePath $storage '.specify/init-options.json'
+    if (Test-Path -LiteralPath $optionsPath -PathType Leaf) {
+        $text = [System.IO.File]::ReadAllText($optionsPath, [System.Text.Encoding]::UTF8)
+        $options = $text | ConvertFrom-Json
+        if (-not $text.TrimStart().StartsWith('{') -or $options -isnot [PSCustomObject]) {
+            throw "Project choices must be a JSON object: $optionsPath"
+        }
+        $numbering = 'sequential'
+        if ($options.PSObject.Properties.Name -ccontains 'feature_numbering') {
+            $numbering = $options.feature_numbering
+        }
+        if ($numbering -isnot [string] -or $numbering -cnotin @('sequential', 'timestamp')) {
+            throw "Feature numbering must be sequential or timestamp: $optionsPath"
+        }
+        $Timestamp = $numbering -ceq 'timestamp'
+    }
+}
 
 Set-Location $repoRoot
 
-$specsDir = Join-Path $repoRoot 'specs'
+$specsDir = Resolve-StoragePath $storage 'specs'
 if (-not $DryRun) {
     New-Item -ItemType Directory -Path $specsDir -Force | Out-Null
 }
@@ -189,8 +211,6 @@ if (-not $branchSuffix) {
     [Console]::Error.WriteLine("[specify] Warning: Feature name is empty after removing unsupported characters. Use -ShortName with ASCII letters or digits (for example, user-auth).")
 }
 
-# Treat an explicit empty string as omitted, matching the bash and Python twins.
-$hasNumber = $PSBoundParameters.ContainsKey('Number') -and $Number -ne ''
 
 # Warn if -Number and -Timestamp are both specified.
 if ($Timestamp -and $hasNumber) {
@@ -262,8 +282,8 @@ if ($branchName -ne $originalBranchName) {
     [Console]::Error.WriteLine("[specify] Truncated to: $branchName ($($branchName.Length) bytes)")
 }
 
-$featureDir = Join-Path $specsDir $branchName
-$specFile = Join-Path $featureDir 'spec.md'
+$featureDir = Resolve-StoragePath $storage (Join-Path $specsDir $branchName)
+$specFile = Resolve-StoragePath $storage (Join-Path $featureDir 'spec.md')
 
 if (-not $DryRun) {
     if ((Test-Path -LiteralPath $featureDir -PathType Container) -and -not $AllowExistingBranch) {
@@ -296,8 +316,7 @@ if (-not $DryRun) {
         }
     }
 
-    # Persist to .specify/feature.json so downstream commands can find the
-    # feature, unless the orchestrator opted out via SPECIFY_FEATURE_NO_PERSIST (#4129).
+    # Save the active feature in the selected storage record unless persistence is disabled.
     if ($env:SPECIFY_FEATURE_NO_PERSIST -ne '1' -and $env:SPECIFY_FEATURE_NO_PERSIST -ne 'true') {
         Save-FeatureJson -RepoRoot $repoRoot -FeatureDirectory $featureDir
     }

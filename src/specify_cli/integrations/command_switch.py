@@ -131,7 +131,7 @@ def integration_switch(
     # Phase 1: Uninstall current integration (if any)
     if installed_key:
         current_integration = get_integration(installed_key)
-        manifest_path = project_root / ".specify" / "integrations" / f"{installed_key}.manifest.json"
+        manifest_path = IntegrationManifest(installed_key, project_root).manifest_path
 
         if current_integration and manifest_path.exists():
             console.print(f"Uninstalling current integration: [cyan]{installed_key}[/cyan]")

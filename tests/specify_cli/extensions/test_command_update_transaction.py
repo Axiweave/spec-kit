@@ -1945,7 +1945,7 @@ def test_extension_update_ignores_unreachable_global_hermes_target(
     commands_dir = registrar._resolve_agent_dir(
         "hermes", agent_config, project_dir
     )
-    output_name = registrar._compute_output_name(
+    output_name = registrar.compute_output_name(
         "hermes", command_name, agent_config
     )
     artifact = commands_dir / f"{output_name}{agent_config['extension']}"

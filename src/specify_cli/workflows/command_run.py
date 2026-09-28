@@ -27,18 +27,10 @@ def workflow_run(
         source_path.suffix.lower() in (".yml", ".yaml") and source_path.is_file()
     )
 
-    if is_file_source:
-        # When running a YAML file directly, use cwd as project root without
-        # requiring a .specify/ project directory — unless SPECIFY_INIT_DIR
-        # explicitly names a project, in which case the strict override applies.
-        override = cli._resolve_init_dir_override()
-        project_root = override if override is not None else cli.Path.cwd()
-        cli._reject_unsafe_workflow_storage(project_root)
-    else:
-        project_root = cli._require_specify_project()
-
+    project = cli._resolve_workflow_project(allow_standalone=is_file_source)
+    project_root = project.workspace_root
     load_custom_steps(project_root)
-    engine = WorkflowEngine(project_root)
+    engine = WorkflowEngine(project.repository_root)
     if not json_output:
         # Escape the literal bracket (\[) so Rich renders `[<step id>]` instead
         # of parsing it as a style tag named after the step id -- which it

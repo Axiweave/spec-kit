@@ -2,6 +2,30 @@
 
 Extensions add new capabilities to Spec Kit — domain-specific commands, external tool integrations, quality gates, and more. They introduce new commands and templates that go beyond the built-in Spec-Driven Development workflow.
 
+## External workspace ownership
+
+In external mode, `.specify/` paths in this reference belong to the workspace, not the code repository.
+The workspace owns extension packages, registries, configuration, hooks, caches, and preset layers.
+Run `specify project info --json` to find it.
+Shell hooks and native event handlers keep the repository as their working directory.
+
+With global OMP commands, extension installation adds shared launchers for new command names.
+Each invocation reads the current project's enabled extension and preset content.
+Removing an extension preserves its shared launcher for other projects.
+A project without that command receives an error instead of another project's content.
+
+The agent-context extension retains native context files in the repository.
+Its managed section points to the selected external plan without copying the plan.
+The extension preserves user content outside that section.
+
+A move preserves installed extension packages, registries, configuration, and edited project assets in the workspace.
+Existing local add-on commands receive workspace-resolution instructions without losing their command bodies.
+
+The Git extension inherits the project's `feature_numbering` when `branch_numbering` is empty.
+New extension configuration uses that empty value.
+A nonempty branch setting or explicit per-feature choice overrides the project mode without changing feature selection.
+See [feature and branch numbering](core.md#feature-and-branch-numbering) for the complete precedence order.
+
 ## Search Available Extensions
 
 ```bash

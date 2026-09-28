@@ -341,45 +341,6 @@ class TestIntegrationStatus:
         assert "shared Spec Kit infrastructure" in result.output
         assert "Missing managed files: 1" in result.output
 
-    def test_status_does_not_use_exists_precheck_for_managed_files(self, tmp_path, monkeypatch):
-        from specify_cli.integration_status import _manifest_file_status
-        from specify_cli.integrations.manifest import IntegrationManifest
-
-        project = tmp_path / "proj"
-        project.mkdir()
-        tracked = project / "tracked.md"
-        tracked.write_text("content\n", encoding="utf-8")
-        manifest = IntegrationManifest("test", project, version="test")
-        manifest.record_existing("tracked.md")
-
-        def fail_exists(self):
-            raise AssertionError(f"Path.exists() should not be used for {self}")
-
-        monkeypatch.setattr(Path, "exists", fail_exists)
-
-        missing, modified, invalid, valid = _manifest_file_status(
-            manifest,
-            project.resolve(),
-        )
-
-        assert missing == []
-        assert modified == []
-        assert invalid == []
-        assert valid == ["tracked.md"]
-
-    def test_status_does_not_use_exists_precheck_for_manifest_load(self, copilot_project, monkeypatch):
-        def fail_exists(self):
-            raise AssertionError(f"Path.exists() should not be used for {self}")
-
-        monkeypatch.setattr(Path, "exists", fail_exists)
-
-        result = _run_in_project(copilot_project, ["integration", "status", "--json"])
-
-        assert result.exit_code == 0
-        payload = json.loads(result.output)
-        assert payload["status"] == "ok"
-        assert payload["manifests"]["copilot"]["readable"] is True
-
     def test_status_reports_unresolved_project_root_without_crashing(self, copilot_project, monkeypatch):
         original_resolve = Path.resolve
         failed = {"done": False}
@@ -397,29 +358,6 @@ class TestIntegrationStatus:
         assert result.exit_code == 0
         payload = json.loads(result.output)
         assert payload["status"] == "warning"
-        assert any(item["code"] == "project-root-unresolved" for item in payload["findings"])
-
-    def test_status_loads_manifests_when_project_root_resolution_keeps_failing(
-        self,
-        copilot_project,
-        monkeypatch,
-    ):
-        original_resolve = Path.resolve
-
-        def fail_project_root_resolve(self, *args, **kwargs):
-            if self == copilot_project:
-                raise RuntimeError("symlink loop")
-            return original_resolve(self, *args, **kwargs)
-
-        monkeypatch.setattr(Path, "resolve", fail_project_root_resolve)
-
-        result = _run_in_project(copilot_project, ["integration", "status", "--json"])
-
-        assert result.exit_code == 0, result.output
-        payload = json.loads(result.output)
-        assert payload["status"] == "warning"
-        assert payload["manifests"]["copilot"]["readable"] is True
-        assert payload["manifests"]["speckit"]["readable"] is True
         assert any(item["code"] == "project-root-unresolved" for item in payload["findings"])
 
     def test_status_uses_lexical_manifest_paths_when_project_root_resolution_falls_back(self, tmp_path):

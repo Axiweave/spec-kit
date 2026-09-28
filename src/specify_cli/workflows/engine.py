@@ -24,10 +24,12 @@ from typing import Any
 
 import yaml
 
+from ..workspace import confined, workspace_root_for
 from ..integration_state import (
     default_integration_key,
     try_read_integration_json,
 )
+from ._command_resume_state import _resolve_run_owner_root
 from .base import RunStatus, StepContext, StepResult, StepStatus
 
 
@@ -752,6 +754,14 @@ class RunState:
             # Stamp updated_at inside the lock so the timestamp matches the
             # snapshot this thread serializes (concurrent savers don't race it).
             self.updated_at = datetime.now(timezone.utc).isoformat()
+            workflow_dir = self.workflow_dir
+            if workflow_dir is not None:
+                source = Path(workflow_dir)
+                workspace = _resolve_run_owner_root(
+                    self.installed_registry_root, self.project_root
+                ).resolve()
+                if source.is_absolute() and source.is_relative_to(workspace):
+                    workflow_dir = source.relative_to(workspace).as_posix()
             state_data = {
                 "run_id": self.run_id,
                 "workflow_id": self.workflow_id,
@@ -761,7 +771,7 @@ class RunState:
                 "current_step_index": self.current_step_index,
                 "current_step_id": self.current_step_id,
                 "step_results": self.step_results,
-                "workflow_dir": self.workflow_dir,
+                "workflow_dir": workflow_dir,
                 "created_at": self.created_at,
                 "updated_at": self.updated_at,
                 "error": self.error,
@@ -888,7 +898,20 @@ class RunState:
         state.current_step_index = current_step_index
         state.current_step_id = state_data.get("current_step_id")
         state.step_results = step_results
-        state.workflow_dir = state_data.get("workflow_dir")
+        workflow_dir = state_data.get("workflow_dir")
+        if workflow_dir is not None:
+            if not isinstance(workflow_dir, str) or not workflow_dir:
+                raise ValueError("Invalid run state: 'workflow_dir' must be a non-empty string or null")
+            source = Path(workflow_dir)
+            workspace = _resolve_run_owner_root(installed_registry_root, project_root)
+            if installed_registry_root and source.is_absolute():
+                owner = Path(installed_registry_root)
+                if workspace != owner and source.is_relative_to(owner):
+                    relocated = confined(workspace, source.relative_to(owner))
+                    if relocated.is_dir() and not source.exists():
+                        source = relocated
+            workflow_dir = str(source if source.is_absolute() else confined(workspace, source))
+        state.workflow_dir = workflow_dir
         state.created_at = state_data.get("created_at", "")
         state.updated_at = state_data.get("updated_at", "")
         state.error = state_data.get("error")
@@ -929,10 +952,11 @@ class RunState:
 
 
 class WorkflowEngine:
-    """Orchestrator that loads, validates, and executes workflow definitions."""
+    """Load and save workflows in the workspace, and execute in the repository."""
 
     def __init__(self, project_root: Path | None = None) -> None:
         self.project_root = project_root or Path(".")
+        self.workspace_root = workspace_root_for(self.project_root)
         self.on_step_start: Any = None  # Callable[[str, str], None] | None
         # Serializes on_step_start so a concurrent fan-out can't interleave the
         # callback's output (the CLI sets it to a console.print lambda). Uncontended
@@ -969,7 +993,7 @@ class WorkflowEngine:
             return WorkflowDefinition.from_yaml(path)
 
         # Try as an installed workflow ID, resolving any overlays.
-        resolver = WorkflowResolver(self.project_root)
+        resolver = WorkflowResolver(self.workspace_root)
         try:
             return resolver.resolve(str(source))
         except FileNotFoundError:
@@ -979,7 +1003,7 @@ class WorkflowEngine:
 
         # Legacy direct path check for workflows installed without registry entries.
         installed_path = (
-            self.project_root
+            self.workspace_root
             / ".specify"
             / "workflows"
             / str(source)
@@ -1039,7 +1063,7 @@ class WorkflowEngine:
         state = RunState(
             run_id=effective_run_id,
             workflow_id=definition.id,
-            project_root=self.project_root,
+            project_root=self.workspace_root,
             installed_workflow_id=installed_workflow_id,
             installed_registry_root=(
                 str(installed_registry_root)
@@ -1051,7 +1075,7 @@ class WorkflowEngine:
         # Persist a copy of the workflow definition so resume can
         # reload it even if the original source is no longer available
         # (e.g. a local YAML path that was moved or deleted).
-        run_dir = self.project_root / ".specify" / "workflows" / "runs" / state.run_id
+        run_dir = self.workspace_root / ".specify" / "workflows" / "runs" / state.run_id
         run_dir.mkdir(parents=True, exist_ok=True)
         workflow_copy = run_dir / "workflow.yml"
         import yaml
@@ -1114,7 +1138,7 @@ class WorkflowEngine:
         workflow inputs. Keys not supplied keep their persisted values; an
         empty/``None`` ``inputs`` leaves the run's inputs unchanged.
         """
-        state = RunState.load(run_id, self.project_root)
+        state = RunState.load(run_id, self.workspace_root)
         if state.status not in (RunStatus.PAUSED, RunStatus.FAILED):
             msg = f"Cannot resume run {run_id!r} with status {state.status.value!r}."
             raise ValueError(msg)
@@ -1122,7 +1146,7 @@ class WorkflowEngine:
         # Load the workflow definition — try the persisted copy in the
         # run directory first so resume works even if the original
         # source (e.g. a local YAML path) is no longer available.
-        run_dir = self.project_root / ".specify" / "workflows" / "runs" / run_id
+        run_dir = self.workspace_root / ".specify" / "workflows" / "runs" / run_id
         run_copy = run_dir / "workflow.yml"
         if run_copy.exists():
             definition = WorkflowDefinition.from_yaml(run_copy)
@@ -1737,7 +1761,7 @@ class WorkflowEngine:
         path. Returns ``None`` when the file is missing, malformed, or
         written by a newer CLI; callers fall back to the literal default.
         """
-        state, error = try_read_integration_json(self.project_root)
+        state, error = try_read_integration_json(self.workspace_root)
         if state is None or error is not None:
             return None
         return default_integration_key(state)
@@ -1818,7 +1842,7 @@ class WorkflowEngine:
 
     def list_runs(self) -> list[dict[str, Any]]:
         """List all workflow runs in the project."""
-        runs_dir = self.project_root / ".specify" / "workflows" / "runs"
+        runs_dir = self.workspace_root / ".specify" / "workflows" / "runs"
         if not runs_dir.exists():
             return []
 

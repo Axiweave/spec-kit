@@ -29,8 +29,8 @@ from typing import TYPE_CHECKING, Any
 import yaml
 
 from .._invocation_style import get_invocation_prefix, is_dollar_skills_agent
-from .._toml_string import escape_toml_basic as _escape_toml_basic
-from .._toml_string import has_illegal_toml_control as _has_illegal_toml_control
+from ..toml_string import escape_toml_basic as _escape_toml_basic
+from ..toml_string import has_illegal_toml_control as _has_illegal_toml_control
 from ..events import install_integration_events, remove_integration_events
 
 if TYPE_CHECKING:
@@ -592,23 +592,6 @@ class IntegrationBase(ABC):
     # -- File operations — granular primitives for setup() ----------------
 
     @staticmethod
-    def copy_command_to_directory(
-        src: Path,
-        dest_dir: Path,
-        filename: str,
-    ) -> Path:
-        """Copy a command template to *dest_dir* with the given *filename*.
-
-        Creates *dest_dir* if needed.  Returns the absolute path of the
-        written file.  The caller can post-process the file before
-        recording it in the manifest.
-        """
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        dst = dest_dir / filename
-        shutil.copy2(src, dst)
-        return dst
-
-    @staticmethod
     def record_file_in_manifest(
         file_path: Path,
         project_root: Path,
@@ -616,9 +599,12 @@ class IntegrationBase(ABC):
     ) -> None:
         """Hash *file_path* and record it in *manifest*.
 
-        *file_path* must be inside *project_root*.
+        Metadata files use workspace-relative keys. Native files use repository-relative keys.
         """
-        rel = file_path.resolve().relative_to(project_root.resolve())
+        path = file_path.resolve()
+        metadata = manifest.metadata_root.resolve()
+        root = metadata if path.is_relative_to(metadata / ".specify") else project_root.resolve()
+        rel = path.relative_to(root)
         manifest.record_existing(rel)
 
     @staticmethod
@@ -635,12 +621,11 @@ class IntegrationBase(ABC):
         ``\r\n`` sequences in *content* are normalised to ``\n`` before
         writing.  Returns *dest*.
         """
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        normalized = content.replace("\r\n", "\n")
-        dest.write_bytes(normalized.encode("utf-8"))
-        rel = dest.resolve().relative_to(project_root.resolve())
-        manifest.record_existing(rel)
-        return dest
+        dest = dest.absolute()
+        metadata = manifest.metadata_root
+        root = metadata if dest.is_relative_to(metadata / ".specify") else project_root.absolute()
+        relative = dest.relative_to(root)
+        return manifest.record_file(relative, content.replace("\r\n", "\n"))
 
     def integration_scripts_dir(self) -> Path | None:
         """Return path to this integration's bundled ``scripts/`` directory.
@@ -674,17 +659,15 @@ class IntegrationBase(ABC):
             return []
 
         created: list[Path] = []
-        scripts_dest = project_root / ".specify" / "integrations" / self.key / "scripts"
-        scripts_dest.mkdir(parents=True, exist_ok=True)
+        scripts_dest = Path(".specify") / "integrations" / self.key / "scripts"
 
         for src_script in sorted(scripts_src.iterdir()):
             if not src_script.is_file():
                 continue
-            dst_script = scripts_dest / src_script.name
-            shutil.copy2(src_script, dst_script)
+            dst_script = manifest.record_file(scripts_dest / src_script.name, src_script.read_bytes())
+            shutil.copystat(src_script, dst_script)
             if dst_script.suffix in (".sh", ".py"):
                 dst_script.chmod(dst_script.stat().st_mode | 0o111)
-            self.record_file_in_manifest(dst_script, project_root, manifest)
             created.append(dst_script)
 
         return created
@@ -833,6 +816,28 @@ class IntegrationBase(ABC):
             return False
 
     @staticmethod
+    def add_workspace_note(content: str) -> str:
+        """Add workspace instructions without changing the existing prompt."""
+        newline = "\r\n" if "\r\n" in content else "\n"
+        note = (
+            "\n## Workspace resolution\n\n"
+            "Before these instructions, run `specify project info --json` from the code repository.\n"
+            "Stop if it fails. Use its `workspace_root` for all Spec Kit assets and feature artifacts.\n"
+            "Resolve `.specify/` asset paths below against that workspace, not against the code repository.\n"
+            "Use absolute, shell-quoted paths when running the selected workspace scripts.\n"
+            "Keep the code repository as the working directory for Git and implementation commands.\n\n"
+        ).replace("\n", newline)
+        if note in content:
+            return content
+        lines = content.splitlines(keepends=True)
+        if lines and lines[0].rstrip("\r\n") == "---":
+            for index in range(1, len(lines)):
+                if lines[index].rstrip("\r\n") == "---":
+                    prefix = "".join(lines[:index + 1])
+                    return prefix + note + "".join(lines[index + 1:])
+        return note + content
+
+    @staticmethod
     def process_template(
         content: str,
         agent_name: str,
@@ -840,6 +845,7 @@ class IntegrationBase(ABC):
         arg_placeholder: str = "$ARGUMENTS",
         invoke_separator: str = ".",
         project_root: Path | None = None,
+        rewrite_paths: bool = True,
     ) -> str:
         """Process a raw command template into agent-ready content.
 
@@ -853,29 +859,12 @@ class IntegrationBase(ABC):
         6. Rewrite paths: ``scripts/`` → ``.specify/scripts/`` etc.
         7. Replace ``__SPECKIT_COMMAND_<NAME>__`` with invocation strings
         """
-        # 1. Extract script command from frontmatter
-        script_commands: dict[str, str] = {}
-        script_pattern = re.compile(r"^\s*([A-Za-z0-9_-]+):\s*(.+)$")
-        # Find the scripts: block
-        in_frontmatter = False
-        in_scripts = False
-        for line in content.splitlines():
-            if line == "---":
-                if in_frontmatter:
-                    break
-                in_frontmatter = True
-                continue
-            if not in_frontmatter:
-                continue
-            if line == "scripts:":
-                in_scripts = True
-                continue
-            if in_scripts and line and not line[0].isspace():
-                break
-            if in_scripts:
-                m = script_pattern.match(line)
-                if m:
-                    script_commands[m.group(1)] = m.group(2).strip()
+        from specify_cli.agents import CommandRegistrar
+
+        frontmatter, _ = CommandRegistrar.parse_frontmatter(content)
+        script_commands = frontmatter.get("scripts", {}) or {}
+        if not isinstance(script_commands, dict):
+            script_commands = {}
 
         selected_script_type = (
             IntegrationBase.select_script_variant(script_type, script_commands)
@@ -934,9 +923,8 @@ class IntegrationBase(ABC):
         # 6. Rewrite paths — delegate to the shared implementation in
         #    CommandRegistrar so extension-local paths are preserved and
         #    boundary rules stay consistent across the codebase.
-        from specify_cli.agents import CommandRegistrar
-
-        content = CommandRegistrar.rewrite_project_relative_paths(content)
+        if rewrite_paths:
+            content = CommandRegistrar.rewrite_project_relative_paths(content)
 
         # 8. Replace __SPECKIT_COMMAND_<NAME>__ with invocation strings
         invocation_prefix = get_invocation_prefix(
@@ -946,6 +934,11 @@ class IntegrationBase(ABC):
             content, invoke_separator, invocation_prefix
         )
 
+        if project_root is not None:
+            from ..workspace import workspace_root_for
+
+            if workspace_root_for(project_root) != project_root:
+                content = IntegrationBase.add_workspace_note(content)
         return content
 
     def setup(
@@ -987,8 +980,9 @@ class IntegrationBase(ABC):
 
         for src_file in templates:
             dst_name = self.command_filename(src_file.stem)
-            dst_file = self.copy_command_to_directory(src_file, dest, dst_name)
-            self.record_file_in_manifest(dst_file, project_root, manifest)
+            dst_file = manifest.record_file(
+                (dest / dst_name).relative_to(project_root_resolved), src_file.read_bytes()
+            )
             created.append(dst_file)
 
 
@@ -1261,7 +1255,7 @@ class TomlIntegration(IntegrationBase):
 
     # Control-char detection and basic-string escaping are shared with the
     # extension/preset renderer in ``specify_cli.agents`` via
-    # ``specify_cli._toml_string`` so the two never drift apart.
+    # ``specify_cli.toml_string`` so the two never drift apart.
     _has_illegal_toml_control = staticmethod(_has_illegal_toml_control)
     _escape_toml_basic = staticmethod(_escape_toml_basic)
 

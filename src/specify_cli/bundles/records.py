@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from ..workspace import workspace_root_for
 from . import BundlerError
 from .yamlio import dump_json, ensure_within, load_json
 from .manifest import COMPONENT_KINDS, ComponentRef, _text
@@ -94,7 +95,10 @@ class InstalledBundleRecord:
 
 
 def records_path(project_root: Path) -> Path:
-    return Path(project_root) / ".specify" / RECORDS_FILENAME
+    try:
+        return workspace_root_for(Path(project_root)) / ".specify" / RECORDS_FILENAME
+    except (ValueError, OSError) as exc:
+        raise BundlerError(str(exc)) from exc
 
 
 def _check_schema_version(value: Any, *, path: Path, required: bool) -> None:
@@ -122,10 +126,9 @@ def _check_schema_version(value: Any, *, path: Path, required: bool) -> None:
 
 
 def load_records(project_root: Path) -> list[InstalledBundleRecord]:
-    # Defense in depth (mirrors the write path's within= confinement): refuse to
-    # read through a symlinked or traversal-escaping ``.specify`` that resolves
-    # outside project_root.
-    path = ensure_within(project_root, records_path(project_root))
+    path = records_path(project_root)
+    # The unresolved path retains the workspace root for confinement.
+    path = ensure_within(path.parent.parent, path)
     if not path.exists():
         return []
     data = load_json(path)
@@ -151,7 +154,8 @@ def save_records(project_root: Path, records: list[InstalledBundleRecord]) -> No
         "updated_at": _utc_now(),
         "bundles": [r.to_dict() for r in records],
     }
-    dump_json(records_path(project_root), payload, within=project_root)
+    path = records_path(project_root)
+    dump_json(path, payload, within=path.parent.parent)
 
 
 def find_record(
