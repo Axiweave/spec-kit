@@ -39,10 +39,10 @@ core; bug fixing and assessment are bundled extensions you install when needed.
 
 You need **Python 3.11+**, **[uv](https://github.github.io/spec-kit/install/uv.html)**,
 and a supported AI coding agent on Linux, macOS, or Windows.
-For **CLI setup only**, run this in your terminal to install Spec Kit and create a project:
+For **CLI setup only**, run this in your terminal to install our fork and create a project:
 
 ```bash
-uv tool install specify-cli
+uv tool install specify-cli --from git+https://github.com/Axiweave/spec-kit.git
 specify init my-project --integration copilot
 cd my-project
 ```

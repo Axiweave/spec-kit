@@ -8,6 +8,14 @@
 
 The toolkit supports multiple AI coding assistants, allowing teams to use their preferred tools while maintaining consistent project structure and development practices.
 
+## Project Setup and README Maintenance
+
+For setup interviews and `specify init`, use [the Specify Init skill](skills/specify-init/SKILL.md).
+Maintain reusable skills in `skills/`. User skill directories can link to these sources.
+
+For README installation guidance, use this fork: `https://github.com/Axiweave/spec-kit.git`.
+Keep installation commands and related source descriptions consistent across `README.md` and every `README.*.md` translation.
+
 ## Adding or Updating CLI Commands
 
 Before adding, updating, or reorganizing Specify CLI commands, read

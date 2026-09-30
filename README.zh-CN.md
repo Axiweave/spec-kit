@@ -40,10 +40,10 @@ SDD 内置于核心；缺陷修复和想法评估由随工具提供的扩展实�
 
 你需要 **Python 3.11+**、**[uv](https://github.github.io/spec-kit/install/uv.html)**
 以及受支持的 AI 编码助手，可在 Linux、macOS 或 Windows 上使用。
-**仅 CLI 配置步骤在终端中执行**：从 PyPI 安装 Spec Kit 并创建项目：
+**仅 CLI 配置步骤在终端中执行**：从我们的 GitHub 分支仓库安装 Spec Kit 并创建项目：
 
 ```bash
-uv tool install specify-cli
+uv tool install specify-cli --from git+https://github.com/Axiweave/spec-kit.git
 specify init my-project --integration copilot
 cd my-project
 ```

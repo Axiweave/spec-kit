@@ -35,10 +35,10 @@ Spec Kitは、AIコーディングエージェントに構造化されたプロ�
 ## はじめる
 
 Linux、macOS、またはWindows上で、**Python 3.11以降**、**[uv](https://github.github.io/spec-kit/install/uv.html)**、および対応するAIコーディングエージェントが必要です。
-**CLIのみのセットアップ**を行う場合は、ターミナルで以下のコマンドを実行してSpec Kitをインストールし、プロジェクトを作成してください:
+**CLIのみのセットアップ**を行う場合は、ターミナルで以下のコマンドを実行してこのフォークをインストールし、プロジェクトを作成してください:
 
 ```bash
-uv tool install specify-cli
+uv tool install specify-cli --from git+https://github.com/Axiweave/spec-kit.git
 specify init my-project --integration copilot
 cd my-project
 ```
