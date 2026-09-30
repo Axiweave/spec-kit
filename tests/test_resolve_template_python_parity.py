@@ -43,7 +43,9 @@ def test_all_variants_emit_composed_template_content(tmp_path: Path) -> None:
     if HAS_POWERSHELL:
         results.append(run(ps_cmd(repo, SCRIPT, TEMPLATE, "-Json"), repo))
 
-    assert all(result.returncode == 0 for result in results)
+    assert all(result.returncode == 0 for result in results), [
+        (result.args, result.stdout, result.stderr) for result in results
+    ]
     assert all(result.stderr == "" for result in results)
     assert all(
         json_stdout(result)
