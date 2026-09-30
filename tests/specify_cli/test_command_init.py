@@ -16,10 +16,12 @@ escapes user-controlled display values; init.py was the outlier.
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import os
 import re
+import shutil
 import socket
 import subprocess
 from pathlib import Path
@@ -38,7 +40,7 @@ _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 @pytest.fixture(autouse=True)
 def isolated_init_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """Keep setup defaults and machine records outside the real user home."""
+    """Keep setup defaults, machine records, and Git identity outside real user files."""
     home = tmp_path / "home"
     home.mkdir()
     for variable, directory in {
@@ -58,6 +60,14 @@ def isolated_init_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "PI_CODING_AGENT_DIR",
     ):
         monkeypatch.delenv(variable, raising=False)
+    for variable in tuple(os.environ):
+        if variable.startswith("GIT_"):
+            monkeypatch.delenv(variable, raising=False)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    for role in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{role}_NAME", "Workspace Test")
+        monkeypatch.setenv(f"GIT_{role}_EMAIL", "workspace@example.invalid")
     monkeypatch.setenv("COLUMNS", "240")
     return home
 
@@ -342,7 +352,12 @@ def test_init_explicit_local_keeps_assets_in_repository(
 
 
 @pytest.mark.parametrize("occupied", ["file", "unrelated-directory", "foreign-workspace"])
-def test_external_init_preserves_occupied_workspace(tmp_path: Path, occupied: str):
+@pytest.mark.parametrize(
+    "no_workspace_git", [(), ("--no-workspace-git",)], ids=["default", "opt-out"]
+)
+def test_external_init_preserves_occupied_workspace(
+    tmp_path: Path, occupied: str, no_workspace_git: tuple,
+):
     workspace = tmp_path / "claimed-workspace"
     if occupied == "file":
         workspace.write_bytes(b"Unrelated file\n")
@@ -367,7 +382,7 @@ def test_external_init_preserves_occupied_workspace(tmp_path: Path, occupied: st
     repository.mkdir()
     (repository / "source.txt").write_bytes(b"Existing project source\n")
 
-    result = _init(repository, ".", "--force", "--workspace", str(workspace))
+    result = _init(repository, ".", "--force", "--workspace", str(workspace), *no_workspace_git)
 
     assert result.exit_code != 0
     assert workspace.name in _strip(result.output)
@@ -923,3 +938,475 @@ def test_git_python_command_uses_workspace_in_native_and_global_rendering(tmp_pa
     assert arguments[:2] == ["python3", str(script)]
     assert arguments[2:] == ["--json", "--short-name", "<short-name>", "<feature description>"]
     assert script.is_file()
+
+
+# --- External Workspace Git History (specs/002-workspace-git-history) ---
+
+
+@pytest.mark.parametrize("existing", [False, True], ids=["absent", "empty"])
+def test_default_external_init_creates_one_commit_with_durable_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, existing: bool,
+):
+    """A default external init gets its own history with exactly the durable content."""
+    def refuse_network(*args, **kwargs):
+        raise OSError("The network is unavailable.")
+
+    monkeypatch.setattr(socket.socket, "connect", refuse_network)
+    monkeypatch.setattr(socket, "create_connection", refuse_network)
+
+    workspace = tmp_path / "workspace"
+    if existing:
+        workspace.mkdir()
+
+    result = _init(
+        tmp_path, "project", "--workspace", str(workspace), "--script", "py",
+        "--extension", "git", integration="omp",
+    )
+    assert result.exit_code == 0, _strip(result.output)
+
+    project = resolve_project(tmp_path / "project")
+    commit_id = subprocess.run(
+        ["git", "-C", str(workspace), "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert commit_id and commit_id in _strip(result.output)
+    assert subprocess.run(
+        ["git", "-C", str(workspace), "rev-list", "--count", "HEAD"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip() == "1"
+    assert subprocess.run(
+        ["git", "-C", str(workspace), "status", "--porcelain"],
+        capture_output=True, text=True, check=True,
+    ).stdout == ""
+
+    tracked = set(subprocess.run(
+        ["git", "-C", str(workspace), "ls-tree", "-r", "--name-only", "HEAD"],
+        capture_output=True, text=True, check=True,
+    ).stdout.splitlines())
+    for required in (
+        ".gitignore",
+        ".specify/init-options.json",
+        ".specify/workspace.json",
+        ".specify/integration.json",
+        ".specify/memory/constitution.md",
+        ".specify/extensions/.registry",
+    ):
+        assert required in tracked, tracked
+    assert project.workspace_root == workspace.resolve()
+
+
+def test_default_external_init_does_not_touch_code_repository_history(tmp_path: Path):
+    """Workspace history is independent: the code repository's own Git state is untouched."""
+    repository = tmp_path / "code"
+    repository.mkdir()
+    subprocess.run(["git", "init", str(repository)], check=True, capture_output=True)
+    (repository / "source.py").write_text("print('hi')\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repository), "add", "source.py"], check=True, capture_output=True)
+    staged_before = subprocess.run(
+        ["git", "-C", str(repository), "diff", "--cached"],
+        capture_output=True, text=True, check=True,
+    ).stdout
+
+    result = _init(repository, ".", "--force", "--storage", "external", "--script", "py")
+    assert result.exit_code == 0, _strip(result.output)
+
+    assert (repository / ".git").is_dir()
+    assert subprocess.run(
+        ["git", "-C", str(repository), "rev-list", "--count", "--all"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip() == "0"
+    assert subprocess.run(
+        ["git", "-C", str(repository), "diff", "--cached"],
+        capture_output=True, text=True, check=True,
+    ).stdout == staged_before
+
+
+def test_same_name_external_projects_get_independent_workspace_history(tmp_path: Path):
+    left = tmp_path / "left"
+    right = tmp_path / "right"
+    left.mkdir()
+    right.mkdir()
+    first = _init(left, "same-name", "--storage", "external")
+    assert first.exit_code == 0, _strip(first.output)
+    second = _init(right, "same-name", "--storage", "external")
+    assert second.exit_code == 0, _strip(second.output)
+
+    first_project = resolve_project(left / "same-name")
+    second_project = resolve_project(right / "same-name")
+    first_commit = subprocess.run(
+        ["git", "-C", str(first_project.workspace_root), "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    second_commit = subprocess.run(
+        ["git", "-C", str(second_project.workspace_root), "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    assert first_commit != second_commit
+    assert first_project.workspace_root != second_project.workspace_root
+
+
+def test_bundled_workflow_install_records_provenance_and_stays_out_of_initial_commit(tmp_path: Path):
+    """The freshly-installed speckit workflow is a reproducible bundled asset, not durable history."""
+    result = _init(tmp_path, "project", "--storage", "external", "--script", "py")
+    assert result.exit_code == 0, _strip(result.output)
+    project = resolve_project(tmp_path / "project")
+    workflow_yaml = project.workspace_root / ".specify/workflows/speckit/workflow.yml"
+    assert workflow_yaml.is_file()
+
+    registry = json.loads(
+        (project.workspace_root / ".specify/workflows/workflow-registry.json").read_text(encoding="utf-8")
+    )
+    relative = workflow_yaml.relative_to(project.workspace_root).as_posix()
+    expected_hash = hashlib.sha256(workflow_yaml.read_bytes()).hexdigest()
+    assert registry["workflows"]["speckit"]["generated_files"][relative] == expected_hash
+
+    tracked = set(subprocess.run(
+        ["git", "-C", str(project.workspace_root), "ls-tree", "-r", "--name-only", "HEAD"],
+        capture_output=True, text=True, check=True,
+    ).stdout.splitlines())
+    assert relative not in tracked
+    assert ".specify/workflows/workflow-registry.json" in tracked
+    ignored = subprocess.run(
+        ["git", "-C", str(project.workspace_root), "check-ignore", relative],
+        capture_output=True, text=True,
+    )
+    assert ignored.returncode == 0, ignored.stdout
+    assert subprocess.run(
+        ["git", "-C", str(project.workspace_root), "status", "--porcelain"],
+        capture_output=True, text=True, check=True,
+    ).stdout == ""
+
+
+def test_failed_optional_extension_does_not_block_workspace_history(tmp_path: Path):
+    """An add-on failure stays a warning: workspace history is still created."""
+    result = _init(tmp_path, "project", "--storage", "external", "--extension", "does-not-exist")
+    assert result.exit_code == 0, _strip(result.output)
+    project = resolve_project(tmp_path / "project")
+    assert (project.workspace_root / ".git").is_dir()
+    assert subprocess.run(
+        ["git", "-C", str(project.workspace_root), "rev-list", "--count", "HEAD"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip() == "1"
+
+
+@pytest.mark.parametrize("initial_state", ["git-enabled", "unmanaged"])
+def test_reinit_preserves_existing_workspace_git_state(tmp_path: Path, initial_state: str):
+    """Reinitializing an existing external project adds no history either way.
+
+    The Git-enabled precondition is established directly through
+    ``initialize_workspace_git`` (already covered on its own in
+    test_workspace_git.py) only when the preceding ``_init`` call did not
+    already create it, so this check holds both before and after
+    command_init.py grows its own Git integration -- it isolates the reinit
+    boundary from that unrelated, separately-tested concern.
+    """
+    result = _init(tmp_path, "project", "--storage", "external", "--script", "py")
+    assert result.exit_code == 0, _strip(result.output)
+    project = resolve_project(tmp_path / "project")
+    git_dir = project.workspace_root / ".git"
+    initial_commit = None
+    if initial_state == "git-enabled":
+        if not git_dir.is_dir():
+            from specify_cli.workspace_git import initialize_workspace_git
+
+            initialize_workspace_git(project.workspace_root)
+        assert git_dir.is_dir()
+        initial_commit = subprocess.run(
+            ["git", "-C", str(project.workspace_root), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+    elif git_dir.is_dir():
+        shutil.rmtree(git_dir)
+
+    refreshed = _init(project.repository_root, ".", "--force", "--feature-numbering", "timestamp")
+    assert refreshed.exit_code == 0, _strip(refreshed.output)
+
+    if initial_state == "git-enabled":
+        assert git_dir.is_dir()
+        assert subprocess.run(
+            ["git", "-C", str(project.workspace_root), "rev-parse", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip() == initial_commit
+        assert subprocess.run(
+            ["git", "-C", str(project.workspace_root), "rev-list", "--count", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip() == "1"
+    else:
+        assert not git_dir.exists()
+
+
+def test_reinit_local_storage_never_creates_git(tmp_path: Path):
+    result = _init(tmp_path, "project", "--storage", "local")
+    assert result.exit_code == 0, _strip(result.output)
+    repository = tmp_path / "project"
+    refreshed = _init(repository, ".", "--force")
+    assert refreshed.exit_code == 0, _strip(refreshed.output)
+    assert not (repository / ".git").exists()
+
+
+@pytest.mark.parametrize("existing_workspace", [False, True])
+def test_concurrent_external_init_creates_exactly_one_workspace_history(
+    tmp_path: Path, isolated_init_home: Path, existing_workspace: bool,
+):
+    """A full public CLI setup race leaves exactly one committed, fully-finalized owner."""
+    import sys
+    from textwrap import dedent
+
+    workspace = tmp_path / "workspace"
+    if existing_workspace:
+        workspace.mkdir()
+    barrier_dir = tmp_path / "barrier"
+    barrier_dir.mkdir()
+    repos = {name: tmp_path / name for name in ("first", "second")}
+    for repo in repos.values():
+        repo.mkdir()
+        (repo / "source.txt").write_bytes(b"Existing source\n")
+
+    # Real, separate OS processes -- not CliRunner threads -- so the shared
+    # exclusive claim in claim_storage() is raced for real. The wrapper
+    # patches claim_storage with a file-based rendezvous before delegating to
+    # the original, giving a deterministic race window instead of hoping two
+    # process launches happen to overlap.
+    runner = tmp_path / "race_runner.py"
+    runner.write_text(
+        dedent("""\
+            import sys, time
+            from contextlib import contextmanager
+            from pathlib import Path
+            import socket
+
+            def _refuse_outbound(*args, **kwargs):
+                raise OSError("Outbound access is blocked in the setup race.")
+
+            socket.socket.connect = _refuse_outbound
+            socket.create_connection = _refuse_outbound
+
+            barrier_dir, my_id = Path(sys.argv[1]), sys.argv[2]
+            other_id = "second" if my_id == "first" else "first"
+            sys.argv[1:] = sys.argv[3:]
+
+            import specify_cli._command_init_storage as _storage
+
+            _original_claim = _storage.claim_storage
+
+            @contextmanager
+            def _barrier_claim(project):
+                (barrier_dir / f"{my_id}.ready").touch()
+                deadline = time.monotonic() + 10
+                while not (barrier_dir / f"{other_id}.ready").exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                with _original_claim(project) as value:
+                    yield value
+
+            _storage.claim_storage = _barrier_claim
+
+            from specify_cli import main
+
+            main()
+            """),
+        encoding="utf-8",
+    )
+
+    args_tail = [
+        "init", ".", "--force",
+        "--workspace", str(workspace),
+        "--integration", "generic",
+        "--integration-options", "--commands-dir .agent/commands",
+        "--ignore-agent-tools", "--non-interactive", "--script", "py",
+    ]
+    env = dict(os.environ)
+    processes = {
+        name: subprocess.Popen(
+            [sys.executable, str(runner), str(barrier_dir), name, *args_tail],
+            cwd=repo, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        )
+        for name, repo in repos.items()
+    }
+    results = {}
+    for name, process in processes.items():
+        stdout, _ = process.communicate(timeout=60)
+        results[name] = (process.returncode, stdout)
+
+    codes = {name: code for name, (code, _) in results.items()}
+    assert sorted(codes.values()) == [0, 1], results
+    winner_name = next(name for name, code in codes.items() if code == 0)
+    loser_name = "second" if winner_name == "first" else "first"
+    winner_repo, loser_repo = repos[winner_name], repos[loser_name]
+    assert "Traceback" not in results[loser_name][1], results
+
+    assert (winner_repo / ".specify/project.json").is_file()
+    assert not (loser_repo / ".specify/project.json").exists()
+    assert len(list(isolated_init_home.rglob("projects/*.json"))) == 1
+    assert (loser_repo / "source.txt").read_bytes() == b"Existing source\n"
+
+    assert subprocess.run(
+        ["git", "-C", str(workspace), "rev-list", "--count", "HEAD"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip() == "1"
+    assert subprocess.run(
+        ["git", "-C", str(workspace), "status", "--porcelain"],
+        capture_output=True, text=True, check=True,
+    ).stdout == ""
+
+    project = resolve_project(winner_repo)
+    assert project.workspace_root == workspace.resolve()
+    tracked = set(subprocess.run(
+        ["git", "-C", str(workspace), "ls-tree", "-r", "--name-only", "HEAD"],
+        capture_output=True, text=True, check=True,
+    ).stdout.splitlines())
+    for required in (
+        ".specify/init-options.json", ".specify/workspace.json", ".specify/memory/constitution.md",
+    ):
+        assert required in tracked, (required, tracked, results)
+    for repo in repos.values():
+        assert (repo / "source.txt").read_bytes() == b"Existing source\n"
+
+
+@pytest.mark.parametrize("break_git", ["missing-binary", "missing-identity"])
+def test_no_workspace_git_skips_all_checks_even_without_git_or_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, break_git: str,
+):
+    if break_git == "missing-binary":
+        monkeypatch.setenv("PATH", str(tmp_path / "missing-bin"))
+    else:
+        monkeypatch.setenv("GIT_AUTHOR_NAME", "")
+    result = _init(tmp_path, "project", "--storage", "external", "--no-workspace-git")
+    assert result.exit_code == 0, _strip(result.output)
+    project = resolve_project(tmp_path / "project")
+    assert not (project.workspace_root / ".git").exists()
+
+
+def test_no_workspace_git_has_no_effect_on_local_storage(tmp_path: Path):
+    result = _init(tmp_path, "project", "--storage", "local", "--no-workspace-git")
+    assert result.exit_code == 0, _strip(result.output)
+    repository = tmp_path / "project"
+    project = resolve_project(repository)
+    assert project.storage == "local"
+    assert not (repository / ".git").exists()
+
+
+@pytest.mark.parametrize("first_choice,second_choice", [
+    ((), ("--no-workspace-git",)),
+    (("--no-workspace-git",), ()),
+], ids=["default-then-opt-out", "opt-out-then-default"])
+def test_reinit_changed_workspace_git_choice_does_not_retroactively_change_history(
+    tmp_path: Path, first_choice: tuple, second_choice: tuple,
+):
+    first = _init(tmp_path, "project", "--storage", "external", *first_choice)
+    assert first.exit_code == 0, _strip(first.output)
+    project = resolve_project(tmp_path / "project")
+    git_dir = project.workspace_root / ".git"
+    had_history = git_dir.is_dir()
+
+    second = _init(
+        project.repository_root, ".", "--force", *second_choice, "--feature-numbering", "timestamp"
+    )
+    assert second.exit_code == 0, _strip(second.output)
+    assert git_dir.is_dir() == had_history
+    if had_history:
+        assert subprocess.run(
+            ["git", "-C", str(project.workspace_root), "rev-list", "--count", "HEAD"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip() == "1"
+
+
+def test_default_setup_refuses_parent_repository_workspace_but_opt_out_succeeds(tmp_path: Path):
+    parent = tmp_path / "parent-repo"
+    parent.mkdir()
+    subprocess.run(["git", "init", str(parent)], check=True, capture_output=True)
+    before = set(parent.rglob("*"))
+    workspace = parent / "nested" / "workspace"
+
+    refused = _init(tmp_path, "refused-project", "--workspace", str(workspace))
+    assert refused.exit_code != 0
+    assert not (tmp_path / "refused-project").exists()
+    assert not workspace.exists()
+    assert set(parent.rglob("*")) == before
+
+    allowed = _init(tmp_path, "allowed-project", "--workspace", str(workspace), "--no-workspace-git")
+    assert allowed.exit_code == 0, _strip(allowed.output)
+    assert workspace.is_dir()
+    assert not (workspace / ".git").exists()
+
+
+@pytest.mark.parametrize("git_marker", ["directory", "worktree-file"])
+@pytest.mark.parametrize("no_workspace_git", [(), ("--no-workspace-git",)], ids=["default", "opt-out"])
+def test_existing_git_destination_refuses_regardless_of_opt_out(
+    tmp_path: Path, git_marker: str, no_workspace_git: tuple,
+):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    if git_marker == "directory":
+        subprocess.run(["git", "init", str(workspace)], check=True, capture_output=True)
+    else:
+        (workspace / ".git").write_text("gitdir: /elsewhere/.git/worktrees/x\n", encoding="utf-8")
+    before = {
+        path.relative_to(workspace): path.read_bytes() if path.is_file() else None
+        for path in workspace.rglob("*")
+    }
+
+    result = _init(tmp_path, "project", "--workspace", str(workspace), *no_workspace_git)
+
+    assert result.exit_code != 0
+    assert not (tmp_path / "project").exists()
+    assert {
+        path.relative_to(workspace): path.read_bytes() if path.is_file() else None
+        for path in workspace.rglob("*")
+    } == before
+
+
+def test_init_reports_workspace_git_commit_failure_without_traceback_and_preserves_partial_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    """A pre-commit Git failure must not leave a false success or a traceback."""
+    workspace = tmp_path / "workspace"
+    real_run = subprocess.run
+
+    def fail_commit(args, **kwargs):
+        if "commit" in args:
+            return subprocess.CompletedProcess(args, 1, "", "commit-hook refused")
+        return real_run(args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", fail_commit)
+    result = _init(tmp_path, "project", "--workspace", str(workspace))
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "Traceback" not in result.output
+    assert "commit-hook refused" in _strip(result.output)
+    repository = tmp_path / "project"
+    assert not repository.exists()
+    assert not (workspace / ".git").exists()
+    assert (workspace / ".specify/memory/constitution.md").is_file()
+    assert not (workspace / ".specify/workspace.json").exists()
+
+
+def test_init_preserves_workspace_identity_when_commit_succeeds_but_reporting_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+):
+    """A commit that lands but whose ID cannot be read back must not un-claim the workspace."""
+    workspace = tmp_path / "workspace"
+    real_run = subprocess.run
+
+    def fail_after_commit(args, **kwargs):
+        if "rev-parse" in args and "HEAD" in args:
+            return subprocess.CompletedProcess(args, 128, "", "broken Git configuration")
+        return real_run(args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", fail_after_commit)
+    result = _init(tmp_path, "project", "--workspace", str(workspace))
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "Traceback" not in result.output
+    repository = tmp_path / "project"
+    # The initial commit is durable: identity/locators must survive the reporting failure.
+    assert (repository / ".specify/project.json").exists()
+    assert (workspace / ".specify/workspace.json").exists()
+    assert (workspace / ".git").is_dir()
+    assert subprocess.run(
+        ["git", "-C", str(workspace), "rev-list", "--count", "HEAD"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip() == "1"
+    project = resolve_project(repository)
+    assert project.workspace_root == workspace.resolve()

@@ -604,3 +604,256 @@ class TestWorkflowStepAddCLI:
 
         assert result.exit_code != 0
         assert "empty or non-string URL" in result.output
+
+
+class TestWorkflowStepGeneratedFilesProvenance:
+    """`generated_files` records the installer's own produced bytes (T005)."""
+
+    def test_add_catalog_records_generated_files_for_every_produced_file(
+        self, project_dir, monkeypatch
+    ):
+        import hashlib
+
+        from typer.testing import CliRunner
+        from specify_cli import app
+        from specify_cli.authentication import http as auth_http
+        from specify_cli.workflows.step.catalog import StepCatalog, StepRegistry
+
+        monkeypatch.chdir(project_dir)
+        monkeypatch.setattr(
+            StepCatalog,
+            "get_step_info",
+            lambda self, step_id: {
+                "id": step_id,
+                "name": "Test Step",
+                "url": "https://example.com/step.yml",
+                "init_url": "https://example.com/__init__.py",
+                "_install_allowed": True,
+                "extra_files": {"helper.py": "https://example.com/helper.py"},
+            },
+        )
+
+        bodies = {
+            "https://example.com/step.yml": b"step:\n  type_key: my-step\n",
+            "https://example.com/__init__.py": b"# init\n",
+            "https://example.com/helper.py": b"print('helper')\n",
+        }
+
+        class _FakeResponse:
+            def __init__(self, url):
+                self.url = url
+                self.body = bodies[url]
+                self.offset = 0
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def getheader(self, name):
+                return None
+
+            def geturl(self):
+                return self.url
+
+            def read(self, size=-1):
+                if size < 0:
+                    size = len(self.body) - self.offset
+                chunk = self.body[self.offset : self.offset + size]
+                self.offset += len(chunk)
+                return chunk
+
+        monkeypatch.setattr(
+            auth_http,
+            "open_url",
+            lambda url, timeout=30, redirect_validator=None: _FakeResponse(url),
+        )
+
+        result = CliRunner().invoke(app, ["workflow", "step", "add", "my-step"])
+        assert result.exit_code == 0, result.output
+
+        entry = StepRegistry(project_dir).get("my-step")
+        assert entry["generated_files"] == {
+            ".specify/workflows/steps/my-step/step.yml": hashlib.sha256(
+                bodies["https://example.com/step.yml"]
+            ).hexdigest(),
+            ".specify/workflows/steps/my-step/__init__.py": hashlib.sha256(
+                bodies["https://example.com/__init__.py"]
+            ).hexdigest(),
+            ".specify/workflows/steps/my-step/helper.py": hashlib.sha256(
+                bodies["https://example.com/helper.py"]
+            ).hexdigest(),
+        }
+
+
+class TestWorkflowStepRestorationPreservesCustomContent:
+    """Restoration preserves custom files and restores missing produced files."""
+
+    BODIES = {
+        "https://example.com/step.yml": b"step:\n  type_key: my-step\n",
+        "https://example.com/__init__.py": b"# original init\n",
+        "https://example.com/helper.py": b"print('helper')\n",
+    }
+
+    class _FakeResponse:
+        def __init__(self, url):
+            self.url = url
+            self.body = TestWorkflowStepRestorationPreservesCustomContent.BODIES[url]
+            self.offset = 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def getheader(self, name):
+            return None
+
+        def geturl(self):
+            return self.url
+
+        def read(self, size=-1):
+            if size < 0:
+                size = len(self.body) - self.offset
+            chunk = self.body[self.offset : self.offset + size]
+            self.offset += len(chunk)
+            return chunk
+
+    def _mock_catalog(self, monkeypatch):
+        from specify_cli.authentication import http as auth_http
+        from specify_cli.workflows.step.catalog import StepCatalog
+
+        monkeypatch.setattr(
+            StepCatalog,
+            "get_step_info",
+            lambda self, step_id: {
+                "id": step_id,
+                "name": "Test Step",
+                "url": "https://example.com/step.yml",
+                "init_url": "https://example.com/__init__.py",
+                "_install_allowed": True,
+                "extra_files": {"helper.py": "https://example.com/helper.py"},
+            },
+        )
+        monkeypatch.setattr(
+            auth_http,
+            "open_url",
+            lambda url, timeout=30, redirect_validator=None: self._FakeResponse(url),
+        )
+
+    def test_add_restores_directory_deleted_after_clone_while_registry_entry_survives(
+        self, project_dir, monkeypatch
+    ):
+        """Every produced file was excluded from workspace history (all
+        matched their producer hash); after a clone the directory is gone
+        entirely, but the durable registry entry survived. Re-adding the
+        same step type must restore it instead of refusing."""
+        from typer.testing import CliRunner
+        from specify_cli import app
+        from specify_cli.workflows.step.catalog import StepRegistry
+
+        monkeypatch.chdir(project_dir)
+        self._mock_catalog(monkeypatch)
+        runner = CliRunner()
+        first = runner.invoke(app, ["workflow", "step", "add", "my-step"])
+        assert first.exit_code == 0, first.output
+
+        step_dir = project_dir / ".specify" / "workflows" / "steps" / "my-step"
+        import shutil
+
+        shutil.rmtree(step_dir)
+        assert StepRegistry(project_dir).is_installed("my-step")
+
+        second = runner.invoke(app, ["workflow", "step", "add", "my-step"])
+        assert second.exit_code == 0, second.output
+        assert (step_dir / "step.yml").read_bytes() == self.BODIES[
+            "https://example.com/step.yml"
+        ]
+        assert (step_dir / "__init__.py").read_bytes() == self.BODIES[
+            "https://example.com/__init__.py"
+        ]
+        assert (step_dir / "helper.py").read_bytes() == self.BODIES[
+            "https://example.com/helper.py"
+        ]
+
+    def test_add_restores_missing_generated_file_while_preserving_edited_file(
+        self, project_dir, monkeypatch
+    ):
+        """A user hand-edited ``__init__.py`` and force-added it, so it
+        survived the clone; ``step.yml`` matched its producer hash and was
+        excluded, so it is absent. Restoring must recreate ``step.yml``
+        without reverting the edited ``__init__.py``."""
+        import hashlib
+
+        from typer.testing import CliRunner
+        from specify_cli import app
+        from specify_cli.workflows.step.catalog import StepRegistry
+
+        monkeypatch.chdir(project_dir)
+        self._mock_catalog(monkeypatch)
+        runner = CliRunner()
+        first = runner.invoke(app, ["workflow", "step", "add", "my-step"])
+        assert first.exit_code == 0, first.output
+
+        step_dir = project_dir / ".specify" / "workflows" / "steps" / "my-step"
+        original_baseline = StepRegistry(project_dir).get("my-step")[
+            "generated_files"
+        ][".specify/workflows/steps/my-step/__init__.py"]
+        (step_dir / "__init__.py").write_bytes(b"# user customized init\n")
+        (step_dir / "step.yml").unlink()
+
+        second = runner.invoke(app, ["workflow", "step", "add", "my-step"])
+        assert second.exit_code == 0, second.output
+
+        assert (step_dir / "step.yml").read_bytes() == self.BODIES[
+            "https://example.com/step.yml"
+        ]
+        assert (step_dir / "__init__.py").read_bytes() == b"# user customized init\n"
+
+        generated = StepRegistry(project_dir).get("my-step")["generated_files"]
+        assert generated[".specify/workflows/steps/my-step/step.yml"] == (
+            hashlib.sha256(self.BODIES["https://example.com/step.yml"]).hexdigest()
+        )
+        # The preserved edit keeps its original baseline so a later
+        # workspace-history hash comparison still detects the edit.
+        assert (
+            generated[".specify/workflows/steps/my-step/__init__.py"]
+            == original_baseline
+        )
+
+    def test_add_reinstall_preserves_unrelated_registry_fields(
+        self, project_dir, monkeypatch
+    ):
+        """registry.add() replaces the stored entry wholesale, so a
+        restore/reinstall must build the new entry from the existing
+        record (not a bare literal) -- otherwise a field this code
+        doesn't know about (from a newer Spec Kit version, or set by
+        another tool) is silently dropped on every restore."""
+        from typer.testing import CliRunner
+        from specify_cli import app
+        from specify_cli.workflows.step.catalog import StepRegistry
+
+        monkeypatch.chdir(project_dir)
+        self._mock_catalog(monkeypatch)
+        runner = CliRunner()
+        first = runner.invoke(app, ["workflow", "step", "add", "my-step"])
+        assert first.exit_code == 0, first.output
+
+        registry = StepRegistry(project_dir)
+        entry = dict(registry.get("my-step"))
+        entry["future_field"] = "set by a newer spec-kit or another tool"
+        registry.add("my-step", entry)
+
+        step_dir = project_dir / ".specify" / "workflows" / "steps" / "my-step"
+        import shutil
+
+        shutil.rmtree(step_dir)
+
+        second = runner.invoke(app, ["workflow", "step", "add", "my-step"])
+        assert second.exit_code == 0, second.output
+
+        assert StepRegistry(project_dir).get("my-step")["future_field"] == (
+            "set by a newer spec-kit or another tool"
+        )

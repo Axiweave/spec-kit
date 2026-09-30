@@ -27,6 +27,11 @@ def isolated_user(tmp_path, monkeypatch):
         "PI_CODING_AGENT_DIR": tmp_path / "pi",
     }.items():
         monkeypatch.setenv(key, str(path))
+    for role in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{role}_NAME", "Migration Test")
+        monkeypatch.setenv(f"GIT_{role}_EMAIL", "migration@example.test")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     monkeypatch.chdir(tmp_path)
 
 

@@ -77,6 +77,42 @@ Machine records use `$XDG_DATA_HOME/specify/projects/`, or `~/.local/share/speci
 Windows uses the per-user local application-data directory when XDG is unset.
 Create a separate workspace backup. External storage does not provide synchronization or erase earlier Git history.
 
+### Workspace Git history
+
+Fresh external setup creates an independent workspace repository with one initial commit.
+Migration with `specify project move` uses the same default.
+Git must provide an author and committer identity.
+Setup respects commit hooks and signing settings.
+The destination must be absent or empty.
+Default setup also refuses a destination inside another Git repository.
+
+```bash
+specify init my-project --integration omp --storage external --workspace "$HOME/speckit-specs/my-project" --no-workspace-git
+specify project move "$HOME/speckit-specs/existing-project" --no-workspace-git
+```
+
+The opt-out skips workspace Git commands but retains destination and ownership checks.
+Local projects, repeated setup, and `project link` do not create workspace history.
+Workspace history does not change the code repository's commits or staged files.
+
+The initial commit includes specifications, plans, tasks, context, identity, saved choices, and package declarations.
+It excludes known private paths, caches, workflow runs, and unchanged generated files with producer hashes.
+Modified, recovered, custom, and unknown content remains eligible.
+User ignore rules remain active.
+If an ignore rule hides required durable content, setup reports an error instead of force-adding it.
+Review arbitrary prose and unknown files for secrets before you share the workspace.
+
+Later commands do not commit, configure remotes, or synchronize changes.
+Use ordinary Git commands to review, commit, and share workspace changes.
+To track a later edit to an ignored generated file, use an explicit `git add -f <path>`.
+After a clone, run `specify project link <workspace>` from the matching code repository.
+Restore generated helpers and packages explicitly through their existing install or upgrade commands.
+
+If the initial commit fails, setup removes only Git metadata that it owns when safe.
+Migration retains local recovery files until the initial commit succeeds.
+After a commit succeeds, a later failure retains the committed workspace and reports its path.
+Inspect the reported workspace and recovery paths before a retry.
+
 ### Personal defaults
 
 ```bash
@@ -140,7 +176,8 @@ Spec Kit copies and verifies local metadata, feature artifacts, and the saved ac
 The preview lists every copied file and its verified destination.
 The explicit flag supplies cleanup consent after verification.
 Successful moves leave only the repository locator and required native agent files.
-The move preserves personal defaults and does not rewrite Git history.
+The move preserves personal defaults and the code repository's Git history.
+It creates workspace history unless you use `--no-workspace-git`.
 
 During cutover, Spec Kit refreshes unchanged managed helpers and stock feature-selection instructions from the installed CLI.
 It preserves edited context, templates, command prose, and native metadata.
@@ -149,7 +186,7 @@ Edited or unowned helpers must already match the current bundle.
 Otherwise, the move fails and keeps both copies for recovery.
 Save helper edits separately before you restore managed helpers and retry.
 
-A refusal leaves the local project usable and retains the verified staged copy.
+After staging, a refusal leaves the local project usable and retains the verified staged copy.
 Inspect that copy before retrying with an empty destination.
 Cutover failures restore local state and report recovery paths.
 If recovery itself fails, keep both copies and the reported recovery directory.

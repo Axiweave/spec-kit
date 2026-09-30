@@ -44,6 +44,11 @@ def local_project(tmp_path, monkeypatch):
         "LOCALAPPDATA": home / "data",
     }.items():
         monkeypatch.setenv(key, str(value))
+    for role in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{role}_NAME", "Migration Test")
+        monkeypatch.setenv(f"GIT_{role}_EMAIL", "migration@example.test")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(home / "absent-gitconfig"))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     monkeypatch.delenv("SPECIFY_INIT_DIR", raising=False)
     monkeypatch.delenv("SPECIFY_FEATURE_DIRECTORY", raising=False)
     repo = tmp_path / "code repository"
@@ -402,10 +407,12 @@ def test_partial_source_cleanup_failure_restores_local_project(local_project, mo
     prepared = prepare_move(repo, workspace)
     original = shutil.rmtree
     removed = []
+    committed_snapshot = {}
 
     def rmtree(path, *args, **kwargs):
         root = Path(path)
         if not removed:
+            committed_snapshot.update(snapshot(workspace))
             victim = next(candidate for candidate in root.rglob("*") if candidate.is_file())
             removed.append(victim)
             victim.unlink()
@@ -421,9 +428,11 @@ def test_partial_source_cleanup_failure_restores_local_project(local_project, mo
     assert_local(repo, before)
     assert snapshot(home) == home_before
     assert not project_record_path(prepared.project_id).exists()
-    for name, content in before.items():
-        if name.startswith((".specify/", "specs/")):
-            assert (workspace / name).read_bytes() == content
+    assert snapshot(workspace) == committed_snapshot
+    assert not (workspace / ".specify/feature.json").exists()
+    assert subprocess.check_output(
+        ["git", "-C", str(workspace), "rev-list", "--count", "HEAD"], text=True,
+    ).strip() == "1"
 
 
 @pytest.mark.parametrize("target", ["machine-record", "locator"])

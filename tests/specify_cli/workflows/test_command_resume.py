@@ -13,6 +13,15 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def isolated_migration_git_identity(monkeypatch):
+    for role in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{role}_NAME", "Migration Test")
+        monkeypatch.setenv(f"GIT_{role}_EMAIL", "migration@example.test")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+
 def _resource_command(relative: str) -> str:
     script = (
         "import os, sys; from pathlib import Path; "

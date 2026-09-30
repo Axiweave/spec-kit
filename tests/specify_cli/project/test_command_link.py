@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from typer.testing import CliRunner
 
 from specify_cli import app
 
+from specify_cli.workspace_git import initialize_workspace_git
 
 PROJECT_ID = "550e8400-e29b-41d4-a716-446655440000"
 FOREIGN_ID = "a60e8400-e29b-41d4-a716-446655440001"
@@ -61,6 +63,228 @@ def external_project(tmp_path, monkeypatch):
     record = home / "data/specify/projects" / f"{PROJECT_ID}.json"
     monkeypatch.chdir(repo)
     return repo, workspace, record
+
+
+def test_real_workspace_clone_relinks_without_changing_history(external_project, tmp_path, monkeypatch):
+    """Invariant: relinking changes machine state, not shared identity or committed data."""
+    repo, workspace, record = external_project
+    for name, value in {
+        "GIT_AUTHOR_NAME": "Workspace Test",
+        "GIT_AUTHOR_EMAIL": "workspace@example.test",
+        "GIT_COMMITTER_NAME": "Workspace Test",
+        "GIT_COMMITTER_EMAIL": "workspace@example.test",
+        "GIT_CONFIG_GLOBAL": str(tmp_path / "absent-git-config"),
+        "GIT_CONFIG_NOSYSTEM": "1",
+    }.items():
+        monkeypatch.setenv(name, value)
+    head = initialize_workspace_git(workspace)
+    remote = tmp_path / "shared workspace remote.git"
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-C", str(workspace), "push", str(remote), "HEAD:refs/heads/shared"],
+        check=True, capture_output=True,
+    )
+    clone = tmp_path / "shared workspace clone"
+    subprocess.run(
+        ["git", "clone", "--branch", "shared", str(remote), str(clone)],
+        check=True, capture_output=True,
+    )
+    durable = {
+        path.relative_to(clone).as_posix(): path.read_bytes()
+        for path in clone.rglob("*")
+        if path.is_file() and ".git" not in path.relative_to(clone).parts
+    }
+    monkeypatch.chdir(repo)
+    result = CliRunner().invoke(app, ["project", "link", str(clone)])
+    assert result.exit_code == 0, result.output
+    state = json.loads(record.read_text(encoding="utf-8"))
+    assert state["workspace"] == str(clone)
+    assert state["active_feature"] is None
+    assert json.loads((clone / ".specify/workspace.json").read_text())["project_id"] == PROJECT_ID
+    assert subprocess.check_output(["git", "-C", str(clone), "rev-parse", "HEAD"], text=True).strip() == head
+    assert subprocess.check_output(["git", "-C", str(clone), "status", "--porcelain"], text=True) == ""
+    assert {
+        path.relative_to(clone).as_posix(): path.read_bytes()
+        for path in clone.rglob("*")
+        if path.is_file() and ".git" not in path.relative_to(clone).parts
+    } == durable
+
+
+def test_cloned_workspace_restores_helpers_without_losing_custom_content(
+    external_project, tmp_path, monkeypatch,
+):
+    """Invariant: explicit restoration preserves custom bytes and the initial HEAD."""
+    import sys
+    from rich.console import Console
+    from specify_cli.shared_infra import install_shared_infra
+    from specify_cli.workspace import resolve_project, save_active_feature
+
+    repo, workspace, _ = external_project
+    for name, value in {
+        "GIT_AUTHOR_NAME": "Workspace Test",
+        "GIT_AUTHOR_EMAIL": "workspace@example.test",
+        "GIT_COMMITTER_NAME": "Workspace Test",
+        "GIT_COMMITTER_EMAIL": "workspace@example.test",
+        "GIT_CONFIG_GLOBAL": str(tmp_path / "absent-git-config"),
+        "GIT_CONFIG_NOSYSTEM": "1",
+    }.items():
+        monkeypatch.setenv(name, value)
+    assert CliRunner().invoke(app, ["project", "link", str(workspace)]).exit_code == 0
+    console = Console(quiet=True)
+    install_shared_infra(repo, "py", version="test", console=console)
+    custom = workspace / ".specify/templates/spec-template.md"
+    custom.write_text("# Custom template retained after sharing\n", encoding="utf-8")
+    context = workspace / ".specify/memory/constitution.md"
+    context.parent.mkdir(parents=True, exist_ok=True)
+    context.write_text("# Shared project principles\n", encoding="utf-8")
+    head = initialize_workspace_git(workspace)
+    clone = tmp_path / "helper workspace clone"
+    subprocess.run(["git", "clone", str(workspace), str(clone)], check=True, capture_output=True)
+    helper = clone / ".specify/scripts/python/check_prerequisites.py"
+    assert not helper.exists()
+    assert CliRunner().invoke(app, ["project", "link", str(clone)]).exit_code == 0
+    install_shared_infra(repo, "py", version="test", console=console, refresh_managed=True)
+    project = resolve_project(repo)
+    save_active_feature(project, clone / "specs/001-existing")
+    result = subprocess.run(
+        [sys.executable, str(helper), "--json", "--paths-only"],
+        cwd=repo, check=True, capture_output=True, text=True,
+    )
+    paths = json.loads(result.stdout)
+    assert Path(paths["FEATURE_DIR"]) == clone / "specs/001-existing"
+    assert (clone / custom.relative_to(workspace)).read_bytes() == custom.read_bytes()
+    assert (clone / context.relative_to(workspace)).read_bytes() == context.read_bytes()
+    assert subprocess.check_output(["git", "-C", str(clone), "rev-parse", "HEAD"], text=True).strip() == head
+    assert subprocess.check_output(["git", "-C", str(clone), "diff", "--cached", "--name-only"], text=True) == ""
+
+
+def test_clone_restores_all_package_types_and_preserves_custom_overrides(
+    external_project, tmp_path, monkeypatch,
+):
+    """Conservation: explicit package restoration preserves shared edits and history."""
+    import socket
+    import sys
+    from functools import partial
+    from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+    from threading import Thread
+
+    repo, workspace, _ = external_project
+    for role in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{role}_NAME", "Clone Test")
+        monkeypatch.setenv(f"GIT_{role}_EMAIL", "clone@example.test")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "absent-git-config"))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    home = tmp_path / "package-home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("APPDATA", str(home / "config"))
+    monkeypatch.setenv("LOCALAPPDATA", str(home / "local"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / "config"))
+    runner = CliRunner()
+    assert runner.invoke(app, ["project", "link", str(workspace)]).exit_code == 0
+
+    sources = tmp_path / "package-sources"
+    extension, preset, workflow, step = [sources / name for name in ("extension", "preset", "workflow", "step")]
+
+    def put(root, name, content):
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+
+    put(extension, "extension.yml", json.dumps({
+        "schema_version": "1.0",
+        "extension": {"id": "clone-extension", "name": "Clone Extension", "version": "1.0.0", "description": "Clone fixture"},
+        "requires": {"speckit_version": ">=0.1.0"},
+        "provides": {"commands": [{"name": "speckit.clone-extension.hello", "file": "commands/hello.md"}]},
+    }))
+    put(extension, "commands/hello.md", "# Original command\n")
+    put(extension, "scripts/tool.py", "print('extension restored')\n")
+    put(preset, "preset.yml", json.dumps({
+        "schema_version": "1.0",
+        "preset": {"id": "clone-preset", "name": "Clone Preset", "version": "1.0.0", "description": "Clone fixture"},
+        "requires": {"speckit_version": ">=0.1.0"},
+        "provides": {"templates": [{"type": "template", "name": "clone-note", "file": "templates/clone-note.md"}]},
+    }))
+    put(preset, "templates/clone-note.md", "# Original template\n")
+    put(preset, "scripts/tool.py", "print('preset restored')\n")
+    put(workflow, "workflow.yml", (
+        'schema_version: "1.0"\nworkflow:\n  id: clone-workflow\n'
+        '  name: Clone Workflow\n  version: "1.0.0"\nsteps:\n'
+        '  - id: hello\n    type: shell\n    run: "echo restored"\n'
+    ))
+    put(workflow, "helper.py", "print('original workflow helper')\n")
+    put(step, "step.yml", "step:\n  type_key: clone-step\n")
+    put(step, "__init__.py", "def restored():\n    return 'step restored'\n")
+    put(step, "helper.py", "print('original step helper')\n")
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), partial(SimpleHTTPRequestHandler, directory=str(sources)))
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    put(sources, "catalog.json", json.dumps({"steps": {"clone-step": {
+        "name": "Clone Step", "version": "1.0.0",
+        "url": f"{base}/step/step.yml", "init_url": f"{base}/step/__init__.py",
+        "extra_files": {"helper.py": f"{base}/step/helper.py"},
+    }}}))
+    monkeypatch.setenv("SPECKIT_STEP_CATALOG_URL", f"{base}/catalog.json")
+    connect = socket.socket.connect
+
+    def loopback_only(sock, address):
+        if address[0] != "127.0.0.1":
+            raise OSError("Outbound access is blocked in the clone check.")
+        return connect(sock, address)
+
+    monkeypatch.setattr(socket.socket, "connect", loopback_only)
+    try:
+        for command in (
+            ["extension", "add", str(extension), "--dev"],
+            ["preset", "add", "clone-preset", "--dev", str(preset)],
+            ["workflow", "add", str(workflow), "--dev"],
+            ["workflow", "step", "add", "clone-step"],
+        ):
+            result = runner.invoke(app, command, catch_exceptions=False)
+            assert result.exit_code == 0, result.output
+        edits = {
+            ".specify/extensions/clone-extension/commands/hello.md": "# Edited shared command\n",
+            ".specify/presets/clone-preset/templates/clone-note.md": "# Edited shared template\n",
+            ".specify/workflows/clone-workflow/helper.py": "print('edited workflow helper')\n",
+            ".specify/workflows/steps/clone-step/helper.py": "print('edited step helper')\n",
+        }
+        for name, content in edits.items():
+            (workspace / name).write_text(content, encoding="utf-8")
+        head = initialize_workspace_git(workspace)
+        clone = tmp_path / "package workspace clone"
+        subprocess.run(["git", "clone", str(workspace), str(clone)], check=True, capture_output=True)
+        missing = [
+            ".specify/extensions/clone-extension/scripts/tool.py",
+            ".specify/presets/clone-preset/scripts/tool.py",
+            ".specify/workflows/clone-workflow/workflow.yml",
+            ".specify/workflows/steps/clone-step/__init__.py",
+        ]
+        assert all(not (clone / name).exists() for name in missing)
+        assert runner.invoke(app, ["project", "link", str(clone)]).exit_code == 0
+        for command in (
+            ["extension", "add", str(extension), "--dev", "--force"],
+            ["preset", "update", "clone-preset", "--dev", str(preset)],
+            ["workflow", "add", str(workflow), "--dev"],
+            ["workflow", "step", "add", "clone-step"],
+        ):
+            result = runner.invoke(app, command, catch_exceptions=False)
+            assert result.exit_code == 0, result.output
+        for name, content in edits.items():
+            assert (clone / name).read_text(encoding="utf-8") == content
+        for name, expected in zip(missing[:2], ("extension restored", "preset restored"), strict=True):
+            assert subprocess.check_output([sys.executable, str(clone / name)], text=True).strip() == expected
+        restored = runner.invoke(app, ["workflow", "run", str(clone / missing[2]), "--json"])
+        assert restored.exit_code == 0, restored.output
+        assert json.loads(restored.stdout)["status"] == "completed"
+        assert subprocess.check_output(["git", "-C", str(clone), "rev-parse", "HEAD"], text=True).strip() == head
+        assert subprocess.check_output(["git", "-C", str(clone), "diff", "--cached", "--name-only"], text=True) == ""
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
 
 
 def test_link_clone_without_machine_record_preserves_shared_files(external_project, tmp_path, monkeypatch):

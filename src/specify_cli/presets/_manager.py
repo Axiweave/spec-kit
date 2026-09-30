@@ -2,7 +2,9 @@
 
 import hashlib
 import json
+import os
 import shutil
+import stat
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
@@ -38,6 +40,130 @@ _CONSTITUTION_SYNC_PRESET_ID = "constitution-sync"
 
 def _content_sha256(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
+
+
+def _hash_produced_files(
+    dest_dir: Path,
+    workspace_root: Path,
+    excluded_names: frozenset[str],
+    excluded_relpaths: frozenset[str] = frozenset(),
+) -> dict[str, str]:
+    """Hash regular files a preset install wrote under ``dest_dir``.
+
+    Returns a workspace-relative-path -> SHA-256-hex mapping for the actual
+    produced bytes. The declaration manifest's own produced bytes are
+    included like any other file: the manifest's durability (it is never
+    treated as safely discardable) is enforced independently by workspace
+    tracking's required-file handling, not by omission here, so its
+    baseline stays accurate for a hand-edited-vs-version-bumped comparison.
+    ``excluded_relpaths`` additionally skips specific paths (relative to
+    ``dest_dir``) that were just restored from a preserved custom/edited
+    payload, so a restored path is never recorded as matching a produced
+    hash regardless of when the restore happened relative to this call.
+    """
+    produced: dict[str, str] = {}
+    for file_path in sorted(dest_dir.rglob("*")):
+        if file_path.is_symlink() or not file_path.is_file():
+            continue
+        if file_path.name in excluded_names:
+            continue
+        if file_path.relative_to(dest_dir).as_posix() in excluded_relpaths:
+            continue
+        produced[file_path.relative_to(workspace_root).as_posix()] = _content_sha256(
+            file_path.read_bytes()
+        )
+    return produced
+
+
+def _capture_custom_payload(
+    dest_dir: Path,
+    workspace_root: Path,
+    old_metadata: dict[str, Any] | None,
+) -> dict[str, tuple[bytes, int]]:
+    """Capture edited and unknown regular files before a force reinstall.
+
+    A missing producer baseline makes all existing content custom. The
+    baseline lookup keys on the path relative to ``workspace_root`` -- the
+    same keying ``_hash_produced_files`` uses, not the package-relative
+    path under ``dest_dir`` -- and covers the declaration manifest the same
+    way as any other file, since its own produced bytes are recorded in
+    ``generated_files`` too. Refuse symlinks and unreadable files before
+    removing the old package.
+    """
+    if not isinstance(old_metadata, dict):
+        old_metadata = {}
+    old_generated = old_metadata.get("generated_files")
+    if not isinstance(old_generated, dict):
+        old_generated = {}
+
+    custom: dict[str, tuple[bytes, int]] = {}
+
+    def fail_walk(error: OSError) -> None:
+        raise error
+
+    for current_dir, subdirs, files in os.walk(dest_dir, followlinks=False, onerror=fail_walk):
+        current_path = Path(current_dir)
+        for name in [*subdirs, *files]:
+            path = current_path / name
+            mode = path.lstat().st_mode
+            if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
+                raise PresetValidationError(f"Cannot preserve nonregular package content: {path}")
+        for name in files:
+            file_path = current_path / name
+            content = file_path.read_bytes()
+            mode = file_path.stat().st_mode
+            rel = file_path.relative_to(dest_dir).as_posix()
+            workspace_rel = file_path.relative_to(workspace_root).as_posix()
+            current_hash = _content_sha256(content)
+            recorded = old_generated.get(workspace_rel)
+            if isinstance(recorded, str) and current_hash == recorded:
+                continue
+            custom[rel] = (content, mode)
+    return custom
+
+
+def _reinstall_staging_dir(container_dir: Path) -> Path:
+    """Create a uniquely-named durable staging directory, confined under
+    *container_dir* (the manager's own presets root), for a preserved
+    custom/edited payload about to be removed by a force reinstall. Each
+    attempt gets its own fresh directory rather than a fixed, ID-derived
+    name: an earlier attempt's staging directory is never reused, cleared,
+    or overwritten, since it may be the only surviving recovery copy for
+    that earlier failure.
+    """
+    return Path(tempfile.mkdtemp(dir=container_dir, prefix=".reinstall-staging-"))
+
+
+def _stage_custom_payload_durably(
+    staging_dir: Path, payload: dict[str, tuple[bytes, int]]
+) -> None:
+    """Durably persist a captured custom/edited payload before any
+    destructive step runs, so a later restore failure -- for example the
+    fresh package now has a directory where a custom file used to be --
+    still leaves a recovery copy on disk instead of only holding the
+    bytes in this process's memory.
+    """
+    for rel, (content, mode) in payload.items():
+        target = staging_dir / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with open(target, "wb") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            target.chmod(0o600)
+        except (NotImplementedError, OSError):
+            pass  # best-effort; chmod may not be supported on all platforms.
+    try:
+        dir_fd = os.open(str(staging_dir), os.O_RDONLY)
+    except (AttributeError, OSError, NotImplementedError):
+        return
+    try:
+        os.fsync(dir_fd)
+    except OSError:
+        pass  # best-effort; not all platforms support fsync on a directory fd.
+    finally:
+        os.close(dir_fd)
 
 
 def _is_comparable_version(value: str) -> bool:
@@ -366,6 +492,7 @@ class PresetManager(_PresetCommandMethods, _PresetSkillMethods):
         force: bool = False,
         *,
         catalog_name: str | None = None,
+        expected_id: str | None = None,
     ) -> PresetManifest:
         """Install preset from a local directory.
 
@@ -388,22 +515,86 @@ class PresetManager(_PresetCommandMethods, _PresetSkillMethods):
 
         manifest_path = source_dir / "preset.yml"
         manifest = PresetManifest(manifest_path)
+        if expected_id is not None and manifest.id != expected_id:
+            raise PresetValidationError(
+                f"Preset ID '{manifest.id}' does not match '{expected_id}'."
+            )
 
         self.check_compatibility(manifest, speckit_version)
 
+        custom_payload: dict[str, tuple[bytes, int]] = {}
+        old_metadata: dict[str, Any] | None = None
+        custom_payload_staging_dir: Path | None = None
         if self.registry.is_installed(manifest.id):
             if not force:
                 raise PresetError(
                     f"Preset '{manifest.id}' is already installed. "
                     f"Use 'specify preset remove {manifest.id}' first."
                 )
+            old_metadata = self.registry.get(manifest.id)
+            old_dest_dir = self.presets_dir / manifest.id
+            # A cloned or hand-edited workspace can carry a registry that
+            # already lists this preset as installed while old_dest_dir
+            # holds bytes the installer never produced (see
+            # _capture_custom_payload). Snapshot those now, while the old
+            # payload is still live, so remove()'s rmtree cannot discard
+            # them.
+            if old_dest_dir.is_dir() and not old_dest_dir.is_symlink():
+                custom_payload = _capture_custom_payload(
+                    old_dest_dir, self.workspace_root, old_metadata
+                )
+            if custom_payload:
+                # Durably persist the captured payload before remove()'s
+                # rmtree so a later restore failure (e.g. a structural
+                # collision with the fresh package tree) still has a
+                # recovery copy on disk, not just this process's memory.
+                custom_payload_staging_dir = _reinstall_staging_dir(self.presets_dir)
+                _stage_custom_payload_durably(custom_payload_staging_dir, custom_payload)
             self.remove(manifest.id)
 
         dest_dir = self.presets_dir / manifest.id
         if dest_dir.exists():
             shutil.rmtree(dest_dir)
 
-        shutil.copytree(source_dir, dest_dir)
+        def _restore_custom_payload_file(target: Path, content: bytes, mode: int) -> None:
+            try:
+                _ensure_safe_shared_directory(self.workspace_root, target.parent)
+                _write_shared_bytes(
+                    self.workspace_root, target, content, mode=stat.S_IMODE(mode)
+                )
+            except BaseException as exc:
+                rel_label = target.relative_to(dest_dir).as_posix()
+                hint = (
+                    f" A durable copy of the preserved content was retained at "
+                    f"'{custom_payload_staging_dir}'; recover it manually before "
+                    f"retrying."
+                    if custom_payload_staging_dir is not None
+                    else ""
+                )
+                raise PresetError(
+                    f"Could not restore preserved content for '{rel_label}': "
+                    f"{exc}.{hint}"
+                ) from exc
+
+        try:
+            shutil.copytree(source_dir, dest_dir)
+        except BaseException:
+            # copytree failed — dest_dir may be absent or only partially
+            # created. Write the preserved custom/edited payload back now
+            # so it is not permanently lost even though the install did
+            # not complete.
+            if custom_payload:
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                for rel, (content, mode) in custom_payload.items():
+                    _restore_custom_payload_file(dest_dir / rel, content, mode)
+            raise
+
+        # Restore any preserved custom/edited payload now, before the still
+        # -fallible registration and registry.add() steps below run — so a
+        # failure there finds the user's bytes already durably on disk
+        # instead of only held in this function's memory.
+        for rel, (content, mode) in custom_payload.items():
+            _restore_custom_payload_file(dest_dir / rel, content, mode)
 
         # Pre-register the preset so that composition resolution can see it
         # in the priority stack when resolving composed command content.
@@ -415,7 +606,28 @@ class PresetManager(_PresetCommandMethods, _PresetSkillMethods):
             if normalized_catalog_name
             else "local"
         )
+        # Producer hashes cover bytes this install actually wrote under
+        # dest_dir, including preset.yml's own produced bytes: workspace
+        # tracking's required-file handling keeps the manifest durable
+        # independently of this baseline, so recording it here only lets a
+        # later force reinstall tell a hand-edited manifest from one whose
+        # version was simply bumped by a fresh install. Paths just restored
+        # from custom_payload (already written to disk above, including a
+        # hand-edited preset.yml) are excluded too, by relative path, so a
+        # restored path is never recorded as matching a produced hash.
+        generated_files = _hash_produced_files(
+            dest_dir,
+            self.workspace_root,
+            frozenset(),
+            excluded_relpaths=frozenset(custom_payload.keys()),
+        )
+        # A force reinstall's old registry entry may carry a field this
+        # version does not recognize (forward compatibility, or a hand
+        # edit). Start from it so registry.add()'s full-replace semantics
+        # do not silently discard it; the fields below always override it
+        # with fresh values since add() re-derives them for this install.
         self.registry.add(manifest.id, {
+            **(old_metadata if isinstance(old_metadata, dict) else {}),
             "version": manifest.version,
             "source": source,
             "manifest_hash": manifest.get_hash(),
@@ -423,6 +635,7 @@ class PresetManager(_PresetCommandMethods, _PresetSkillMethods):
             "priority": priority,
             "registered_commands": {},
             "registered_skills": {},
+            "generated_files": generated_files,
         })
 
         registered_commands: Dict[str, List[str]] = {}
@@ -463,6 +676,22 @@ class PresetManager(_PresetCommandMethods, _PresetSkillMethods):
                 pass  # best-effort cleanup; don't mask the original error
             self.registry.remove(manifest.id)
             raise
+
+        # Post-commit cleanup: the registry now records this preset as
+        # installed with commands/skills registered, so every entry in the
+        # preserved custom/edited payload has been restored and committed.
+        # The durable staging copy has therefore served its purpose and can
+        # be removed best-effort — a cleanup failure must not fail an
+        # install that has already committed successfully.
+        if (
+            custom_payload_staging_dir is not None
+            and custom_payload_staging_dir.is_dir()
+            and not custom_payload_staging_dir.is_symlink()
+        ):
+            try:
+                shutil.rmtree(custom_payload_staging_dir)
+            except OSError:
+                pass  # Best-effort; install already committed to the registry.
 
         # Reconcile all affected commands from the full priority stack so that
         # install order doesn't determine the winning command file.
@@ -561,6 +790,7 @@ class PresetManager(_PresetCommandMethods, _PresetSkillMethods):
         force: bool = False,
         *,
         catalog_name: str | None = None,
+        expected_id: str | None = None,
     ) -> PresetManifest:
         """Install a preset from a supported archive.
 
@@ -610,6 +840,7 @@ class PresetManager(_PresetCommandMethods, _PresetSkillMethods):
                 priority,
                 force=force,
                 catalog_name=catalog_name,
+                expected_id=expected_id,
             )
 
     def install_from_zip(
@@ -620,6 +851,7 @@ class PresetManager(_PresetCommandMethods, _PresetSkillMethods):
         force: bool = False,
         *,
         catalog_name: str | None = None,
+        expected_id: str | None = None,
     ) -> PresetManifest:
         """Backward-compatible wrapper for archive installation."""
         return self.install_from_archive(
@@ -628,6 +860,7 @@ class PresetManager(_PresetCommandMethods, _PresetSkillMethods):
             priority,
             force=force,
             catalog_name=catalog_name,
+            expected_id=expected_id,
         )
 
     def remove(self, pack_id: str) -> bool:

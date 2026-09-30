@@ -5,6 +5,7 @@ Mirrors ``specify_cli.extensions.command_add``.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
@@ -1239,6 +1240,321 @@ class TestExtensionForceCLI:
             )
             assert result2.exit_code == 0, strip_ansi(result2.output)
             assert "installed" in strip_ansi(result2.output)
+
+
+class TestExtensionGeneratedFilesProvenance:
+    """Producer-hash coverage for optional per-file provenance (T005).
+
+    ``registry.add`` records an additive ``generated_files`` mapping of
+    workspace-relative path to SHA-256 hex for bytes this install actually
+    wrote, so a later workspace Git snapshot can tell a reproducible package
+    file from user content without re-copying anything.
+    """
+
+    def test_install_records_hash_agreement(self, extension_dir, project_dir):
+        """Every produced-file hash matches the installed bytes."""
+        manager = ExtensionManager(project_dir)
+        manager.install_from_directory(
+            extension_dir, "0.1.0", register_commands=False
+        )
+
+        generated = manager.registry.get("test-ext")["generated_files"]
+
+        installed_dir = project_dir / ".specify" / "extensions" / "test-ext"
+        hello = installed_dir / "commands" / "hello.md"
+        rel = hello.relative_to(project_dir).as_posix()
+        assert generated[rel] == hashlib.sha256(hello.read_bytes()).hexdigest()
+
+    def test_force_reinstall_preserves_edited_config_and_excludes_it(
+        self, extension_dir, project_dir
+    ):
+        """A user edit to a shipped config survives ``--force`` reinstall via
+        the existing rescue path, and that path is never recorded as
+        generated even though the fresh copy from source is indistinguishable
+        from packaged output on disk."""
+        (extension_dir / "test-ext-config.yml").write_text("setting: packaged\n")
+
+        manager = ExtensionManager(project_dir)
+        manager.install_from_directory(
+            extension_dir, "0.1.0", register_commands=False
+        )
+
+        installed_dir = project_dir / ".specify" / "extensions" / "test-ext"
+        config_path = installed_dir / "test-ext-config.yml"
+        config_path.write_text("setting: user-edited\n")
+
+        manager.install_from_directory(
+            extension_dir, "0.1.0", register_commands=False, force=True
+        )
+
+        # The rescue path must have restored the edit, not the package default.
+        assert config_path.read_text() == "setting: user-edited\n"
+
+        generated = manager.registry.get("test-ext")["generated_files"]
+        config_rel = config_path.relative_to(project_dir).as_posix()
+        assert config_rel not in generated
+
+    def test_force_reinstall_preserves_edited_and_custom_files(
+        self, extension_dir, project_dir
+    ):
+        """A force reinstall from the same source must not discard a user's
+        edit to a package-produced file, or an entirely custom file the user
+        added inside the extension directory -- a cloned workspace can carry
+        both alongside a registry that already lists the extension as
+        installed (T025). Neither the edited nor the custom path may be
+        recorded as matching a produced hash afterward."""
+        manager = ExtensionManager(project_dir)
+        manager.install_from_directory(
+            extension_dir, "0.1.0", register_commands=False
+        )
+
+        installed_dir = project_dir / ".specify" / "extensions" / "test-ext"
+        hello = installed_dir / "commands" / "hello.md"
+        hello.write_text("edited by user\n")
+        custom_file = installed_dir / "notes.txt"
+        custom_file.write_text("user notes\n")
+
+        manager.install_from_directory(
+            extension_dir, "0.1.0", register_commands=False, force=True
+        )
+
+        assert hello.read_text() == "edited by user\n"
+        assert custom_file.read_text() == "user notes\n"
+
+        generated = manager.registry.get("test-ext")["generated_files"]
+        hello_rel = hello.relative_to(project_dir).as_posix()
+        notes_rel = custom_file.relative_to(project_dir).as_posix()
+        assert generated.get(hello_rel) != hashlib.sha256(
+            hello.read_bytes()
+        ).hexdigest()
+        assert notes_rel not in generated
+
+    def test_force_reinstall_preserves_edited_manifest(
+        self, extension_dir, project_dir
+    ):
+        """A hand-edited extension.yml is durable declaration content, not
+        reproducible package output -- a force reinstall from the same
+        source must not silently discard the edit."""
+        manager = ExtensionManager(project_dir)
+        manager.install_from_directory(
+            extension_dir, "0.1.0", register_commands=False
+        )
+
+        installed_dir = project_dir / ".specify" / "extensions" / "test-ext"
+        manifest_path = installed_dir / "extension.yml"
+        edited = manifest_path.read_text() + "# user note\n"
+        manifest_path.write_text(edited)
+
+        manager.install_from_directory(
+            extension_dir, "0.1.0", register_commands=False, force=True
+        )
+
+        assert manifest_path.read_text() == edited
+
+    def test_force_reinstall_conserves_unedited_content_without_baseline(
+        self, extension_dir, project_dir
+    ):
+        """A legacy registry entry predating this baseline (no
+        ``generated_files``) cannot prove any installed file is safe to
+        regenerate, so a force reinstall must conservatively keep the old
+        file instead of silently adopting a differently-worded upstream
+        update."""
+        manager = ExtensionManager(project_dir)
+        manager.install_from_directory(
+            extension_dir, "0.1.0", register_commands=False
+        )
+
+        # Simulate a pre-T005 registry entry: strip the new baseline field.
+        entry = manager.registry.data["extensions"]["test-ext"]
+        del entry["generated_files"]
+        manager.registry._save()
+
+        installed_dir = project_dir / ".specify" / "extensions" / "test-ext"
+        hello = installed_dir / "commands" / "hello.md"
+        original_hello = hello.read_text()
+
+        # The upstream source now ships different content for the same file.
+        (extension_dir / "commands" / "hello.md").write_text(
+            "---\ndescription: Updated\n---\n\nUpdated hello\n"
+        )
+
+        manager.install_from_directory(
+            extension_dir, "0.1.0", register_commands=False, force=True
+        )
+
+        # Without a producer baseline to prove the old file was untouched
+        # package output, conservation must win: the old bytes survive.
+        assert hello.read_text() == original_hello
+
+    def test_force_reinstall_with_version_bump_updates_unedited_content(
+        self, extension_dir, project_dir
+    ):
+        """A force reinstall whose upstream source simply bumped its
+        version -- no user ever touched the installed files -- must adopt
+        the new manifest and new package content, not misclassify them as
+        user customization and revert to the old install (regression: a
+        package-relative lookup against the workspace-relative
+        ``generated_files`` baseline, and a semantic manifest hash compared
+        against raw file bytes, both made every produced file including
+        the manifest look unrecognized)."""
+        manager = ExtensionManager(project_dir)
+        manager.install_from_directory(
+            extension_dir, "0.1.0", register_commands=False
+        )
+
+        installed_dir = project_dir / ".specify" / "extensions" / "test-ext"
+        manifest_path = installed_dir / "extension.yml"
+        hello = installed_dir / "commands" / "hello.md"
+
+        manifest_data = yaml.safe_load(
+            (extension_dir / "extension.yml").read_text()
+        )
+        manifest_data["extension"]["version"] = "0.2.0"
+        (extension_dir / "extension.yml").write_text(yaml.dump(manifest_data))
+        new_hello = "---\ndescription: Test hello command\n---\n\n# v2\n"
+        (extension_dir / "commands" / "hello.md").write_text(new_hello)
+
+        manager.install_from_directory(
+            extension_dir, "0.1.0", register_commands=False, force=True
+        )
+
+        assert (
+            yaml.safe_load(manifest_path.read_text())["extension"]["version"]
+            == "0.2.0"
+        )
+        assert hello.read_text() == new_hello
+
+    def test_copytree_failure_preserves_custom_payload(
+        self, extension_dir, project_dir, monkeypatch
+    ):
+        """A force reinstall whose fresh copy fails partway through must
+        not lose a user's custom payload -- the same durable rescue path
+        that already protects '*-config.yml' on a failed copytree must
+        cover it too."""
+        import shutil as shutil_module
+
+        manager = ExtensionManager(project_dir)
+        manager.install_from_directory(
+            extension_dir, "0.1.0", register_commands=False
+        )
+
+        installed_dir = project_dir / ".specify" / "extensions" / "test-ext"
+        custom_file = installed_dir / "notes.txt"
+        custom_file.write_text("user notes\n")
+
+        real_copytree = shutil_module.copytree
+
+        def fail_copytree(src, dst, *args, **kwargs):
+            src_path = Path(src)
+            if src_path.resolve() == extension_dir.resolve():
+                raise OSError("simulated copytree failure")
+            return real_copytree(src, dst, *args, **kwargs)
+
+        monkeypatch.setattr(shutil_module, "copytree", fail_copytree)
+
+        with pytest.raises(OSError, match="simulated copytree failure"):
+            manager.install_from_directory(
+                extension_dir, "0.1.0", register_commands=False, force=True
+            )
+
+        assert custom_file.read_text() == "user notes\n"
+
+    def test_force_reinstall_preserves_unknown_registry_fields(
+        self, extension_dir, project_dir
+    ):
+        """A registry entry may carry a field this version does not
+        recognize (forward compatibility, or a hand edit) -- a force
+        reinstall must not silently discard it."""
+        manager = ExtensionManager(project_dir)
+        manager.install_from_directory(
+            extension_dir, "0.1.0", register_commands=False
+        )
+
+        entry = manager.registry.data["extensions"]["test-ext"]
+        entry["future_field"] = "kept-across-reinstall"
+        manager.registry._save()
+
+        manager.install_from_directory(
+            extension_dir, "0.1.0", register_commands=False, force=True
+        )
+
+        assert (
+            manager.registry.get("test-ext")["future_field"]
+            == "kept-across-reinstall"
+        )
+
+    @pytest.mark.parametrize("unsafe", ["file-symlink", "directory-symlink", "unreadable"])
+    def test_force_restore_refuses_unreadable_or_symlinked_custom_payload(
+        self, extension_dir, project_dir, monkeypatch, unsafe,
+    ):
+        manager = ExtensionManager(project_dir)
+        manager.install_from_directory(extension_dir, "0.1.0", register_commands=False)
+        installed = project_dir / ".specify/extensions/test-ext"
+        target = project_dir.parent / "private-restore-target"
+        target.mkdir()
+        (target / "secret.txt").write_bytes(b"Private bytes\n")
+        custom = installed / "custom"
+        if unsafe == "unreadable":
+            custom.write_bytes(b"User bytes\n")
+        else:
+            custom.symlink_to(
+                target if unsafe == "directory-symlink" else target / "secret.txt",
+                target_is_directory=unsafe == "directory-symlink",
+            )
+        before = manager.registry.get("test-ext")
+        original = (installed / "commands/hello.md").read_bytes()
+        real_read = Path.read_bytes
+        with monkeypatch.context() as scoped:
+            if unsafe == "unreadable":
+                def refuse(path):
+                    if path == custom:
+                        raise PermissionError("Cannot capture custom content")
+                    return real_read(path)
+                scoped.setattr(Path, "read_bytes", refuse)
+            with pytest.raises((OSError, ValidationError)):
+                manager.install_from_directory(
+                    extension_dir, "0.1.0", register_commands=False, force=True,
+                )
+        assert manager.registry.get("test-ext") == before
+        assert (installed / "commands/hello.md").read_bytes() == original
+        assert (target / "secret.txt").read_bytes() == b"Private bytes\n"
+        if unsafe == "unreadable":
+            assert custom.read_bytes() == b"User bytes\n"
+        else:
+            assert custom.is_symlink()
+
+    def test_force_reinstall_reports_recovery_path_on_restore_collision(
+        self, extension_dir, project_dir
+    ):
+        """A custom file that collides in kind with the incoming package
+        (a file where the fresh package now has a directory) must not
+        vanish silently. The preserved bytes must stay durably
+        recoverable and the failure must say where."""
+        manager = ExtensionManager(project_dir)
+        manager.install_from_directory(
+            extension_dir, "0.1.0", register_commands=False
+        )
+
+        installed_dir = project_dir / ".specify" / "extensions" / "test-ext"
+        conflict_file = installed_dir / "conflict"
+        conflict_file.write_text("irreplaceable user data\n")
+
+        # The fresh package now has a *directory* at the same relative path.
+        conflict_dir = extension_dir / "conflict"
+        conflict_dir.mkdir()
+        (conflict_dir / "inner.txt").write_text("packaged\n")
+
+        with pytest.raises(ExtensionError) as excinfo:
+            manager.install_from_directory(
+                extension_dir, "0.1.0", register_commands=False, force=True
+            )
+
+        extensions_root = project_dir / ".specify" / "extensions"
+        staging_dirs = list(extensions_root.glob(".reinstall-staging-*"))
+        assert staging_dirs, "expected a durable staging copy to survive the failure"
+        staged_conflict = staging_dirs[0] / "conflict"
+        assert staged_conflict.read_text() == "irreplaceable user data\n"
+        assert str(staging_dirs[0]) in str(excinfo.value)
 
 
 def test_forge_extension_install_listing_hyphenates_command_names(

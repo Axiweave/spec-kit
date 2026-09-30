@@ -6,6 +6,7 @@ forwarders preserve established direct-import and monkeypatch boundaries.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -180,6 +181,282 @@ def _reject_insecure_download_redirect(old_url: str, new_url: str) -> None:
         "redirect target must use HTTPS without entering a local target; "
         "loopback HTTP may only redirect from another loopback URL"
     )
+
+
+def _workspace_relative_generated_path(project_root: Path, dest_path: Path) -> str | None:
+    """POSIX path of *dest_path* relative to the workspace root, or ``None``.
+
+    Optional registry ``generated_files`` records only describe
+    workspace-tracked content. A destination outside the workspace root
+    returns ``None`` instead of raising: the field is additive provenance
+    for the external-workspace Git history feature, never an install gate.
+    """
+    try:
+        return (
+            dest_path.resolve()
+            .relative_to(workspace_root_for(project_root).resolve())
+            .as_posix()
+        )
+    except ValueError:
+        return None
+
+
+def _sha256_file(path: Path) -> str:
+    """Streamed SHA-256 hex digest of a regular file's current bytes."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(65536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _generated_files_baseline(entry: Any) -> dict[str, str]:
+    """Read the prior install's ``generated_files`` baseline, conservatively.
+
+    A missing, malformed, or absent baseline yields ``{}`` -- callers then
+    treat every on-disk file as unknown/custom (preserved, never silently
+    overwritten), which is the conservative-inclusion default.
+    """
+    if not isinstance(entry, dict):
+        return {}
+    baseline = entry.get("generated_files")
+    return baseline if isinstance(baseline, dict) else {}
+
+
+def _generated_files_entry(
+    project_root: Path, produced: dict[Path, bytes]
+) -> dict[str, str]:
+    """Optional registry ``generated_files`` field.
+
+    Maps each produced file's workspace-relative path to the SHA-256 hex
+    digest of the exact bytes this install wrote there -- not bytes merely
+    observed on disk. A durable declaration the installer never writes
+    (e.g. the JSON registry entry itself) is never included here.
+    """
+    generated: dict[str, str] = {}
+    for dest_path, content in produced.items():
+        rel = _workspace_relative_generated_path(project_root, dest_path)
+        if rel is not None:
+            generated[rel] = hashlib.sha256(content).hexdigest()
+    return generated
+
+
+def _generated_files_entry_from_dir(
+    project_root: Path,
+    installed_dir: Path,
+    *,
+    preserved: dict[str, str | None] | None = None,
+) -> dict[str, str]:
+    """``generated_files`` for every regular file under *installed_dir*.
+
+    Call only once *installed_dir* holds its final committed content (the
+    atomic swap/rename already landed). *preserved* names paths this
+    install did NOT freshly produce -- ``_preserve_custom_content_into_staged``
+    builds it. For each such path this uses its mapped value verbatim
+    (the prior baseline hash for a preserved edit) instead of hashing the
+    file, and a ``None`` value omits an unknown custom file entirely: a
+    file this install never produced must never gain a produced-content
+    hash. Every other file is freshly written source content, hashed here.
+    """
+    preserved = preserved or {}
+    generated: dict[str, str] = {}
+    for path in sorted(installed_dir.rglob("*")):
+        if not path.is_file() or path.is_symlink():
+            continue
+        rel = _workspace_relative_generated_path(project_root, path)
+        if rel is None:
+            continue
+        if rel in preserved:
+            baseline = preserved[rel]
+            if baseline is not None:
+                generated[rel] = baseline
+            continue
+        generated[rel] = _sha256_file(path)
+    return generated
+
+
+def _preserve_custom_content_into_staged(
+    project_root: Path,
+    staged_dir: Path,
+    dest_dir: Path,
+    old_baseline: dict[str, str],
+) -> dict[str, str | None]:
+    """Merge *dest_dir*'s edited/custom files into *staged_dir* before an
+    atomic swap, so a reinstall/restore never silently discards content
+    this installer did not itself just produce.
+
+    For each regular file currently under *dest_dir*: if its workspace-relative
+    path has a recorded *old_baseline* hash and the file's current bytes still
+    match it, the file is unmodified producer content -- leave *staged_dir*'s
+    copy (if any) alone. Otherwise (an edited producer-matched file, or a
+    path *old_baseline* never knew about at all) copy *dest_dir*'s current
+    bytes into *staged_dir* at the same relative path, overwriting whatever
+    the new source staged there.
+
+    Raises ``OSError`` instead of writing when any path component from
+    *staged_dir* down through the target leaf is already a symlink (an
+    incoming/new source, or a racing concurrent process, staged one at or
+    above a path this call needs to preserve). Skipping that write would
+    let the later atomic swap replace the custom/edited content with the
+    symlink -- discarding it -- and writing through the symlink could
+    escape *staged_dir* entirely; neither is safe, so the whole install is
+    rejected instead. This function only reads *dest_dir* and writes
+    *staged_dir*, so a caller that lets this propagate (its existing
+    OSError/typer.Exit boundary, discarding *staged_dir*) leaves *dest_dir*
+    -- the live installed tree -- completely untouched.
+
+    Returns a workspace-relative path -> ``generated_files`` value map for
+    every preserved path: the untouched *old_baseline* hash for a preserved
+    edit (never a fresh hash of bytes this install did not produce), or
+    ``None`` for a path with no baseline at all (unknown custom content,
+    omitted from ``generated_files`` entirely). Paths absent from the
+    returned map were freshly (re)written from the new source.
+    """
+    import shutil as _shutil
+
+    preserved: dict[str, str | None] = {}
+    if not dest_dir.exists():
+        return preserved
+    for path in sorted(dest_dir.rglob("*")):
+        if not path.is_file() or path.is_symlink():
+            continue
+        rel_in_dir = path.relative_to(dest_dir)
+        rel_ws = _workspace_relative_generated_path(project_root, path)
+        baseline_hash = old_baseline.get(rel_ws) if rel_ws is not None else None
+        if baseline_hash is not None and _sha256_file(path) == baseline_hash:
+            # Unmodified producer content: the new source's own copy (or
+            # its absence) governs this path; nothing to preserve.
+            continue
+        staged_target = staged_dir
+        for part in rel_in_dir.parts:
+            staged_target = staged_target / part
+            if staged_target.is_symlink():
+                raise OSError(
+                    "Refusing to install: the new source stages a symlink "
+                    f"at '{staged_target.relative_to(staged_dir)}', which "
+                    "conflicts with existing custom content at that path"
+                )
+        staged_target.parent.mkdir(parents=True, exist_ok=True)
+        _shutil.copy2(path, staged_target)
+        if rel_ws is not None:
+            preserved[rel_ws] = baseline_hash  # None for unknown custom content
+    return preserved
+
+
+def _swap_dir_with_backup(
+    staged_dir: Path, dest_dir: Path, backup_parent: Path, backup_prefix: str
+) -> Path | None:
+    """Atomically replace *dest_dir* with *staged_dir*.
+
+    If *dest_dir* exists, it is first renamed aside to a unique sibling
+    under *backup_parent* so a later failure swapping *staged_dir* into
+    place can restore it via rename. Returns that backup path (left
+    populated with the prior content) for the caller to discard on success
+    or restore after a subsequent failure (e.g. ``registry.add()``), or
+    ``None`` when *dest_dir* did not exist (a fresh install).
+    """
+    import tempfile
+
+    backup_dir: Path | None = None
+    if dest_dir.exists():
+        backup_dir = Path(
+            tempfile.mkdtemp(prefix=backup_prefix, dir=backup_parent)
+        )
+        backup_dir.rmdir()
+        os.replace(dest_dir, backup_dir)
+    try:
+        os.replace(staged_dir, dest_dir)
+    except BaseException:
+        if backup_dir is not None:
+            os.replace(backup_dir, dest_dir)
+            backup_dir = None
+        raise
+    return backup_dir
+
+
+def _discard_or_restore_dir_after_failure(
+    dest_dir: Path,
+    backup_dir: Path | None,
+    scratch_parent: Path,
+    scratch_prefix: str,
+) -> None:
+    """Best-effort cleanup after a failure following ``_swap_dir_with_backup``.
+
+    Renames the just-installed *dest_dir* aside and removes it. When
+    *backup_dir* holds prior content (a restore/reinstall, not a fresh
+    install), also restores it back into *dest_dir*'s place. Reports a
+    warning instead of raising -- the caller already has its own primary
+    error to surface.
+    """
+    import shutil
+    import tempfile
+
+    failed_dir: Path | None = None
+    try:
+        failed_dir = Path(
+            tempfile.mkdtemp(prefix=scratch_prefix, dir=scratch_parent)
+        )
+        failed_dir.rmdir()
+        os.replace(dest_dir, failed_dir)
+        if backup_dir is not None:
+            os.replace(backup_dir, dest_dir)
+    except OSError as exc:
+        console.print(
+            "[yellow]Warning:[/yellow] Failed to fully restore the prior "
+            f"package: {_escape_markup(str(exc))}"
+        )
+    finally:
+        if failed_dir is not None and failed_dir.exists():
+            try:
+                shutil.rmtree(failed_dir)
+            except OSError as cleanup_exc:
+                console.print(
+                    "[yellow]Warning:[/yellow] Could not remove failed "
+                    f"package directory: {_escape_markup(str(cleanup_exc))}"
+                )
+
+
+def _commit_or_preserve_workflow_file(
+    project_root: Path,
+    staged_file: "_StagedWorkflowFile",
+    dest_file: Path,
+    dest_dir: Path,
+    existed_before: bool,
+    old_baseline: dict[str, str],
+    new_content: bytes,
+) -> tuple[bool, Path | None, dict[str, str]]:
+    """Commit *staged_file* onto *dest_file*, unless *dest_file* already has
+    content this install cannot prove is unmodified producer output -- no
+    recorded *old_baseline* hash for it at all (unknown/legacy content), or
+    a recorded baseline its current bytes no longer match (a user edit) --
+    then discard the staged copy and preserve that content untouched,
+    exactly as a directory-package restore preserves an edited or fully
+    custom sibling file.
+
+    Returns ``(committed, backup_file, generated_files_for_this_path)``.
+    When ``committed`` is False nothing on disk changed and *backup_file*
+    is always ``None`` (there is nothing to roll back); the returned map
+    carries the untouched *old_baseline* hash for a preserved edit, or is
+    empty for preserved content with no baseline at all (never invented).
+    When ``committed`` is True, *backup_file* is ``_commit_workflow_file``'s
+    own rollback handle (possibly ``None`` for a fresh install with no
+    prior file).
+    """
+    rel = _workspace_relative_generated_path(project_root, dest_file)
+    baseline_hash = old_baseline.get(rel) if rel is not None else None
+    if dest_file.exists() and (
+        baseline_hash is None or _sha256_file(dest_file) != baseline_hash
+    ):
+        _safe_discard_staged_workflow_file(staged_file, dest_dir, existed_before)
+        generated = (
+            {rel: baseline_hash}
+            if rel is not None and baseline_hash is not None
+            else {}
+        )
+        return False, None, generated
+    backup_file = _commit_workflow_file(staged_file, dest_file, existed_before)
+    generated = _generated_files_entry(project_root, {dest_file: new_content})
+    return True, backup_file, generated
 
 
 # Workflow YAML definitions are small step/metadata text, not binaries, so
@@ -782,9 +1059,14 @@ def _install_workflow_package(
         raise typer.Exit(1)
 
     dest_dir = _safe_workflow_id_dir(workflows_dir, definition.id)
-    staged_dir = Path(
-        tempfile.mkdtemp(prefix=f".{definition.id}.installing-", dir=workflows_dir)
-    )
+    try:
+        workflows_dir.mkdir(parents=True, exist_ok=True)
+        staged_dir = Path(
+            tempfile.mkdtemp(prefix=f".{definition.id}.installing-", dir=workflows_dir)
+        )
+    except OSError as exc:
+        console.print(f"[red]Error:[/red] Cannot stage the workflow package: {_escape_markup(str(exc))}")
+        raise typer.Exit(1) from exc
     try:
         package_root = package_dir.resolve()
 
@@ -825,29 +1107,26 @@ def _install_workflow_package(
                     "rerun the command."
                 )
                 raise typer.Exit(1)
-            if dest_dir.exists():
-                backup_dir = Path(
-                    tempfile.mkdtemp(
-                        prefix=f".{definition.id}.backup-",
-                        dir=workflows_dir,
-                    )
-                )
-                backup_dir.rmdir()
-                os.replace(dest_dir, backup_dir)
-            try:
-                os.replace(staged_dir, dest_dir)
-            except BaseException:
-                if backup_dir is not None:
-                    os.replace(backup_dir, dest_dir)
-                    backup_dir = None
-                raise
+            old_baseline = _generated_files_baseline(existing)
+            preserved = _preserve_custom_content_into_staged(
+                project_root, staged_dir, dest_dir, old_baseline
+            )
+            backup_dir = _swap_dir_with_backup(
+                staged_dir, dest_dir, workflows_dir, f".{definition.id}.backup-"
+            )
 
-            entry = {
-                "name": definition.name,
-                "version": definition.version,
-                "description": definition.description,
-                "source": source_label,
-            }
+            entry = dict(existing) if isinstance(existing, dict) else {}
+            entry.update(
+                {
+                    "name": definition.name,
+                    "version": definition.version,
+                    "description": definition.description,
+                    "source": source_label,
+                    "generated_files": _generated_files_entry_from_dir(
+                        project_root, dest_dir, preserved=preserved
+                    ),
+                }
+            )
             if catalog_info is not None:
                 entry.update(
                     {
@@ -856,38 +1135,12 @@ def _install_workflow_package(
                         "url": catalog_info.get("url", ""),
                     }
                 )
-            if isinstance(existing, dict) and not existing.get("enabled", True):
-                entry["enabled"] = False
             try:
                 registry.add(definition.id, entry)
             except (OSError, TypeError, ValueError):
-                failed_dir: Path | None = None
-                try:
-                    failed_dir = Path(
-                        tempfile.mkdtemp(
-                            prefix=f".{definition.id}.failed-",
-                            dir=workflows_dir,
-                        )
-                    )
-                    failed_dir.rmdir()
-                    os.replace(dest_dir, failed_dir)
-                    if backup_dir is not None:
-                        os.replace(backup_dir, dest_dir)
-                        backup_dir = None
-                except OSError as rollback_exc:
-                    console.print(
-                        "[yellow]Warning:[/yellow] Failed to fully restore the prior "
-                        f"workflow package: {_escape_markup(str(rollback_exc))}"
-                    )
-                finally:
-                    if failed_dir is not None and failed_dir.exists():
-                        try:
-                            shutil.rmtree(failed_dir)
-                        except OSError as cleanup_exc:
-                            console.print(
-                                "[yellow]Warning:[/yellow] Could not remove failed "
-                                f"workflow package: {_escape_markup(str(cleanup_exc))}"
-                            )
+                _discard_or_restore_dir_after_failure(
+                    dest_dir, backup_dir, workflows_dir, f".{definition.id}.failed-"
+                )
                 raise
     except typer.Exit:
         raise
@@ -1370,10 +1623,22 @@ def _install_workflow_from_catalog(
                     )
                     raise typer.Exit(1)
             # Commit the staged download onto workflow_file via an atomic
-            # swap. A prior file is renamed aside for registry rollback.
+            # swap, unless workflow_file was hand-edited since the last
+            # install -- then the edit is preserved untouched instead. A
+            # prior committed file is renamed aside for registry rollback.
+            existing = transaction_registry.get(workflow_id)
+            old_baseline = _generated_files_baseline(existing)
             try:
-                backup_file = _commit_workflow_file(
-                    staged_file, workflow_file, transaction_existed_before
+                committed, backup_file, generated_files = (
+                    _commit_or_preserve_workflow_file(
+                        project_root,
+                        staged_file,
+                        workflow_file,
+                        workflow_dir,
+                        transaction_existed_before,
+                        old_baseline,
+                        downloaded_content,
+                    )
                 )
             except OSError as exc:
                 _safe_discard_staged_workflow_file(
@@ -1385,30 +1650,29 @@ def _install_workflow_from_catalog(
                 )
                 raise typer.Exit(1)
 
-            entry = {
-                "name": definition.name or info.get("name", workflow_id),
-                "version": definition.version or info.get("version", "0.0.0"),
-                "description": definition.description
-                or info.get("description", ""),
-                "source": "catalog",
-                "catalog_name": info.get("_catalog_name", ""),
-                "url": workflow_url,
-            }
-            # Preserve a prior disabled state across updates/reinstalls.
-            existing = transaction_registry.get(workflow_id)
-            if isinstance(existing, dict) and not existing.get(
-                "enabled", True
-            ):
-                entry["enabled"] = False
+            entry = dict(existing) if isinstance(existing, dict) else {}
+            entry.update(
+                {
+                    "name": definition.name or info.get("name", workflow_id),
+                    "version": definition.version or info.get("version", "0.0.0"),
+                    "description": definition.description
+                    or info.get("description", ""),
+                    "source": "catalog",
+                    "catalog_name": info.get("_catalog_name", ""),
+                    "url": workflow_url,
+                    "generated_files": generated_files,
+                }
+            )
             try:
                 transaction_registry.add(workflow_id, entry)
             except (OSError, TypeError, ValueError) as exc:
-                _safe_rollback_committed_workflow_file(
-                    workflow_file,
-                    workflow_dir,
-                    transaction_existed_before,
-                    backup_file,
-                )
+                if committed:
+                    _safe_rollback_committed_workflow_file(
+                        workflow_file,
+                        workflow_dir,
+                        transaction_existed_before,
+                        backup_file,
+                    )
                 console.print(
                     f"[red]Error:[/red] Failed to update workflow registry for "
                     f"'{_escape_markup(workflow_id)}': "
@@ -1416,7 +1680,8 @@ def _install_workflow_from_catalog(
                 )
                 raise typer.Exit(1)
             # Registry update succeeded while the transaction lock is held.
-            _discard_committed_backup_file(backup_file)
+            if committed:
+                _discard_committed_backup_file(backup_file)
     except typer.Exit:
         _safe_discard_staged_workflow_file(
             staged_file, workflow_dir, existed_before

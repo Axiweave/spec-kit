@@ -115,14 +115,17 @@ def claim_storage(project: Project) -> Iterator[None]:
             claimed.append((path, data))
         yield
     except BaseException as exc:
-        for path, data in reversed(claimed):
-            try:
-                if read_json(path) == data:
-                    path.unlink()
-            except (OSError, ValueError) as cleanup_error:
-                exc.add_note(f"Could not remove claimed metadata at {path}: {cleanup_error}")
-        # Keep partial assets and unrelated content. Remove only empty directories.
-        for directory in reversed(directories):
-            with suppress(OSError):
-                directory.rmdir()
+        # A caller that already made history durable (see WorkspaceGitError.committed)
+        # must keep its claim: unclaiming would orphan a workspace with real commits.
+        if not getattr(exc, "committed", False):
+            for path, data in reversed(claimed):
+                try:
+                    if read_json(path) == data:
+                        path.unlink()
+                except (OSError, ValueError) as cleanup_error:
+                    exc.add_note(f"Could not remove claimed metadata at {path}: {cleanup_error}")
+            # Keep partial assets and unrelated content. Remove only empty directories.
+            for directory in reversed(directories):
+                with suppress(OSError):
+                    directory.rmdir()
         raise

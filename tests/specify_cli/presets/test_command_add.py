@@ -285,6 +285,7 @@ class TestPresetAdd:
 
         warning.assert_called_once_with(ANY, manifest)
 
+
     def test_preset_add_from_url_rejects_insecure_redirect(
         self, project_dir, monkeypatch
     ):
@@ -570,6 +571,7 @@ class TestPresetAdd:
         output = strip_ansi(capsys.readouterr().out)
         assert "redirected to a disallowed URL" in output
         assert "must use HTTPS with a hostname" in output
+
 
     def test_preset_add_from_url_reads_in_bounded_chunks(
         self, project_dir, monkeypatch

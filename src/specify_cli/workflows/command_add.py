@@ -139,11 +139,24 @@ def workflow_add(
             with transaction:
                 transaction_existed_before = existed_before or dest_file.exists()
                 transaction_registry = cli._open_workflow_registry(project_root)
-                # Commit the staged copy onto dest_file via an atomic swap. A
-                # prior file is renamed aside so registry failure can restore it.
+                existing = transaction_registry.get(definition.id)
+                old_baseline = cli._generated_files_baseline(existing)
+                # Commit the staged copy onto dest_file via an atomic swap,
+                # unless dest_file was hand-edited since the last install --
+                # then the edit is preserved untouched instead. A prior
+                # committed file is renamed aside so registry failure can
+                # restore it.
                 try:
-                    backup_file = cli._commit_workflow_file(
-                        staged_file, dest_file, transaction_existed_before
+                    committed, backup_file, generated_files = (
+                        cli._commit_or_preserve_workflow_file(
+                            project_root,
+                            staged_file,
+                            dest_file,
+                            dest_dir,
+                            transaction_existed_before,
+                            old_baseline,
+                            source_content,
+                        )
                     )
                 except OSError as exc:
                     cli._safe_discard_staged_workflow_file(
@@ -156,23 +169,25 @@ def workflow_add(
                     )
                     raise cli.typer.Exit(1)
                 try:
-                    entry = {
-                        "name": definition.name,
-                        "version": definition.version,
-                        "description": definition.description,
-                        "source": source_label,
-                    }
-                    existing = transaction_registry.get(definition.id)
-                    if isinstance(existing, dict) and not existing.get("enabled", True):
-                        entry["enabled"] = False
+                    entry = dict(existing) if isinstance(existing, dict) else {}
+                    entry.update(
+                        {
+                            "name": definition.name,
+                            "version": definition.version,
+                            "description": definition.description,
+                            "source": source_label,
+                            "generated_files": generated_files,
+                        }
+                    )
                     transaction_registry.add(definition.id, entry)
                 except (OSError, TypeError, ValueError) as exc:
-                    cli._safe_rollback_committed_workflow_file(
-                        dest_file,
-                        dest_dir,
-                        transaction_existed_before,
-                        backup_file,
-                    )
+                    if committed:
+                        cli._safe_rollback_committed_workflow_file(
+                            dest_file,
+                            dest_dir,
+                            transaction_existed_before,
+                            backup_file,
+                        )
                     cli.console.print(
                         f"[red]Error:[/red] Failed to update workflow registry for "
                         f"'{cli._escape_markup(definition.id)}': "
@@ -180,7 +195,8 @@ def workflow_add(
                     )
                     raise cli.typer.Exit(1)
                 # Registry update succeeded while the transaction lock is held.
-                cli._discard_committed_backup_file(backup_file)
+                if committed:
+                    cli._discard_committed_backup_file(backup_file)
         except cli.typer.Exit:
             cli._safe_discard_staged_workflow_file(
                 staged_file, dest_dir, existed_before

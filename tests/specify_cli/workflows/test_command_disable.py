@@ -88,19 +88,37 @@ steps:
 
         workflows_dir = project_dir / ".specify" / "workflows"
         workflow_file = workflows_dir / "align-wf" / "workflow.yml"
-        workflow_file.parent.mkdir(parents=True)
-        workflow_file.write_text(
-            self.WORKFLOW_YAML.format(version="1.0.0"), encoding="utf-8"
-        )
-        WorkflowRegistry(project_dir).add(
-            "align-wf",
-            {
+
+        # Legitimately install v1.0.0 via the public install path first so
+        # its generated_files baseline reflects real producer-hashed
+        # content, not a hand-constructed guess -- required now that the
+        # installer conservatively preserves any file whose baseline it
+        # cannot verify.
+        monkeypatch.setattr(
+            WorkflowCatalog,
+            "get_workflow_info",
+            lambda self, wid: {
+                "id": wid,
                 "name": "Align Workflow",
                 "version": "1.0.0",
-                "source": "catalog",
-                "enabled": initial_enabled,
+                "url": "https://example.com/1.0.0.yml",
+                "_install_allowed": True,
+                "_catalog_name": "test-catalog",
             },
         )
+        monkeypatch.setattr(
+            "specify_cli.authentication.http.open_url",
+            lambda url, timeout=None, extra_headers=None,
+            redirect_validator=None: self._FakeResponse(
+                self.WORKFLOW_YAML.format(version="1.0.0").encode(), url
+            ),
+        )
+        _commands._install_workflow_from_catalog(project_dir, workflows_dir, "align-wf")
+        if not initial_enabled:
+            registry = WorkflowRegistry(project_dir)
+            entry = dict(registry.get("align-wf"))
+            entry["enabled"] = False
+            registry.add("align-wf", entry)
         monkeypatch.setattr(
             _commands, "_require_specify_project", lambda: project_dir
         )

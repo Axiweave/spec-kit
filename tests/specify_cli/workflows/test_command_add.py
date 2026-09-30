@@ -2071,6 +2071,126 @@ steps:
         leftovers = [p.name for p in workflow_dir.iterdir() if p.name != "workflow.yml"]
         assert leftovers == [], f"orphan sibling(s) left behind: {leftovers}"
 
+    def test_add_dev_reinstall_preserves_hand_edited_workflow_yaml(
+        self, project_dir, monkeypatch
+    ):
+        """A reinstall over a hand-edited installed workflow.yml must not
+        clobber the edit: the file's producer-hash baseline no longer
+        matches its current bytes, so the new dev source's copy is
+        discarded and the edit is kept untouched -- the single-file
+        counterpart to a package install preserving an edited sibling."""
+        from typer.testing import CliRunner
+        from specify_cli import app
+        from specify_cli.workflows.catalog import WorkflowRegistry
+
+        monkeypatch.chdir(project_dir)
+        runner = CliRunner()
+        self._install_dev(runner, app, project_dir)
+        workflow_file = (
+            project_dir / ".specify" / "workflows" / "align-wf" / "workflow.yml"
+        )
+        edited = workflow_file.read_text(encoding="utf-8") + "\n# user note\n"
+        workflow_file.write_text(edited, encoding="utf-8")
+
+        src = self._write_workflow_dir(project_dir, version="2.0.0")
+        result = runner.invoke(app, ["workflow", "add", str(src), "--dev"])
+
+        assert result.exit_code == 0, result.output
+        assert workflow_file.read_text(encoding="utf-8") == edited
+        registry = WorkflowRegistry(project_dir)
+        assert registry.get("align-wf")["version"] == "2.0.0"
+
+    def test_add_dev_reinstall_restores_workflow_yaml_missing_after_clone(
+        self, project_dir, monkeypatch
+    ):
+        """A reinstall over a directory that survived a clone (e.g. via its
+        registry record and any tracked siblings) but lost its .gitignored
+        workflow.yml must rewrite that file, not silently skip it."""
+        from typer.testing import CliRunner
+        from specify_cli import app
+        from specify_cli.workflows.catalog import WorkflowRegistry
+
+        monkeypatch.chdir(project_dir)
+        runner = CliRunner()
+        self._install_dev(runner, app, project_dir)
+        workflow_file = (
+            project_dir / ".specify" / "workflows" / "align-wf" / "workflow.yml"
+        )
+        workflow_file.unlink()
+
+        src = self._write_workflow_dir(project_dir, version="2.0.0")
+        result = runner.invoke(app, ["workflow", "add", str(src), "--dev"])
+
+        assert result.exit_code == 0, result.output
+        assert workflow_file.read_text(encoding="utf-8") == self.WORKFLOW_YAML.format(
+            version="2.0.0"
+        )
+        assert WorkflowRegistry(project_dir).get("align-wf")["version"] == "2.0.0"
+
+    def test_add_dev_reinstall_preserves_file_with_no_baseline_recorded(
+        self, project_dir, monkeypatch
+    ):
+        """A pre-generated_files registry record (or one that otherwise
+        lost its baseline) has no recorded hash for its installed
+        workflow.yml at all. Reinstalling over it must treat that file as
+        unknown content -- conservatively preserved, never silently
+        overwritten, exactly like a file whose recorded baseline no
+        longer matches its current bytes."""
+        from typer.testing import CliRunner
+        from specify_cli import app
+        from specify_cli.workflows.catalog import WorkflowRegistry
+
+        monkeypatch.chdir(project_dir)
+        runner = CliRunner()
+        self._install_dev(runner, app, project_dir)
+
+        registry = WorkflowRegistry(project_dir)
+        legacy_entry = dict(registry.get("align-wf"))
+        legacy_entry.pop("generated_files", None)
+        registry.add("align-wf", legacy_entry)
+
+        workflow_file = (
+            project_dir / ".specify" / "workflows" / "align-wf" / "workflow.yml"
+        )
+        legacy_bytes = workflow_file.read_bytes()
+
+        src = self._write_workflow_dir(project_dir, version="2.0.0")
+        result = runner.invoke(app, ["workflow", "add", str(src), "--dev"])
+
+        assert result.exit_code == 0, result.output
+        assert workflow_file.read_bytes() == legacy_bytes
+        entry = WorkflowRegistry(project_dir).get("align-wf")
+        assert entry["version"] == "2.0.0"
+        assert entry.get("generated_files", {}) == {}
+
+    def test_add_dev_reinstall_preserves_unrelated_registry_fields(
+        self, project_dir, monkeypatch
+    ):
+        """registry.add() replaces the stored entry wholesale, so a
+        reinstall must build the new entry from the existing record (not
+        a bare literal) -- otherwise a field this code doesn't know about
+        (from a newer Spec Kit version, or set by another tool) is
+        silently dropped on every reinstall."""
+        from typer.testing import CliRunner
+        from specify_cli import app
+        from specify_cli.workflows.catalog import WorkflowRegistry
+
+        monkeypatch.chdir(project_dir)
+        runner = CliRunner()
+        src = self._install_dev(runner, app, project_dir)
+
+        registry = WorkflowRegistry(project_dir)
+        entry = dict(registry.get("align-wf"))
+        entry["future_field"] = "set by a newer spec-kit or another tool"
+        registry.add("align-wf", entry)
+
+        result = runner.invoke(app, ["workflow", "add", str(src), "--dev"])
+        assert result.exit_code == 0, result.output
+
+        assert WorkflowRegistry(project_dir).get("align-wf")["future_field"] == (
+            "set by a newer spec-kit or another tool"
+        )
+
     def test_add_dev_successful_reinstall_backup_cleanup_failure_still_succeeds(
         self, project_dir, monkeypatch
     ):
@@ -2480,6 +2600,173 @@ steps:
         leftovers = [p.name for p in workflow_dir.iterdir() if p.name != "workflow.yml"]
         assert leftovers == [], f"orphan sibling(s) left behind: {leftovers}"
 
+    def test_add_catalog_reinstall_preserves_hand_edited_workflow_yaml(
+        self, project_dir, monkeypatch
+    ):
+        """A catalog reinstall over a hand-edited installed workflow.yml
+        must not clobber the edit: the file's producer-hash baseline no
+        longer matches its current bytes, so the freshly downloaded copy
+        is discarded and the edit is kept untouched."""
+        from typer.testing import CliRunner
+        from specify_cli import app
+        from specify_cli.workflows.catalog import WorkflowCatalog, WorkflowRegistry
+
+        monkeypatch.chdir(project_dir)
+        monkeypatch.setattr(
+            WorkflowCatalog,
+            "get_workflow_info",
+            lambda self, wid: {
+                "id": wid,
+                "name": "Align Workflow",
+                "version": "1.0.0",
+                "url": "https://example.com/workflow.yml",
+                "_install_allowed": True,
+                "_catalog_name": "test-catalog",
+            },
+        )
+        original_data = self.WORKFLOW_YAML.format(version="1.0.0").encode()
+        runner = CliRunner()
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "specify_cli.authentication.http.open_url",
+                lambda url, timeout=None, extra_headers=None, redirect_validator=None: self._FakeResponse(
+                    original_data, url
+                ),
+            )
+            result = runner.invoke(app, ["workflow", "add", "align-wf"])
+        assert result.exit_code == 0, result.output
+
+        workflow_file = (
+            project_dir / ".specify" / "workflows" / "align-wf" / "workflow.yml"
+        )
+        edited = original_data + b"\n# user note\n"
+        workflow_file.write_bytes(edited)
+
+        new_data = self.WORKFLOW_YAML.format(version="2.0.0").encode()
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "specify_cli.authentication.http.open_url",
+                lambda url, timeout=None, extra_headers=None, redirect_validator=None: self._FakeResponse(
+                    new_data, url
+                ),
+            )
+            result = runner.invoke(app, ["workflow", "add", "align-wf"])
+
+        assert result.exit_code == 0, result.output
+        assert workflow_file.read_bytes() == edited
+        registry = WorkflowRegistry(project_dir)
+        assert registry.get("align-wf")["version"] == "2.0.0"
+
+    def test_add_catalog_reinstall_restores_workflow_yaml_missing_after_clone(
+        self, project_dir, monkeypatch
+    ):
+        """A catalog reinstall over a registry record whose workflow.yml is
+        missing (e.g. after a clone dropped .gitignored generated content)
+        must rewrite that file, not silently skip it."""
+        from typer.testing import CliRunner
+        from specify_cli import app
+        from specify_cli.workflows.catalog import WorkflowCatalog, WorkflowRegistry
+
+        monkeypatch.chdir(project_dir)
+        monkeypatch.setattr(
+            WorkflowCatalog,
+            "get_workflow_info",
+            lambda self, wid: {
+                "id": wid,
+                "name": "Align Workflow",
+                "version": "1.0.0",
+                "url": "https://example.com/workflow.yml",
+                "_install_allowed": True,
+                "_catalog_name": "test-catalog",
+            },
+        )
+        original_data = self.WORKFLOW_YAML.format(version="1.0.0").encode()
+        runner = CliRunner()
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "specify_cli.authentication.http.open_url",
+                lambda url, timeout=None, extra_headers=None, redirect_validator=None: self._FakeResponse(
+                    original_data, url
+                ),
+            )
+            result = runner.invoke(app, ["workflow", "add", "align-wf"])
+        assert result.exit_code == 0, result.output
+
+        workflow_file = (
+            project_dir / ".specify" / "workflows" / "align-wf" / "workflow.yml"
+        )
+        workflow_file.unlink()
+
+        new_data = self.WORKFLOW_YAML.format(version="2.0.0").encode()
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "specify_cli.authentication.http.open_url",
+                lambda url, timeout=None, extra_headers=None, redirect_validator=None: self._FakeResponse(
+                    new_data, url
+                ),
+            )
+            result = runner.invoke(app, ["workflow", "add", "align-wf"])
+
+        assert result.exit_code == 0, result.output
+        assert workflow_file.read_bytes() == new_data
+        assert WorkflowRegistry(project_dir).get("align-wf")["version"] == "2.0.0"
+
+    def test_add_catalog_reinstall_preserves_unrelated_registry_fields(
+        self, project_dir, monkeypatch
+    ):
+        """registry.add() replaces the stored entry wholesale, so a
+        catalog reinstall must build the new entry from the existing
+        record (not a bare literal) -- otherwise a field this code
+        doesn't know about (from a newer Spec Kit version, or set by
+        another tool) is silently dropped on every reinstall."""
+        from typer.testing import CliRunner
+        from specify_cli import app
+        from specify_cli.workflows.catalog import WorkflowCatalog, WorkflowRegistry
+
+        monkeypatch.chdir(project_dir)
+        monkeypatch.setattr(
+            WorkflowCatalog,
+            "get_workflow_info",
+            lambda self, wid: {
+                "id": wid,
+                "name": "Align Workflow",
+                "version": "1.0.0",
+                "url": "https://example.com/workflow.yml",
+                "_install_allowed": True,
+                "_catalog_name": "test-catalog",
+            },
+        )
+        original_data = self.WORKFLOW_YAML.format(version="1.0.0").encode()
+        runner = CliRunner()
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "specify_cli.authentication.http.open_url",
+                lambda url, timeout=None, extra_headers=None, redirect_validator=None: self._FakeResponse(
+                    original_data, url
+                ),
+            )
+            result = runner.invoke(app, ["workflow", "add", "align-wf"])
+        assert result.exit_code == 0, result.output
+
+        registry = WorkflowRegistry(project_dir)
+        entry = dict(registry.get("align-wf"))
+        entry["future_field"] = "set by a newer spec-kit or another tool"
+        registry.add("align-wf", entry)
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(
+                "specify_cli.authentication.http.open_url",
+                lambda url, timeout=None, extra_headers=None, redirect_validator=None: self._FakeResponse(
+                    original_data, url
+                ),
+            )
+            result = runner.invoke(app, ["workflow", "add", "align-wf"])
+        assert result.exit_code == 0, result.output
+
+        assert WorkflowRegistry(project_dir).get("align-wf")["future_field"] == (
+            "set by a newer spec-kit or another tool"
+        )
+
     @pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits")
     def test_add_catalog_fresh_install_uses_project_file_mode(
         self, project_dir, monkeypatch
@@ -2537,18 +2824,32 @@ steps:
 
         workflows_dir = project_dir / ".specify" / "workflows"
         workflow_file = workflows_dir / "align-wf" / "workflow.yml"
-        workflow_file.parent.mkdir(parents=True)
-        workflow_file.write_text(
-            self.WORKFLOW_YAML.format(version="1.0.0"), encoding="utf-8"
-        )
-        WorkflowRegistry(project_dir).add(
-            "align-wf",
-            {
+
+        # Legitimately install v1.0.0 via the public install path first so
+        # its generated_files baseline reflects real producer-hashed
+        # content, not a hand-constructed guess -- required now that the
+        # installer conservatively preserves any file whose baseline it
+        # cannot verify.
+        monkeypatch.setattr(
+            WorkflowCatalog,
+            "get_workflow_info",
+            lambda self, wid: {
+                "id": wid,
                 "name": "Align Workflow",
                 "version": "1.0.0",
-                "source": "catalog",
+                "url": "https://example.com/1.0.0.yml",
+                "_install_allowed": True,
+                "_catalog_name": "test-catalog",
             },
         )
+        monkeypatch.setattr(
+            "specify_cli.authentication.http.open_url",
+            lambda url, timeout=None, extra_headers=None,
+            redirect_validator=None: self._FakeResponse(
+                self.WORKFLOW_YAML.format(version="1.0.0").encode(), url
+            ),
+        )
+        _commands._install_workflow_from_catalog(project_dir, workflows_dir, "align-wf")
 
         versions = {"install-a": "2.0.0", "install-b": "3.0.0"}
         monkeypatch.setattr(
@@ -3157,6 +3458,375 @@ steps:
         assert backup_file.read_text(encoding="utf-8") == "original"
         assert fixed_backup.read_text(encoding="utf-8") == "diagnostic copy"
         assert dest_file.read_text(encoding="utf-8") == "replacement"
+
+
+class TestWorkflowGeneratedFilesProvenance:
+    """`generated_files` records the installer's own produced bytes (T005).
+
+    Existing registry records without this optional field must stay valid;
+    these tests only assert the new field's presence and correctness, not
+    that other fields disappear or change shape.
+    """
+
+    WORKFLOW_YAML = """
+schema_version: "1.0"
+workflow:
+  id: "align-wf"
+  name: "Align Workflow"
+  version: "{version}"
+  description: "generated_files provenance test workflow"
+steps:
+  - id: step-one
+    type: shell
+    run: "echo hello"
+"""
+
+    def test_add_dev_yaml_file_records_generated_files_hash(
+        self, project_dir, monkeypatch
+    ):
+        import hashlib
+
+        from typer.testing import CliRunner
+        from specify_cli import app
+        from specify_cli.workflows.catalog import WorkflowRegistry
+
+        monkeypatch.chdir(project_dir)
+        src = project_dir / "wf-src"
+        src.mkdir()
+        (src / "workflow.yml").write_text(
+            self.WORKFLOW_YAML.format(version="1.0.0"), encoding="utf-8"
+        )
+
+        result = CliRunner().invoke(
+            app, ["workflow", "add", str(src / "workflow.yml"), "--dev"]
+        )
+        assert result.exit_code == 0, result.output
+
+        installed = (
+            project_dir / ".specify" / "workflows" / "align-wf" / "workflow.yml"
+        )
+        expected_hash = hashlib.sha256(installed.read_bytes()).hexdigest()
+        entry = WorkflowRegistry(project_dir).get("align-wf")
+        assert entry["generated_files"] == {
+            ".specify/workflows/align-wf/workflow.yml": expected_hash
+        }
+
+    def test_add_local_directory_records_generated_files_for_copied_files_only(
+        self, project_dir, monkeypatch
+    ):
+        """Every file the installer actually copies gets a hash. The
+        reserved ``overlays`` companion directory is never copied, so it
+        must never appear in ``generated_files`` either."""
+        import hashlib
+
+        from typer.testing import CliRunner
+        from specify_cli import app
+        from specify_cli.workflows.catalog import WorkflowRegistry
+
+        monkeypatch.chdir(project_dir)
+        source = project_dir / "wf-pkg"
+        source.mkdir()
+        (source / "workflow.yml").write_text(
+            self.WORKFLOW_YAML.format(version="1.0.0"), encoding="utf-8"
+        )
+        (source / "scripts").mkdir()
+        (source / "scripts" / "helper.sh").write_text("echo helper\n")
+        (source / "overlays").mkdir()
+        (source / "overlays" / "bad.yml").write_text("not installer output\n")
+
+        result = CliRunner().invoke(app, ["workflow", "add", str(source)])
+        assert result.exit_code == 0, result.output
+
+        installed = project_dir / ".specify" / "workflows" / "align-wf"
+        entry = WorkflowRegistry(project_dir).get("align-wf")
+        assert entry["generated_files"] == {
+            ".specify/workflows/align-wf/workflow.yml": hashlib.sha256(
+                (installed / "workflow.yml").read_bytes()
+            ).hexdigest(),
+            ".specify/workflows/align-wf/scripts/helper.sh": hashlib.sha256(
+                (installed / "scripts" / "helper.sh").read_bytes()
+            ).hexdigest(),
+        }
+
+    def test_add_catalog_records_generated_files_hash_of_downloaded_bytes(
+        self, project_dir, monkeypatch
+    ):
+        import hashlib
+
+        from typer.testing import CliRunner
+        from specify_cli import app
+        from specify_cli.workflows.catalog import WorkflowCatalog, WorkflowRegistry
+
+        monkeypatch.chdir(project_dir)
+        monkeypatch.setattr(
+            WorkflowCatalog,
+            "get_workflow_info",
+            lambda self, wid: {
+                "id": wid,
+                "name": "Align Workflow",
+                "version": "1.0.0",
+                "url": "https://example.com/workflow.yml",
+                "_install_allowed": True,
+                "_catalog_name": "test-catalog",
+            },
+        )
+        downloaded = self.WORKFLOW_YAML.format(version="1.0.0").encode()
+
+        class _FakeResponse:
+            def __init__(self, data, url):
+                self._data = data
+                self._url = url
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self, amt=None):
+                data, self._data = self._data, b""
+                return data
+
+            def getheader(self, name, default=None):
+                return default
+
+            def geturl(self):
+                return self._url
+
+        monkeypatch.setattr(
+            "specify_cli.authentication.http.open_url",
+            lambda url, timeout=None, extra_headers=None, redirect_validator=None: (
+                _FakeResponse(downloaded, url)
+            ),
+        )
+
+        result = CliRunner().invoke(app, ["workflow", "add", "align-wf"])
+        assert result.exit_code == 0, result.output
+
+        entry = WorkflowRegistry(project_dir).get("align-wf")
+        assert entry["generated_files"] == {
+            ".specify/workflows/align-wf/workflow.yml": hashlib.sha256(
+                downloaded
+            ).hexdigest()
+        }
+
+
+class TestWorkflowPackageReinstallPreservesCustomContent:
+    """Restoring a workflow package after a clone must conserve edits and
+    custom files while refreshing/restoring producer-matched content (T025).
+
+    A package reinstall currently does a full atomic directory swap
+    (`_install_workflow_package`): it silently discards any sibling file
+    that isn't part of the new source, including a file a user hand-edited
+    after the original install. These tests pin the required merge
+    behavior: only files whose current bytes still match the prior
+    `generated_files` baseline (or that are missing entirely) may be
+    overwritten/restored; edited and unknown custom files must survive
+    byte-for-byte.
+    """
+
+    WORKFLOW_YAML = """
+schema_version: "1.0"
+workflow:
+  id: "align-wf"
+  name: "Align Workflow"
+  version: "{version}"
+  description: "restoration test workflow"
+steps:
+  - id: step-one
+    type: shell
+    run: "echo hello"
+"""
+
+    def _write_source_package(self, base, version="1.0.0"):
+        src = base / "wf-src"
+        src.mkdir(parents=True, exist_ok=True)
+        (src / "workflow.yml").write_text(
+            self.WORKFLOW_YAML.format(version=version), encoding="utf-8"
+        )
+        (src / "scripts").mkdir(exist_ok=True)
+        (src / "scripts" / "helper.sh").write_text("echo original helper\n")
+        return src
+
+    def test_reinstall_preserves_edited_file_and_untracked_custom_file(
+        self, project_dir, monkeypatch
+    ):
+        from typer.testing import CliRunner
+        from specify_cli import app
+        from specify_cli.workflows.catalog import WorkflowRegistry
+
+        monkeypatch.chdir(project_dir)
+        src = self._write_source_package(project_dir, version="1.0.0")
+        runner = CliRunner()
+        first = runner.invoke(app, ["workflow", "add", str(src), "--dev"])
+        assert first.exit_code == 0, first.output
+
+        installed = project_dir / ".specify" / "workflows" / "align-wf"
+        original_baseline = WorkflowRegistry(project_dir).get("align-wf")[
+            "generated_files"
+        ][".specify/workflows/align-wf/scripts/helper.sh"]
+
+        # User customization after install: hand-edit an installer-produced
+        # file, and add a brand-new file the installer never wrote.
+        (installed / "scripts" / "helper.sh").write_text("echo user edit\n")
+        (installed / "notes.txt").write_text("kept across reinstall\n")
+
+        # Upstream source moves on to a new version; helper.sh content is
+        # unchanged upstream.
+        (src / "workflow.yml").write_text(
+            self.WORKFLOW_YAML.format(version="2.0.0"), encoding="utf-8"
+        )
+
+        second = runner.invoke(app, ["workflow", "add", str(src), "--dev"])
+        assert second.exit_code == 0, second.output
+
+        # The changed, unedited file refreshes normally.
+        assert (installed / "workflow.yml").read_text(encoding="utf-8") == (
+            self.WORKFLOW_YAML.format(version="2.0.0")
+        )
+        # The hand-edited file must survive untouched -- not reverted to
+        # the source's original bytes.
+        assert (
+            installed / "scripts" / "helper.sh"
+        ).read_text(encoding="utf-8") == "echo user edit\n"
+        # A file the installer never produced must survive untouched.
+        assert (installed / "notes.txt").read_text(encoding="utf-8") == (
+            "kept across reinstall\n"
+        )
+
+        registry = WorkflowRegistry(project_dir)
+        assert registry.get("align-wf")["version"] == "2.0.0"
+        generated = registry.get("align-wf")["generated_files"]
+        import hashlib
+
+        assert generated[".specify/workflows/align-wf/workflow.yml"] == (
+            hashlib.sha256(
+                self.WORKFLOW_YAML.format(version="2.0.0").encode()
+            ).hexdigest()
+        )
+        # The preserved edited file keeps its ORIGINAL baseline (not the
+        # new source's hash, and not a hash of the user's edited bytes):
+        # future workspace-history hashing must see current bytes disagree
+        # with the recorded producer hash and therefore track the edit.
+        assert (
+            generated[".specify/workflows/align-wf/scripts/helper.sh"]
+            == original_baseline
+        )
+        assert ".specify/workflows/align-wf/notes.txt" not in generated
+
+    def test_reinstall_restores_file_missing_after_clone(
+        self, project_dir, monkeypatch
+    ):
+        """A file excluded from workspace history because it matched its
+        producer hash is absent after a fresh clone. Re-running the same
+        install must restore it."""
+        from typer.testing import CliRunner
+        from specify_cli import app
+        from specify_cli.workflows.catalog import WorkflowRegistry
+
+        monkeypatch.chdir(project_dir)
+        src = self._write_source_package(project_dir, version="1.0.0")
+        runner = CliRunner()
+        first = runner.invoke(app, ["workflow", "add", str(src), "--dev"])
+        assert first.exit_code == 0, first.output
+
+        installed = project_dir / ".specify" / "workflows" / "align-wf"
+        (installed / "scripts" / "helper.sh").unlink()
+
+        second = runner.invoke(app, ["workflow", "add", str(src), "--dev"])
+        assert second.exit_code == 0, second.output
+
+        assert (installed / "scripts" / "helper.sh").read_text(
+            encoding="utf-8"
+        ) == "echo original helper\n"
+        generated = WorkflowRegistry(project_dir).get("align-wf")[
+            "generated_files"
+        ]
+        assert ".specify/workflows/align-wf/scripts/helper.sh" in generated
+
+    @pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks are unavailable")
+    def test_reinstall_rejects_incoming_symlink_conflicting_with_custom_file(
+        self, project_dir, monkeypatch
+    ):
+        """A reinstall whose freshly staged source lands a symlink at the
+        same relative path as an existing hand-edited/custom file must be
+        rejected outright: silently skipping would let the swap replace
+        the custom content with that symlink and discard it, and writing
+        through the symlink could escape the staged directory entirely.
+        Neither is safe, so the whole install is rejected and the prior
+        tree is left exactly as it was."""
+        import shutil
+
+        from typer.testing import CliRunner
+        from specify_cli import app
+        from specify_cli.workflows.catalog import WorkflowRegistry
+
+        monkeypatch.chdir(project_dir)
+        src = self._write_source_package(project_dir, version="1.0.0")
+        runner = CliRunner()
+        first = runner.invoke(app, ["workflow", "add", str(src), "--dev"])
+        assert first.exit_code == 0, first.output
+
+        installed = project_dir / ".specify" / "workflows" / "align-wf"
+        (installed / "scripts" / "helper.sh").write_text("echo user edit\n")
+        original_registry_entry = WorkflowRegistry(project_dir).get("align-wf")
+
+        victim = project_dir / "victim.txt"
+        victim.write_text("untouched", encoding="utf-8")
+
+        real_copytree = shutil.copytree
+
+        def raced_copytree(source, dest, *args, **kwargs):
+            result = real_copytree(source, dest, *args, **kwargs)
+            # Simulate the freshly staged tree already holding a symlink at
+            # this path -- e.g. a malicious/racing concurrent process, or a
+            # future producer that stages symlinks -- exactly where the
+            # existing install has hand-edited content.
+            target = Path(dest) / "scripts" / "helper.sh"
+            target.unlink()
+            target.symlink_to(victim)
+            return result
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(shutil, "copytree", raced_copytree)
+            result = runner.invoke(app, ["workflow", "add", str(src), "--dev"])
+
+        assert result.exit_code != 0
+        assert victim.read_text(encoding="utf-8") == "untouched"
+        assert (
+            installed / "scripts" / "helper.sh"
+        ).read_text(encoding="utf-8") == "echo user edit\n"
+        assert WorkflowRegistry(project_dir).get("align-wf") == original_registry_entry
+
+    def test_reinstall_preserves_unrelated_registry_fields(
+        self, project_dir, monkeypatch
+    ):
+        """registry.add() replaces the stored entry wholesale, so a
+        restore/reinstall must build the new entry from the existing
+        record (not a bare literal) -- otherwise a field this code
+        doesn't know about (from a newer Spec Kit version, or set by
+        another tool) is silently dropped on every restore."""
+        from typer.testing import CliRunner
+        from specify_cli import app
+        from specify_cli.workflows.catalog import WorkflowRegistry
+
+        monkeypatch.chdir(project_dir)
+        src = self._write_source_package(project_dir, version="1.0.0")
+        runner = CliRunner()
+        first = runner.invoke(app, ["workflow", "add", str(src), "--dev"])
+        assert first.exit_code == 0, first.output
+
+        registry = WorkflowRegistry(project_dir)
+        entry = dict(registry.get("align-wf"))
+        entry["future_field"] = "set by a newer spec-kit or another tool"
+        registry.add("align-wf", entry)
+
+        second = runner.invoke(app, ["workflow", "add", str(src), "--dev"])
+        assert second.exit_code == 0, second.output
+
+        assert WorkflowRegistry(project_dir).get("align-wf")["future_field"] == (
+            "set by a newer spec-kit or another tool"
+        )
 
 
 class TestOverlayCli:

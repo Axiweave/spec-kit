@@ -162,20 +162,35 @@ steps:
         from specify_cli.workflows.catalog import WorkflowCatalog, WorkflowRegistry
 
         monkeypatch.chdir(project_dir)
-        registry = WorkflowRegistry(project_dir)
-        registry.add("align-wf", {
-            "name": "Align Workflow",
-            "version": "1.0.0",
-            "description": "CLI alignment test workflow",
-            "source": "catalog",
-            "catalog_name": "test-catalog",
-            "url": "https://example.com/workflow.yml",
-        })
-        wf_dir = project_dir / ".specify" / "workflows" / "align-wf"
-        wf_dir.mkdir(parents=True)
-        (wf_dir / "workflow.yml").write_text(
-            self.WORKFLOW_YAML.format(version="1.0.0"), encoding="utf-8"
+        runner = CliRunner()
+
+        # Legitimately install v1.0.0 via the public install path first so
+        # its generated_files baseline reflects real producer-hashed
+        # content, not a hand-constructed guess -- required now that the
+        # installer conservatively preserves any file whose baseline it
+        # cannot verify.
+        monkeypatch.setattr(
+            WorkflowCatalog,
+            "get_workflow_info",
+            lambda self, wid: {
+                "id": wid,
+                "name": "Align Workflow",
+                "version": "1.0.0",
+                "url": "https://example.com/workflow.yml",
+                "_install_allowed": True,
+                "_catalog_name": "test-catalog",
+            },
         )
+        with patch(
+            "specify_cli.authentication.http.open_url",
+            side_effect=lambda url, timeout=None, extra_headers=None, redirect_validator=None: self._FakeResponse(
+                self.WORKFLOW_YAML.format(version="1.0.0").encode(), url
+            ),
+        ):
+            first = runner.invoke(app, ["workflow", "add", "align-wf"])
+        assert first.exit_code == 0, first.output
+
+        wf_dir = project_dir / ".specify" / "workflows" / "align-wf"
 
         monkeypatch.setattr(
             WorkflowCatalog,
@@ -190,7 +205,6 @@ steps:
             },
         )
         data = self.WORKFLOW_YAML.format(version="2.0.0").encode()
-        runner = CliRunner()
         with patch(
             "specify_cli.authentication.http.open_url",
             side_effect=lambda url, timeout=None, extra_headers=None, redirect_validator=None: self._FakeResponse(data, url),

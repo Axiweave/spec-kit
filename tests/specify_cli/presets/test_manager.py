@@ -1,5 +1,6 @@
 """Tests for preset installation and removal in specify_cli.presets._manager."""
 
+import hashlib
 import json
 import tarfile
 import zipfile
@@ -117,6 +118,204 @@ class TestPresetManager:
         assert installed_dir.exists()
         assert (installed_dir / "preset.yml").exists()
         assert (installed_dir / "templates" / "spec-template.md").exists()
+
+    def test_install_records_hash_agreement(self, project_dir, pack_dir):
+        """Producer-hash coverage for optional per-file provenance (T005).
+
+        ``registry.add`` records an additive ``generated_files`` mapping of
+        workspace-relative path to SHA-256 hex for bytes this install
+        actually wrote. Every hash must match the installed bytes.
+        """
+        manager = PresetManager(project_dir)
+        manager.install_from_directory(pack_dir, "0.1.5")
+
+        generated = manager.registry.get("test-pack")["generated_files"]
+
+        installed_dir = project_dir / ".specify" / "presets" / "test-pack"
+        template = installed_dir / "templates" / "spec-template.md"
+        rel = template.relative_to(project_dir).as_posix()
+        assert generated[rel] == hashlib.sha256(template.read_bytes()).hexdigest()
+
+    def test_force_reinstall_preserves_edited_and_custom_files(
+        self, project_dir, pack_dir
+    ):
+        """A force reinstall from the same source must not discard a user's
+        edit to a package-produced file, an entirely custom file the user
+        added, or a hand-edited preset.yml -- a cloned workspace can carry
+        all three alongside a registry that already lists the preset as
+        installed (T025). None of them may be recorded as matching a
+        produced hash afterward."""
+        manager = PresetManager(project_dir)
+        manager.install_from_directory(pack_dir, "0.1.5")
+
+        installed_dir = project_dir / ".specify" / "presets" / "test-pack"
+        template = installed_dir / "templates" / "spec-template.md"
+        template.write_text("edited by user\n")
+        custom_file = installed_dir / "notes.txt"
+        custom_file.write_text("user notes\n")
+        manifest_path = installed_dir / "preset.yml"
+        edited_manifest = manifest_path.read_text() + "# user note\n"
+        manifest_path.write_text(edited_manifest)
+
+        manager.install_from_directory(pack_dir, "0.1.5", force=True)
+
+        assert template.read_text() == "edited by user\n"
+        assert custom_file.read_text() == "user notes\n"
+        assert manifest_path.read_text() == edited_manifest
+
+        generated = manager.registry.get("test-pack")["generated_files"]
+        template_rel = template.relative_to(project_dir).as_posix()
+        notes_rel = custom_file.relative_to(project_dir).as_posix()
+        assert generated.get(template_rel) != hashlib.sha256(
+            template.read_bytes()
+        ).hexdigest()
+        assert notes_rel not in generated
+
+    def test_force_reinstall_with_version_bump_updates_unedited_content(
+        self, project_dir, pack_dir
+    ):
+        """A force reinstall whose upstream source simply bumped its
+        version -- no user ever touched the installed files -- must adopt
+        the new manifest and new package content, not misclassify them as
+        user customization and revert to the old install (regression: a
+        package-relative lookup against the workspace-relative
+        ``generated_files`` baseline, and a semantic manifest hash compared
+        against raw file bytes, both made every produced file including
+        the manifest look unrecognized)."""
+        manager = PresetManager(project_dir)
+        manager.install_from_directory(pack_dir, "0.1.5")
+
+        installed_dir = project_dir / ".specify" / "presets" / "test-pack"
+        manifest_path = installed_dir / "preset.yml"
+        template = installed_dir / "templates" / "spec-template.md"
+
+        manifest_data = yaml.safe_load((pack_dir / "preset.yml").read_text())
+        manifest_data["preset"]["version"] = "2.0.0"
+        (pack_dir / "preset.yml").write_text(yaml.safe_dump(manifest_data))
+        new_template = "# Custom Spec Template\n\nThis is v2.\n"
+        (pack_dir / "templates" / "spec-template.md").write_text(new_template)
+
+        manager.install_from_directory(pack_dir, "0.1.5", force=True)
+
+        assert (
+            yaml.safe_load(manifest_path.read_text())["preset"]["version"]
+            == "2.0.0"
+        )
+        assert template.read_text() == new_template
+
+    def test_copytree_failure_preserves_custom_payload(
+        self, project_dir, pack_dir, monkeypatch
+    ):
+        """A force reinstall whose fresh copy fails partway through must
+        not lose a user's custom payload."""
+        import shutil as shutil_module
+
+        manager = PresetManager(project_dir)
+        manager.install_from_directory(pack_dir, "0.1.5")
+
+        installed_dir = project_dir / ".specify" / "presets" / "test-pack"
+        custom_file = installed_dir / "notes.txt"
+        custom_file.write_text("user notes\n")
+
+        real_copytree = shutil_module.copytree
+
+        def fail_copytree(src, dst, *args, **kwargs):
+            src_path = Path(src)
+            if src_path.resolve() == pack_dir.resolve():
+                raise OSError("simulated copytree failure")
+            return real_copytree(src, dst, *args, **kwargs)
+
+        monkeypatch.setattr(shutil_module, "copytree", fail_copytree)
+
+        with pytest.raises(OSError, match="simulated copytree failure"):
+            manager.install_from_directory(pack_dir, "0.1.5", force=True)
+
+        assert custom_file.read_text() == "user notes\n"
+
+    @pytest.mark.parametrize("unsafe", ["file-symlink", "directory-symlink", "unreadable"])
+    def test_force_restore_refuses_unreadable_or_symlinked_custom_payload(
+        self, project_dir, pack_dir, monkeypatch, unsafe,
+    ):
+        manager = PresetManager(project_dir)
+        manager.install_from_directory(pack_dir, "0.1.5")
+        installed = project_dir / ".specify/presets/test-pack"
+        target = project_dir.parent / "private-restore-target"
+        target.mkdir()
+        (target / "secret.txt").write_bytes(b"Private bytes\n")
+        custom = installed / "custom"
+        if unsafe == "unreadable":
+            custom.write_bytes(b"User bytes\n")
+        else:
+            custom.symlink_to(
+                target if unsafe == "directory-symlink" else target / "secret.txt",
+                target_is_directory=unsafe == "directory-symlink",
+            )
+        before = manager.registry.get("test-pack")
+        real_read = Path.read_bytes
+        with monkeypatch.context() as scoped:
+            if unsafe == "unreadable":
+                def refuse(path):
+                    if path == custom:
+                        raise PermissionError("Cannot capture custom content")
+                    return real_read(path)
+                scoped.setattr(Path, "read_bytes", refuse)
+            with pytest.raises((OSError, PresetValidationError)):
+                manager.install_from_directory(pack_dir, "0.1.5", force=True)
+        assert manager.registry.get("test-pack") == before
+        assert (target / "secret.txt").read_bytes() == b"Private bytes\n"
+        if unsafe == "unreadable":
+            assert custom.read_bytes() == b"User bytes\n"
+        else:
+            assert custom.is_symlink()
+
+    def test_force_reinstall_preserves_unknown_registry_fields(
+        self, project_dir, pack_dir
+    ):
+        """A registry entry may carry a field this version does not
+        recognize (forward compatibility, or a hand edit) -- a force
+        reinstall must not silently discard it."""
+        manager = PresetManager(project_dir)
+        manager.install_from_directory(pack_dir, "0.1.5")
+
+        entry = manager.registry.data["presets"]["test-pack"]
+        entry["future_field"] = "kept-across-reinstall"
+        manager.registry._save()
+
+        manager.install_from_directory(pack_dir, "0.1.5", force=True)
+
+        assert (
+            manager.registry.get("test-pack")["future_field"]
+            == "kept-across-reinstall"
+        )
+
+    def test_force_reinstall_reports_recovery_path_on_restore_collision(
+        self, project_dir, pack_dir
+    ):
+        """A custom file that collides in kind with the incoming package
+        (a file where the fresh package now has a directory) must not
+        vanish silently. The preserved bytes must stay durably
+        recoverable and the failure must say where."""
+        manager = PresetManager(project_dir)
+        manager.install_from_directory(pack_dir, "0.1.5")
+
+        installed_dir = project_dir / ".specify" / "presets" / "test-pack"
+        conflict_file = installed_dir / "conflict"
+        conflict_file.write_text("irreplaceable user data\n")
+
+        # The fresh package now has a *directory* at the same relative path.
+        conflict_dir = pack_dir / "conflict"
+        conflict_dir.mkdir()
+        (conflict_dir / "inner.txt").write_text("packaged\n")
+
+        with pytest.raises(PresetError) as excinfo:
+            manager.install_from_directory(pack_dir, "0.1.5", force=True)
+
+        presets_root = project_dir / ".specify" / "presets"
+        staging_dirs = list(presets_root.glob(".reinstall-staging-*"))
+        assert staging_dirs, "expected a durable staging copy to survive the failure"
+        staged_conflict = staging_dirs[0] / "conflict"
+        assert staged_conflict.read_text() == "irreplaceable user data\n"
+        assert str(staging_dirs[0]) in str(excinfo.value)
 
     def test_install_already_installed(self, project_dir, pack_dir):
         """Test installing an already-installed pack raises error."""

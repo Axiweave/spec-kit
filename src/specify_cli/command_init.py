@@ -272,6 +272,11 @@ def register(app: typer.Typer) -> None:
         workspace: Path = typer.Option(
             None, "--workspace", help="Exact external workspace path. Implies --storage external."
         ),
+        no_workspace_git: bool = typer.Option(
+            False,
+            "--no-workspace-git",
+            help="Skip creating an independent Git repository and initial commit for the external workspace.",
+        ),
         feature_numbering: str = typer.Option(
             None, "--feature-numbering", help="Feature numbering mode: sequential or timestamp."
         ),
@@ -434,6 +439,7 @@ def register(app: typer.Typer) -> None:
         from ._command_init_storage import claim_storage, select_storage
         from ._init_options import load_init_options
         from .user_config import load_defaults
+        from .workspace_git import initialize_workspace_git, preflight_workspace_git
 
         try:
             repository = (Path.cwd() if here else Path(project_name)).resolve()
@@ -586,6 +592,15 @@ def register(app: typer.Typer) -> None:
             console.print(f"[red]Error:[/red] {_escape_markup(str(exc))}")
             raise typer.Exit(1) from None
         workspace_path = project.workspace_root
+        project_locator = project.repository_root / ".specify" / "project.json"
+        fresh_workspace_claim = project.project_id is not None and not project_locator.exists()
+        run_workspace_git = fresh_workspace_claim and not no_workspace_git
+        if run_workspace_git:
+            try:
+                preflight_workspace_git(workspace_path)
+            except (ValueError, OSError) as exc:
+                console.print(f"[red]Error:[/red] {_escape_markup(str(exc))}")
+                raise typer.Exit(1) from None
 
         if integration:
             if integration not in AGENT_CONFIG:
@@ -734,6 +749,9 @@ def register(app: typer.Typer) -> None:
             ("workflow", "Install bundled workflow"),
         ]:
             tracker.add(key, label)
+
+        if fresh_workspace_claim:
+            tracker.add("workspace-git", "Workspace history")
 
         if extensions:
             for i, ext_spec in enumerate(extensions):
@@ -884,18 +902,20 @@ def register(app: typer.Typer) -> None:
                         if wf_registry.is_installed("speckit"):
                             tracker.complete("workflow", "already installed")
                         else:
+                            import hashlib
                             import shutil as _shutil
 
                             dest_wf = (
                                 workspace_path / ".specify" / "workflows" / "speckit"
                             )
                             dest_wf.mkdir(parents=True, exist_ok=True)
+                            dest_workflow_yaml = dest_wf / "workflow.yml"
                             _shutil.copy2(
                                 bundled_wf / "workflow.yml",
-                                dest_wf / "workflow.yml",
+                                dest_workflow_yaml,
                             )
                             definition = WorkflowDefinition.from_yaml(
-                                dest_wf / "workflow.yml"
+                                dest_workflow_yaml
                             )
                             wf_registry.add(
                                 "speckit",
@@ -904,6 +924,11 @@ def register(app: typer.Typer) -> None:
                                     "version": definition.version,
                                     "description": definition.description,
                                     "source": "bundled",
+                                    "generated_files": {
+                                        dest_workflow_yaml.relative_to(workspace_path).as_posix(): (
+                                            hashlib.sha256(dest_workflow_yaml.read_bytes()).hexdigest()
+                                        ),
+                                    },
                                 },
                             )
                             tracker.complete("workflow", "speckit installed")
@@ -1031,6 +1056,13 @@ def register(app: typer.Typer) -> None:
                 # priority stack) wins over the core template.
                 ensure_constitution_from_template(workspace_path, tracker=tracker)
 
+                if run_workspace_git:
+                    tracker.start("workspace-git")
+                    commit_id = initialize_workspace_git(workspace_path)
+                    tracker.complete("workspace-git", f"commit {commit_id[:12]}")
+                elif fresh_workspace_claim:
+                    tracker.skip("workspace-git", "--no-workspace-git")
+
                 tracker.complete("final", "project ready")
         except (typer.Exit, SystemExit):
             raise
@@ -1063,13 +1095,33 @@ def register(app: typer.Typer) -> None:
                         border_style="magenta",
                     )
                 )
-            if not here and project_path.exists() and not dir_existed_before:
+            if (
+                not here
+                and project_path.exists()
+                and not dir_existed_before
+                and not getattr(e, "committed", False)
+            ):
                 shutil.rmtree(project_path)
             raise typer.Exit(1)
 
         if _transient:
             console.print(tracker.render())
         console.print("\n[bold green]Project ready.[/bold green]")
+
+        if run_workspace_git:
+            console.print(
+                f"[bold]Workspace history:[/bold] {_escape_markup(str(workspace_path))} "
+                f"— commit {commit_id}\n"
+                "Tracks specs, plans, tasks, and saved choices. Generated and private files "
+                "stay out (see .gitignore). Skip next time with --no-workspace-git. "
+                "Sharing and later commits are manual: use ordinary Git commands. "
+                "This is not a backup — keep a separate copy of the workspace."
+            )
+        elif fresh_workspace_claim:
+            console.print(
+                "[bold]Workspace history skipped[/bold] (--no-workspace-git): no Git "
+                "repository, commit, or tracking rule was created for the workspace."
+            )
 
         agent_config = AGENT_CONFIG.get(selected_ai)
         if agent_config:

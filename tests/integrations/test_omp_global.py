@@ -29,6 +29,11 @@ def isolated_omp_environment(tmp_path, monkeypatch, _isolate_integration_home):
     monkeypatch.setenv("APPDATA", str(home / "roaming"))
     monkeypatch.setenv("LOCALAPPDATA", str(home / "local"))
     monkeypatch.setenv("XDG_STATE_HOME", str(home / ".local/state"))
+    for role in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{role}_NAME", "External Setup Test")
+        monkeypatch.setenv(f"GIT_{role}_EMAIL", "setup@example.test")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     for name in (
         "PI_CODING_AGENT_DIR", "PI_CONFIG_DIR", "OMP_PROFILE", "PI_PROFILE",
         "SPECKIT_INTEGRATION_DEFAULT",

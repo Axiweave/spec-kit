@@ -81,6 +81,10 @@ def script_env(tmp_path):
         "PYTHONDONTWRITEBYTECODE": "1",
         "GIT_CONFIG_NOSYSTEM": "1",
         "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_AUTHOR_NAME": "External Setup Test",
+        "GIT_AUTHOR_EMAIL": "setup@example.test",
+        "GIT_COMMITTER_NAME": "External Setup Test",
+        "GIT_COMMITTER_EMAIL": "setup@example.test",
     })
     return env
 

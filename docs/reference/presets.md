@@ -37,37 +37,25 @@ Installs a preset from the catalog, a URL, or a local directory. Preset commands
 specify preset update <preset_id> [--from <url>] [--dev <path>] [--priority <N>]
 ```
 
-Replaces an already-installed preset by running the normal `preset remove`
-operation first and then the normal `preset add` operation. `--from`, `--dev`,
-and `--priority` are forwarded to `preset add`; `--from` and `--dev` cannot be
-combined. Without an explicit source, add resolves the preset through its usual
-bundled and catalog lookup.
+The command restores an installed preset through its existing installation paths.
+Use `--dev` for a local source or `--from` for an archive URL.
+Do not combine these options.
+Without an explicit source, the command uses the bundled preset or configured catalog.
 
-Update is deliberately destructive. Arguments are checked before anything is
-removed: `--from` and `--dev` cannot be combined, `--priority` must be 1 or
-higher, and the preset must already be installed. Beyond those checks the
-replacement source itself is not inspected in advance. If removal succeeds but
-replacement installation fails, the previous preset has already been removed.
-The command reports a copy-pastable `specify preset add` retry command,
-including the replacement source and priority. On Windows, the reported command
-is explicitly formatted for PowerShell. There is no source pre-flight,
-version comparison, manifest diff, staging, rollback, automatic repair, or
-recovery transaction. A missing or invalid replacement source can therefore
-leave the preset removed. With
-`--from` or `--dev`, the replacement manifest's `preset.id` is not checked
-against the requested ID before removal; a source declaring a different ID may
-therefore install a different preset after the requested one has been removed.
+The replacement manifest must declare the requested preset ID.
+The command checks the source and compatibility before it removes the installed preset.
+Missing or invalid sources leave the installed preset unchanged.
 
-A successful update follows normal remove and add behavior: it re-enables the
-preset, recreates `installed_at`, removes local modifications tracked by the
-preset, and treats an explicit `--from` or `--dev` as an intentional source
-change. If constitution synchronization is enabled, both normal reconciliation
-passes run. If add fails after removal, a generated constitution may remain
-reconciled against the stack without the removed preset. The generated-file
-guard still protects a hand-edited `.specify/memory/constitution.md`. No
-update-specific constitution optimization is applied, so the normal remove and
-add passes may rewrite the generated constitution even when the final resolved
-content is unchanged.
+Restoration preserves edited and unknown package files.
+Unchanged files with verified producer hashes receive the replacement package content.
+Legacy records without producer hashes preserve existing files conservatively.
+If restoration fails, inspect the reported package and recovery paths before a retry.
+Do not delete a recovery directory until you have recovered its custom content.
+
+The restored preset uses the requested priority and becomes enabled.
+Normal command and constitution reconciliation still applies.
+The generated-file guard protects a hand-edited `.specify/memory/constitution.md`.
+Restoration does not create Git commits.
 
 ## Remove a Preset
 

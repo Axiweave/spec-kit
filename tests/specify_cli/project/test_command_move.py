@@ -46,6 +46,15 @@ def git_state(repository: Path) -> tuple[bytes, bytes, bytes, bytes]:
     )
 
 
+def tracked(root: Path) -> set[str]:
+    result = subprocess.run(
+        ["git", "-C", str(root), "ls-tree", "-r", "--name-only", "HEAD"],
+        capture_output=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr.decode()
+    return set(result.stdout.decode().splitlines())
+
+
 @pytest.fixture
 def local_project(tmp_path, monkeypatch):
     if shutil.which("git") is None:
@@ -104,6 +113,9 @@ def local_project(tmp_path, monkeypatch):
     git(repository, "add", "source.py")
     (repository / "notes.txt").write_bytes(b"Untracked repository notes\n")
     monkeypatch.chdir(repository)
+    for role in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{role}_NAME", "Workspace Test")
+        monkeypatch.setenv(f"GIT_{role}_EMAIL", "workspace@example.invalid")
     return repository, tmp_path / "external workspace", home
 
 
@@ -126,7 +138,10 @@ def assert_local(repository: Path, home: Path, before: dict[str, bytes], history
     assert info["active_feature"] == ACTIVE_FEATURE
 
 
-def assert_moved(repository: Path, workspace: Path, before: dict[str, bytes], history: tuple):
+def assert_moved(
+    repository: Path, workspace: Path, before: dict[str, bytes], history: tuple,
+    *, no_workspace_git: bool = False,
+) -> dict:
     for relative, content in before.items():
         if relative.startswith((".specify/", "specs/")) and relative != ".specify/feature.json":
             assert (workspace / relative).read_bytes() == content
@@ -135,7 +150,14 @@ def assert_moved(repository: Path, workspace: Path, before: dict[str, bytes], hi
     assert not (repository / "specs").exists()
     assert set(snapshot(repository / ".specify")) == {"project.json"}
     assert not (workspace / ".specify/project.json").exists()
+    assert not (workspace / ".specify/feature.json").exists()
     assert git_state(repository) == history
+    if no_workspace_git:
+        assert not (workspace / ".git").exists()
+    else:
+        assert (workspace / ".git").is_dir()
+        assert git(workspace, "rev-list", "--count", "HEAD").strip() == b"1"
+        assert git(workspace, "status", "--porcelain") == b""
     info = project_info(repository)
     assert info["storage"] == "external"
     assert info["repository_root"] == str(repository)
@@ -192,6 +214,7 @@ def test_confirmation_observes_verified_stage_and_untouched_source(local_project
         assert result.exit_code != 0
         assert_local(repository, home, before, history)
         assert_recovery(result.output, repository, workspace)
+        assert not (workspace / ".git").exists()
 
 
 @pytest.mark.parametrize("answer", ["y\n", "n\n", ""], ids=["yes", "no", "eof"])
@@ -209,6 +232,7 @@ def test_move_requires_explicit_answer_and_preserves_git(local_project, answer):
         assert_local(repository, home, before, history)
         assert (workspace / ACTIVE_FEATURE / "spec.md").read_bytes() == before[f"{ACTIVE_FEATURE}/spec.md"]
         assert_recovery(result.output, repository, workspace)
+        assert not (workspace / ".git").exists()
 
 
 def test_noninteractive_move_without_flag_retains_stage_and_source(local_project):
@@ -224,6 +248,7 @@ def test_noninteractive_move_without_flag_retains_stage_and_source(local_project
     assert_local(repository, home, before, history)
     assert (workspace / ACTIVE_FEATURE / "spec.md").read_bytes() == before[f"{ACTIVE_FEATURE}/spec.md"]
     assert_recovery(result.stdout + result.stderr, repository, workspace)
+    assert not (workspace / ".git").exists()
 
 
 @pytest.mark.parametrize("scope", ["project", "global"])
@@ -253,6 +278,7 @@ def test_cleanup_flag_moves_project_and_native_commands_continue(local_project, 
     info = assert_moved(repository, workspace, before, history)
     assert info["command_scope"] == scope
     assert "git" in result.output.lower() and "history" in result.output.lower()
+    assert re.search(r"\b[0-9a-f]{7,40}\b", result.output), result.output
     arguments = ["project", "command", "speckit.plan", "--json"]
     if scope == "global":
         invocation = re.search(r"`specify ([^`]+)`", launcher.read_text(encoding="utf-8")).group(1)
@@ -278,30 +304,47 @@ def test_cleanup_flag_moves_project_and_native_commands_continue(local_project, 
     assert not (workspace / ".omp/commands").exists()
 
 
-@pytest.mark.parametrize("occupied", ["file", "unrelated-directory", "foreign-workspace"])
-def test_occupied_destination_never_changes_source_or_destination(local_project, occupied):
+@pytest.mark.parametrize("no_workspace_git", [False, True], ids=["default", "no-workspace-git"])
+@pytest.mark.parametrize(
+    "occupied", ["file", "unrelated-directory", "foreign-workspace", "git-repo", "git-worktree-file"],
+)
+def test_occupied_destination_never_changes_source_or_destination(local_project, occupied, no_workspace_git):
     repository, workspace, home = local_project
     if occupied == "file":
         workspace.write_bytes(b"Unrelated destination file\n")
-        destination_before = workspace.read_bytes()
     else:
         workspace.mkdir()
-        (workspace / "notes.txt").write_bytes(b"Someone else's notes\n")
-        if occupied == "foreign-workspace":
-            (workspace / ".specify").mkdir()
-            (workspace / ".specify/workspace.json").write_text(json.dumps({
-                "schema_version": 1, "project_id": "550e8400-e29b-41d4-a716-446655440000",
-            }), encoding="utf-8")
-        destination_before = snapshot(workspace)
+        if occupied == "git-repo":
+            subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+        elif occupied == "git-worktree-file":
+            (workspace / ".git").write_text("gitdir: /elsewhere/.git/worktrees/x\n", encoding="utf-8")
+        else:
+            (workspace / "notes.txt").write_bytes(b"Someone else's notes\n")
+            if occupied == "foreign-workspace":
+                (workspace / ".specify").mkdir()
+                (workspace / ".specify/workspace.json").write_text(json.dumps({
+                    "schema_version": 1, "project_id": "550e8400-e29b-41d4-a716-446655440000",
+                }), encoding="utf-8")
+    destination_before = (
+        workspace.read_bytes() if occupied == "file"
+        else {p.relative_to(workspace): p.read_bytes() for p in workspace.rglob("*") if p.is_file()}
+    )
     before, history = snapshot(repository), git_state(repository)
 
-    result = CliRunner().invoke(app, ["project", "move", str(workspace), "--confirm-remove-local"])
+    arguments = ["project", "move", str(workspace), "--confirm-remove-local"]
+    if no_workspace_git:
+        arguments.append("--no-workspace-git")
+    result = CliRunner().invoke(app, arguments)
 
     assert result.exit_code != 0
     assert str(workspace) in result.output
     assert any(word in result.output.lower() for word in ("empty", "occupied", "exist", "foreign", "owned"))
     assert_local(repository, home, before, history)
-    assert (workspace.read_bytes() if occupied == "file" else snapshot(workspace)) == destination_before
+    destination_after = (
+        workspace.read_bytes() if occupied == "file"
+        else {p.relative_to(workspace): p.read_bytes() for p in workspace.rglob("*") if p.is_file()}
+    )
+    assert destination_after == destination_before
 
 
 def test_local_commands_without_move_keep_feature_json_and_local_paths(local_project):
@@ -346,3 +389,199 @@ def test_failed_locator_write_restores_local_project_and_reports_stage(local_pro
         if relative.startswith((".specify/", "specs/")) and relative != ".specify/feature.json":
             assert (workspace / relative).read_bytes() == content
     assert_recovery(result.output, repository, workspace)
+
+
+def test_default_migration_creates_one_commit_with_durable_history(local_project):
+    repository, workspace, home = local_project
+    before, history = snapshot(repository), git_state(repository)
+
+    result = CliRunner().invoke(app, ["project", "move", str(workspace), "--confirm-remove-local"])
+
+    assert result.exit_code == 0, result.output
+    assert_moved(repository, workspace, before, history)
+    present = tracked(workspace)
+    for relative in (
+        ".specify/workspace.json", ".specify/init-options.json",
+        ".specify/memory/constitution.md",
+        ".specify/templates/plan-template.md", ".specify/templates/commands/plan.md",
+        ".specify/custom/edited.bin",
+        "specs/001-complete/spec.md", "specs/001-complete/tasks.md",
+        f"{ACTIVE_FEATURE}/spec.md",
+    ):
+        assert relative in present, f"{relative} missing from initial commit: {sorted(present)}"
+    assert ".specify/feature.json" not in present
+    commit_id = git(workspace, "rev-parse", "HEAD").decode().strip()
+    assert re.fullmatch(r"[0-9a-f]{40}", commit_id)
+    assert commit_id in result.output
+    lower = result.output.lower()
+    assert "code repository" in lower and "unchanged" in lower
+    assert "workspace" in lower and "git" in lower and "history" in lower
+
+
+def test_direct_library_call_defaults_to_workspace_history(local_project):
+    from specify_cli.project.move import commit_move, prepare_move
+
+    repository, workspace, home = local_project
+    prepared = prepare_move(repository, workspace)
+
+    assert prepared.no_workspace_git is False
+
+    report: dict[str, str] = {}
+    project = commit_move(prepared, report=report)
+
+    assert project.storage == "external"
+    assert (workspace / ".git").is_dir()
+    assert report["commit_id"] == git(workspace, "rev-parse", "HEAD").decode().strip()
+
+
+def test_no_workspace_git_skips_all_probes_and_writes(local_project, monkeypatch, tmp_path):
+    repository, workspace, home = local_project
+    before, history = snapshot(repository), git_state(repository)
+
+    with monkeypatch.context() as blocked:
+        blocked.setenv("PATH", str(tmp_path / "no-git-on-path"))
+        for name in ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"):
+            blocked.delenv(name, raising=False)
+        result = CliRunner().invoke(app, [
+            "project", "move", str(workspace), "--confirm-remove-local", "--no-workspace-git",
+        ])
+
+    assert result.exit_code == 0, result.output
+    assert "skip" in result.output.lower()
+    assert_moved(repository, workspace, before, history, no_workspace_git=True)
+
+
+def test_parent_git_repository_refuses_default_but_not_opt_out(local_project):
+    repository, workspace, home = local_project
+    controlled = workspace.parent / "git-controlled-area"
+    subprocess.run(["git", "init", "-q", str(controlled)], check=True)
+    nested = controlled / "nested workspace"
+    before, history = snapshot(repository), git_state(repository)
+
+    refused = CliRunner().invoke(app, ["project", "move", str(nested), "--confirm-remove-local"])
+
+    assert refused.exit_code != 0
+    assert "repository" in refused.output.lower() or "git" in refused.output.lower()
+    assert not nested.exists()
+    assert_local(repository, home, before, history)
+
+    result = CliRunner().invoke(app, [
+        "project", "move", str(nested), "--confirm-remove-local", "--no-workspace-git",
+    ])
+
+    assert result.exit_code == 0, result.output
+    assert_moved(repository, nested, before, history, no_workspace_git=True)
+
+
+def test_missing_identity_refuses_before_any_write(local_project, monkeypatch):
+    repository, workspace, home = local_project
+    monkeypatch.setenv("GIT_AUTHOR_NAME", "")
+    before, history = snapshot(repository), git_state(repository)
+
+    result = CliRunner().invoke(app, ["project", "move", str(workspace), "--confirm-remove-local"])
+
+    assert result.exit_code != 0
+    assert any(word in result.output.lower() for word in ("identity", "ident", "name"))
+    assert "--no-workspace-git" in result.output
+    assert not workspace.exists()
+    assert_local(repository, home, before, history)
+
+
+def test_commit_hook_refusal_restores_local_project_before_commit(local_project, monkeypatch, tmp_path):
+    repository, workspace, home = local_project
+    template = tmp_path / "git-hook-template/hooks"
+    template.mkdir(parents=True)
+    hook = template / "pre-commit"
+    hook.write_text("#!/bin/sh\necho 'Blocked by test hook' >&2\nexit 1\n", encoding="utf-8")
+    hook.chmod(0o755)
+    monkeypatch.setenv("GIT_TEMPLATE_DIR", str(template.parent))
+    before, history = snapshot(repository), git_state(repository)
+
+    result = CliRunner().invoke(app, ["project", "move", str(workspace), "--confirm-remove-local"])
+
+    assert result.exit_code != 0
+    assert_local(repository, home, before, history)
+    for relative, content in before.items():
+        if relative.startswith((".specify/", "specs/")) and relative != ".specify/feature.json":
+            assert (workspace / relative).read_bytes() == content
+    assert not (workspace / ".git").exists()
+    assert_recovery(result.output, repository, workspace)
+
+
+def test_post_commit_cleanup_failure_restores_local_and_keeps_workspace_history(local_project, monkeypatch):
+    repository, workspace, home = local_project
+    before, history = snapshot(repository), git_state(repository)
+    real_rmtree = shutil.rmtree
+
+    def flaky_rmtree(path, *args, **kwargs):
+        root = Path(path)
+        if root.name.startswith(".specify-move-"):
+            victim = next(candidate for candidate in root.rglob("*") if candidate.is_file())
+            victim.unlink()
+            raise OSError("Injected cleanup failure after the workspace commit.")
+        return real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(shutil, "rmtree", flaky_rmtree)
+
+    result = CliRunner().invoke(app, ["project", "move", str(workspace), "--confirm-remove-local"])
+
+    assert result.exit_code != 0
+    assert_local(repository, home, before, history)
+    for relative, content in before.items():
+        if relative.startswith((".specify/", "specs/")) and relative != ".specify/feature.json":
+            assert (workspace / relative).read_bytes() == content
+    assert (workspace / ".git").is_dir()
+    assert git(workspace, "rev-list", "--count", "HEAD").strip() == b"1"
+    assert git(workspace, "status", "--porcelain") == b""
+    assert str(workspace) in result.output
+    assert "commit" in result.output.lower()
+
+
+def test_workspace_git_error_marked_committed_preserves_identity_and_skips_metadata_restore(local_project, monkeypatch):
+    from specify_cli.project import move
+
+    repository, workspace, home = local_project
+    before, history = snapshot(repository), git_state(repository)
+    committed_constitution = b"# Committed constitution\nThis reflects the durable commit.\n"
+
+    def fake_initialize(target: Path) -> str:
+        (target / ".specify/memory/constitution.md").write_bytes(committed_constitution)
+        raise move.WorkspaceGitError("Simulated post-commit Git failure.", committed=True)
+
+    monkeypatch.setattr(move, "initialize_workspace_git", fake_initialize)
+
+    result = CliRunner().invoke(app, ["project", "move", str(workspace), "--confirm-remove-local"])
+
+    assert result.exit_code != 0
+    assert (workspace / ".specify/memory/constitution.md").read_bytes() == committed_constitution
+    identity = json.loads((workspace / ".specify/workspace.json").read_text(encoding="utf-8"))
+    assert identity["schema_version"] == 1
+    assert identity["project_id"]
+    assert_local(repository, home, before, history)
+
+
+def test_recovery_failure_after_refresh_retains_evidence_without_deleting_it(local_project, monkeypatch):
+    from specify_cli.project import _move_commands
+
+    repository, workspace, home = local_project
+    before = snapshot(repository)
+    real_refresh = _move_commands.refresh_commands
+
+    def blocked_refresh(repo: Path) -> None:
+        real_refresh(repo)
+        (repo / "specs").write_bytes(b"A concurrent process claimed this path.\n")
+        raise ValueError("Injected failure after refresh, before the Git commit.")
+
+    monkeypatch.setattr(_move_commands, "refresh_commands", blocked_refresh)
+
+    result = CliRunner().invoke(app, ["project", "move", str(workspace), "--confirm-remove-local"])
+
+    assert result.exit_code != 0
+    assert any(word in result.output.lower() for word in ("recovery", "attention"))
+    assert str(workspace) in result.output
+    assert (repository / ".specify/memory/constitution.md").read_bytes() == before[".specify/memory/constitution.md"]
+    assert (repository / ".specify/init-options.json").read_bytes() == before[".specify/init-options.json"]
+    assert (repository / "specs").read_bytes() == b"A concurrent process claimed this path.\n"
+    recovery_dirs = [p for p in repository.glob(".specify-move-*") if p.is_dir()]
+    assert recovery_dirs, "The recovery directory must remain for manual inspection."
+    assert (recovery_dirs[0] / "specs/001-complete/spec.md").read_bytes() == before["specs/001-complete/spec.md"]

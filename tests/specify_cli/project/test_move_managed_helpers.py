@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-import shutil
 import stat
 import subprocess
 
@@ -147,23 +146,21 @@ def test_move_refuses_edited_managed_helpers_without_overwriting_either_copy(loc
         assert Path(paths["FEATURE_DIR"]) == root / ACTIVE_FEATURE
 
 
-def test_failure_after_helper_upgrade_restores_manifest_and_removes_new_helpers(local_project, monkeypatch):
+def test_commit_failure_after_helper_upgrade_restores_staged_originals(local_project, monkeypatch):
     repository, workspace, home = local_project
     own_helpers(repository, obsolete=True)
     before, history = snapshot(repository), git_state(repository)
-    original = shutil.rmtree
     introduced = workspace / ".specify/scripts/python/create_new_feature.py"
     injected = False
 
-    def fail_cleanup(path, *args, **kwargs):
+    def fail_commit(path):
         nonlocal injected
-        if Path(path).parent == repository and Path(path).name.startswith(".specify-move-"):
-            assert introduced.is_file()
-            injected = True
-            raise OSError("Injected failure after helper upgrade")
-        return original(path, *args, **kwargs)
+        assert Path(path) == workspace
+        assert introduced.is_file()
+        injected = True
+        raise OSError("Injected failure after helper upgrade")
 
-    monkeypatch.setattr(shutil, "rmtree", fail_cleanup)
+    monkeypatch.setattr("specify_cli.project.move.initialize_workspace_git", fail_commit)
     result = CliRunner().invoke(app, ["project", "move", str(workspace), "--confirm-remove-local"])
 
     assert injected, result.output

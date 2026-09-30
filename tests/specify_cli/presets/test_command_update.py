@@ -1,282 +1,111 @@
-"""Tests for the ``specify preset update`` command."""
+"""Behavior checks for safe preset restoration through the public command."""
 
 from __future__ import annotations
 
 import json
-import os
-import shlex
 import shutil
 import subprocess
 import sys
-from types import SimpleNamespace
+import tarfile
+import zipfile
 
 import pytest
-import typer
+from typer.testing import CliRunner
 
-from specify_cli.presets._commands import (
-    _render_powershell_argv,
-    preset_update,
-)
-from tests.conftest import strip_ansi
+from specify_cli import app
+from specify_cli.presets import PresetManager, PresetValidationError
+from specify_cli.presets._commands import _render_powershell_argv
+from tests.specify_cli.presets._helpers import make_convention_constitution_preset
 
 
-class TestPresetUpdateCommand:
-    """Test the destructive remove-then-add update contract."""
+@pytest.fixture
+def installed_preset(project_dir, tmp_path, monkeypatch):
+    monkeypatch.chdir(project_dir)
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    source = make_convention_constitution_preset(tmp_path / "source")
+    manager = PresetManager(project_dir)
+    manifest = manager.install_from_directory(source, "1.0.0")
+    destination = manager.presets_dir / manifest.id
+    (destination / "templates/spec-template.md").write_text("# Custom template\n", encoding="utf-8")
+    (destination / "custom-note.md").write_text("Keep this note.\n", encoding="utf-8")
+    return source, manager, manifest.id
 
-    @staticmethod
-    def _manager(monkeypatch, project_dir, installed=True):
-        from specify_cli.presets import _commands as commands
 
-        registry = SimpleNamespace(is_installed=lambda _preset_id: installed)
-        manager = SimpleNamespace(registry=registry)
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
-        monkeypatch.setattr("specify_cli.presets.PresetManager", lambda _root: manager)
-        return commands
+def snapshot(root):
+    return {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
 
-    def test_unknown_preset_fails_without_remove_or_add(self, project_dir, monkeypatch):
-        commands = self._manager(monkeypatch, project_dir, installed=False)
-        calls = []
-        monkeypatch.setattr(
-            commands, "preset_remove", lambda *_args: calls.append("remove")
-        )
-        monkeypatch.setattr(
-            commands, "preset_add", lambda **_kwargs: calls.append("add")
-        )
 
-        with pytest.raises(typer.Exit) as exc_info:
-            preset_update("missing", from_url=None, dev=None, priority=10)
+@pytest.mark.parametrize("case", [
+    "missing-source", "empty-source", "empty-url", "conflicting-sources",
+    "zero-priority", "negative-priority", "unknown-preset", "mismatched-id", "invalid-manifest",
+])
+def test_update_rejection_conserves_custom_files_and_registry(installed_preset, case, tmp_path):
+    """Conservation: rejected updates change no installed bytes or registry fields."""
+    source, manager, preset_id = installed_preset
+    before = snapshot(manager.presets_dir)
+    arguments = ["preset", "update", preset_id, "--dev", str(source)]
+    if case == "missing-source":
+        arguments[-1] = str(tmp_path / "missing source")
+    elif case == "empty-source":
+        arguments[-1] = ""
+    elif case == "empty-url":
+        arguments = ["preset", "update", preset_id, "--from", ""]
+    elif case == "conflicting-sources":
+        arguments.extend(["--from", "https://example.invalid/preset.zip"])
+    elif case in ("zero-priority", "negative-priority"):
+        arguments.extend(["--priority", "0" if case == "zero-priority" else "-1"])
+    elif case == "unknown-preset":
+        arguments[2] = "unknown-preset"
+    elif case == "mismatched-id":
+        manifest = source / "preset.yml"
+        manifest.write_text(manifest.read_text().replace(preset_id, "foreign-preset"))
+    elif case == "invalid-manifest":
+        (source / "preset.yml").write_text("{}\n", encoding="utf-8")
+    result = CliRunner().invoke(app, arguments)
+    assert result.exit_code != 0, result.output
+    assert snapshot(manager.presets_dir) == before
 
-        assert exc_info.value.exit_code == 1
-        assert calls == []
 
-    @pytest.mark.parametrize(
-        ("from_url", "dev"),
-        [
-            ("https://example.com/preset.zip", "./preset"),
-            ("", "./preset"),
-            ("https://example.com/preset.zip", ""),
-        ],
+@pytest.mark.parametrize("format", ["directory", "zip", "tar"])
+def test_replacement_target_check_precedes_force_removal(installed_preset, tmp_path, format):
+    """Conservation: all source formats reject a different target before removal."""
+    source, manager, _ = installed_preset
+    before = snapshot(manager.presets_dir)
+    options = {"force": True, "expected_id": "foreign-preset"}
+    with pytest.raises(PresetValidationError):
+        if format == "directory":
+            manager.install_from_directory(source, "1.0.0", **options)
+        elif format == "zip":
+            archive = tmp_path / "preset.zip"
+            with zipfile.ZipFile(archive, "w") as output:
+                for path in source.rglob("*"):
+                    if path.is_file():
+                        output.write(path, path.relative_to(source))
+            manager.install_from_zip(archive, "1.0.0", **options)
+        else:
+            archive = tmp_path / "preset.tar.gz"
+            with tarfile.open(archive, "w:gz") as output:
+                output.add(source, arcname="package")
+            manager.install_from_archive(archive, "1.0.0", **options)
+    assert snapshot(manager.presets_dir) == before
+
+
+def test_powershell_retry_renderer_preserves_literal_arguments():
+    """Round-trip: PowerShell preserves the rendered argument values."""
+    powershell = shutil.which("pwsh") or shutil.which("powershell")
+    if powershell is None:
+        pytest.skip("PowerShell is not available")
+    arguments = [
+        "https://example.com/archive.zip?one=1&two=$value",
+        r"C:\owner's presets",
+    ]
+    rendered = _render_powershell_argv([
+        sys.executable, "-c", "import json,sys; print(json.dumps(sys.argv[1:]))", *arguments,
+    ])
+    result = subprocess.run(
+        [powershell, "-NoProfile", "-Command", rendered], check=True, capture_output=True, text=True,
     )
-    def test_mutually_exclusive_sources_are_rejected(
-        self, project_dir, monkeypatch, from_url, dev
-    ):
-        commands = self._manager(monkeypatch, project_dir)
-        calls = []
-        monkeypatch.setattr(
-            commands, "preset_remove", lambda *_args: calls.append("remove")
-        )
-        monkeypatch.setattr(
-            commands, "preset_add", lambda **_kwargs: calls.append("add")
-        )
-
-        with pytest.raises(typer.Exit) as exc_info:
-            preset_update(
-                "test-pack",
-                from_url=from_url,
-                dev=dev,
-                priority=10,
-            )
-
-        assert exc_info.value.exit_code == 1
-        assert calls == []
-
-    @pytest.mark.parametrize(
-        ("from_url", "dev", "option"),
-        [("", None, "--from"), (None, "", "--dev")],
-    )
-    def test_empty_source_is_rejected_before_removal(
-        self, project_dir, monkeypatch, capsys, from_url, dev, option
-    ):
-        commands = self._manager(monkeypatch, project_dir)
-        calls = []
-        monkeypatch.setattr(
-            commands, "preset_remove", lambda *_args: calls.append("remove")
-        )
-        monkeypatch.setattr(
-            commands, "preset_add", lambda **_kwargs: calls.append("add")
-        )
-
-        with pytest.raises(typer.Exit) as exc_info:
-            preset_update(
-                "test-pack",
-                from_url=from_url,
-                dev=dev,
-                priority=10,
-            )
-
-        assert exc_info.value.exit_code == 1
-        assert calls == []
-        assert f"{option} must not be empty" in strip_ansi(capsys.readouterr().out)
-
-    def test_remove_failure_prevents_add(self, project_dir, monkeypatch):
-        commands = self._manager(monkeypatch, project_dir)
-        calls = []
-
-        def fail_remove(_preset_id):
-            calls.append("remove")
-            raise typer.Exit(1)
-
-        monkeypatch.setattr(commands, "preset_remove", fail_remove)
-        monkeypatch.setattr(
-            commands, "preset_add", lambda **_kwargs: calls.append("add")
-        )
-
-        with pytest.raises(typer.Exit) as exc_info:
-            preset_update("test-pack", from_url=None, dev=None, priority=10)
-
-        assert exc_info.value.exit_code == 1
-        assert calls == ["remove"]
-
-    def test_update_forwards_id_sources_and_priority_to_add(
-        self, project_dir, monkeypatch
-    ):
-        commands = self._manager(monkeypatch, project_dir)
-        calls = []
-        monkeypatch.setattr(
-            commands,
-            "preset_remove",
-            lambda preset_id: calls.append(("remove", preset_id)),
-        )
-        monkeypatch.setattr(
-            commands,
-            "preset_add",
-            lambda **kwargs: calls.append(("add", kwargs)),
-        )
-
-        preset_update(
-            "test-pack",
-            from_url="https://example.com/replacement.zip",
-            dev=None,
-            priority=4,
-        )
-
-        assert calls == [
-            ("remove", "test-pack"),
-            (
-                "add",
-                {
-                    "preset_id": "test-pack",
-                    "from_url": "https://example.com/replacement.zip",
-                    "dev": None,
-                    "priority": 4,
-                },
-            ),
-        ]
-
-    def test_add_failure_states_removed_and_prints_retry_command(
-        self, project_dir, monkeypatch, capsys
-    ):
-        commands = self._manager(monkeypatch, project_dir)
-        monkeypatch.setattr(commands, "preset_remove", lambda _preset_id: None)
-
-        def fail_add(**_kwargs):
-            raise typer.Exit(1)
-
-        monkeypatch.setattr(commands, "preset_add", fail_add)
-
-        with pytest.raises(typer.Exit) as exc_info:
-            preset_update(
-                "test-pack",
-                from_url=None,
-                dev="/tmp/replacement preset",
-                priority=6,
-            )
-
-        assert exc_info.value.exit_code == 1
-        output = strip_ansi(capsys.readouterr().out)
-        assert "previous preset was removed" in output
-        retry_args = [
-            "specify",
-            "preset",
-            "add",
-            "test-pack",
-            "--dev",
-            "/tmp/replacement preset",
-            "--priority",
-            "6",
-        ]
-        expected = (
-            _render_powershell_argv(retry_args)
-            if os.name == "nt"
-            else shlex.join(retry_args)
-        )
-        assert expected in output
-
-    def test_retry_command_quotes_powershell_metacharacters(
-        self, project_dir, monkeypatch, capsys
-    ):
-        """Windows retry commands keep PowerShell metacharacters literal."""
-        commands = self._manager(monkeypatch, project_dir)
-        monkeypatch.setattr(commands, "preset_remove", lambda _preset_id: None)
-
-        def fail_add(**_kwargs):
-            raise typer.Exit(1)
-
-        monkeypatch.setattr(commands, "preset_add", fail_add)
-        monkeypatch.setattr(os, "name", "nt")
-
-        with pytest.raises(typer.Exit) as exc_info:
-            preset_update(
-                "test-pack",
-                from_url=None,
-                dev=r"C:\replacement&$backup's presets",
-                priority=6,
-            )
-
-        assert exc_info.value.exit_code == 1
-        output = strip_ansi(capsys.readouterr().out)
-        expected = (
-            "& 'specify' 'preset' 'add' 'test-pack' '--dev' "
-            "'C:\\replacement&$backup''s presets' '--priority' '6'"
-        )
-        assert "Retry in PowerShell: " in output
-        assert expected in output
-
-    def test_powershell_retry_renderer_preserves_literal_arguments(self):
-        """The rendered command survives parsing by a real PowerShell."""
-        powershell = shutil.which("pwsh") or shutil.which("powershell")
-        if powershell is None:
-            pytest.skip("PowerShell is not available")
-
-        arguments = [
-            "https://example.com/archive.zip?one=1&two=$value",
-            r"C:\owner's presets",
-        ]
-        rendered = _render_powershell_argv(
-            [
-                sys.executable,
-                "-c",
-                "import json,sys; print(json.dumps(sys.argv[1:]))",
-                *arguments,
-            ]
-        )
-        result = subprocess.run(
-            [powershell, "-NoProfile", "-Command", rendered],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-
-        assert json.loads(result.stdout) == arguments
-
-    def test_invalid_priority_rejected_before_removal(
-        self, project_dir, monkeypatch, capsys
-    ):
-        """--priority 0 must fail without removing the installed preset."""
-        commands = self._manager(monkeypatch, project_dir)
-        calls = []
-        monkeypatch.setattr(
-            commands, "preset_remove", lambda preset_id: calls.append("remove")
-        )
-        monkeypatch.setattr(
-            commands, "preset_add", lambda **_kwargs: calls.append("add")
-        )
-
-        with pytest.raises(typer.Exit) as exc_info:
-            preset_update("test-pack", from_url=None, dev=None, priority=0)
-
-        assert exc_info.value.exit_code == 1
-        assert calls == []
-        output = strip_ansi(capsys.readouterr().out)
-        assert "Priority must be a positive integer" in output
-        assert "previous preset was removed" not in output
+    assert json.loads(result.stdout) == arguments

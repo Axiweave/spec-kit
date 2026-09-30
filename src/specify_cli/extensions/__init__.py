@@ -169,6 +169,149 @@ def _fsync_directory(path: Path) -> None:
             pass
 
 
+# Config filenames an installed extension may ship or preserve across a
+# reinstall (see `_target_follows_preserved_convention`). These hold
+# user-editable, durable settings, so they must never be recorded as
+# reproducible package output even though `install_from_directory` copies
+# them from the source tree on a fresh install.
+_NON_GENERATED_CONFIG_SUFFIXES = ("-config.yml", "-config.local.yml")
+
+
+def _hash_produced_files(
+    dest_dir: Path,
+    workspace_root: Path,
+    excluded_names: frozenset[str],
+    excluded_relpaths: frozenset[str] = frozenset(),
+) -> dict[str, str]:
+    """Hash regular files an install wrote under ``dest_dir``.
+
+    Returns a workspace-relative-path -> SHA-256-hex mapping for the actual
+    produced bytes. The declaration manifest's own produced bytes are
+    included like any other file: the manifest's durability (it is never
+    treated as safely discardable) is enforced independently by workspace
+    tracking's required-file handling, not by omission here, so its
+    baseline stays accurate for a hand-edited-vs-version-bumped comparison.
+    Any per-machine config file is still skipped by name, since those are
+    genuinely user-editable and have no such independent durability
+    guarantee. ``excluded_relpaths`` additionally skips specific paths
+    (relative to ``dest_dir``) that were just restored from a preserved
+    custom/edited payload, so a restored path is never recorded as
+    matching a produced hash regardless of when the restore happened
+    relative to this call.
+    """
+    produced: dict[str, str] = {}
+    for file_path in sorted(dest_dir.rglob("*")):
+        if file_path.is_symlink() or not file_path.is_file():
+            continue
+        if file_path.name in excluded_names or file_path.name.endswith(
+            _NON_GENERATED_CONFIG_SUFFIXES
+        ):
+            continue
+        if file_path.relative_to(dest_dir).as_posix() in excluded_relpaths:
+            continue
+        h = hashlib.sha256()
+        with open(file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                h.update(chunk)
+        produced[file_path.relative_to(workspace_root).as_posix()] = h.hexdigest()
+    return produced
+
+
+def _capture_custom_payload(
+    dest_dir: Path,
+    workspace_root: Path,
+    old_metadata: dict[str, Any] | None,
+    excluded_suffixes: tuple[str, ...] = (),
+) -> dict[str, tuple[bytes, int]]:
+    """Snapshot bytes a force reinstall must not silently discard.
+
+    Before an already-installed payload is removed for a fresh copy, this
+    walks the still-live old ``dest_dir`` and captures ``(bytes, mode)`` for
+    every regular file whose current bytes disagree with the old install's
+    recorded producer baseline (``generated_files``, keyed by path relative
+    to ``workspace_root`` -- the same keying ``_hash_produced_files`` uses,
+    not the package-relative path under ``dest_dir``): a package file the
+    user edited, a file the installer never produced at all (user-added),
+    or -- when the old record predates this baseline and carries no
+    ``generated_files`` -- every such file, since a missing baseline cannot
+    prove a file is safely regenerable. The declaration manifest is covered
+    the same way as any other file: its own produced bytes are recorded in
+    ``generated_files`` too, so an unedited manifest whose version was
+    simply bumped by a fresh install is never mistaken for a hand edit.
+
+    Files matching ``excluded_suffixes`` are skipped: the existing
+    ``remove()`` and its config backup already protect them.
+    Capture refuses symlinks and unreadable files before it removes the old package.
+    """
+    if not isinstance(old_metadata, dict):
+        old_metadata = {}
+    old_generated = old_metadata.get("generated_files")
+    if not isinstance(old_generated, dict):
+        old_generated = {}
+
+    custom: dict[str, tuple[bytes, int]] = {}
+
+    def fail_walk(error: OSError) -> None:
+        raise error
+
+    for current_dir, subdirs, files in os.walk(dest_dir, followlinks=False, onerror=fail_walk):
+        current_path = Path(current_dir)
+        for name in [*subdirs, *files]:
+            path = current_path / name
+            mode = path.lstat().st_mode
+            if not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
+                raise ValidationError(f"Cannot preserve nonregular package content: {path}")
+        for name in files:
+            file_path = current_path / name
+            if excluded_suffixes and name.endswith(excluded_suffixes):
+                continue
+            content = file_path.read_bytes()
+            mode = file_path.stat().st_mode
+            rel = file_path.relative_to(dest_dir).as_posix()
+            workspace_rel = file_path.relative_to(workspace_root).as_posix()
+            current_hash = hashlib.sha256(content).hexdigest()
+            recorded = old_generated.get(workspace_rel)
+            if isinstance(recorded, str) and current_hash == recorded:
+                continue
+            custom[rel] = (content, mode)
+    return custom
+
+
+def _reinstall_staging_dir(container_dir: Path) -> Path:
+    """Create a uniquely-named durable staging directory, confined under
+    *container_dir* (the manager's own extensions root), for a preserved
+    custom/edited payload about to be removed by a force reinstall. Each
+    attempt gets its own fresh directory rather than a fixed, ID-derived
+    name: an earlier attempt's staging directory is never reused, cleared,
+    or overwritten, since it may be the only surviving recovery copy for
+    that earlier failure.
+    """
+    return Path(tempfile.mkdtemp(dir=container_dir, prefix=".reinstall-staging-"))
+
+
+def _stage_custom_payload_durably(
+    staging_dir: Path, payload: dict[str, tuple[bytes, int]]
+) -> None:
+    """Durably persist a captured custom/edited payload before any
+    destructive step runs, so a later restore failure -- for example the
+    fresh package now has a directory where a custom file used to be --
+    still leaves a recovery copy on disk instead of only holding the
+    bytes in this process's memory.
+    """
+    for rel, (content, mode) in payload.items():
+        target = staging_dir / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with open(target, "wb") as f:
+            f.write(content)
+            f.flush()
+            _fsync_fd(f.fileno())
+        try:
+            target.chmod(0o600)
+        except (NotImplementedError, OSError):
+            pass  # best-effort; chmod may not be supported on all platforms.
+    _fsync_directory(staging_dir)
+
+
 class ExtensionError(Exception):
     """Base exception for extension-related errors."""
 
@@ -2157,7 +2300,11 @@ class ExtensionManager:
         # validation failure doesn't leave the user with a half-uninstalled
         # extension (configs stranded in .backup/).
         did_remove = False
+        custom_payload: dict[str, tuple[bytes, int]] = {}
+        old_metadata: dict[str, Any] | None = None
+        custom_payload_staging_dir: Path | None = None
         if force and self.registry.is_installed(manifest.id):
+            old_metadata = self.registry.get(manifest.id)
             # Clear any stale backup from a previous remove so that only the
             # backup produced by the current remove() call is restored later.
             backup_config_dir = self.extensions_dir / ".backup" / manifest.id
@@ -2169,6 +2316,25 @@ class ExtensionManager:
                 shutil.rmtree(backup_config_dir)
             elif backup_config_dir.exists():
                 backup_config_dir.unlink()
+            # A cloned or hand-edited workspace can carry a registry that
+            # already lists this extension as installed while dest_dir holds
+            # bytes the installer never produced (see _capture_custom_payload).
+            # Snapshot those now, while the old payload is still live, so the
+            # rmtree inside remove() below cannot discard them.
+            if dest_dir.is_dir() and not dest_dir.is_symlink():
+                custom_payload = _capture_custom_payload(
+                    dest_dir,
+                    self.workspace_root,
+                    old_metadata,
+                    excluded_suffixes=_NON_GENERATED_CONFIG_SUFFIXES,
+                )
+            if custom_payload:
+                # Durably persist the captured payload before remove()'s
+                # rmtree so a later restore failure (e.g. a structural
+                # collision with the fresh package tree) still has a
+                # recovery copy on disk, not just this process's memory.
+                custom_payload_staging_dir = _reinstall_staging_dir(self.extensions_dir)
+                _stage_custom_payload_durably(custom_payload_staging_dir, custom_payload)
             did_remove = self.remove(manifest.id)
 
         # Load and validate .extensionignore BEFORE reading/creating the rescue
@@ -2586,6 +2752,34 @@ class ExtensionManager:
                     tmp_path.unlink()
                 raise
 
+        def _restore_custom_payload_entry(
+            target: Path, content: bytes, preserved_mode: int
+        ) -> None:
+            from ..shared_infra import _validate_safe_shared_directory
+
+            try:
+                _validate_safe_shared_directory(self.workspace_root, target.parent)
+                if target.is_symlink():
+                    raise ValidationError(
+                        f"Refusing to restore preserved content over symlinked "
+                        f"path: {target}"
+                    )
+                target.parent.mkdir(parents=True, exist_ok=True)
+                _restore_stranded_config_file(target, content, preserved_mode)
+            except BaseException as exc:
+                rel_label = target.relative_to(dest_dir).as_posix()
+                hint = (
+                    f" A durable copy of the preserved content was retained at "
+                    f"'{custom_payload_staging_dir}'; recover it manually before "
+                    f"retrying."
+                    if custom_payload_staging_dir is not None
+                    else ""
+                )
+                raise ExtensionError(
+                    f"Could not restore preserved content for '{rel_label}': "
+                    f"{exc}.{hint}"
+                ) from exc
+
         try:
             shutil.copytree(source_dir, dest_dir, ignore=ignore_fn)
         except BaseException:
@@ -2597,12 +2791,27 @@ class ExtensionManager:
                 for filename, (content, mode) in stranded_configs.items():
                     target = dest_dir / filename
                     _restore_stranded_config_file(target, content, mode)
+            # Same reasoning for a preserved custom/edited payload: restore
+            # it now, before the exception propagates, rather than only on
+            # the happy path below. A later step (registration, registry.add)
+            # is not the only thing that can lose it — copytree itself can.
+            if custom_payload:
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                for rel, (content, mode) in custom_payload.items():
+                    _restore_custom_payload_entry(dest_dir / rel, content, mode)
             raise
 
         # Restore stranded configs rescued before the rmtree above.
         for filename, (content, mode) in stranded_configs.items():
             target = dest_dir / filename
             _restore_stranded_config_file(target, content, mode)
+
+        # Restore any preserved custom/edited payload now too, before the
+        # still-fallible registration and registry.add() steps below run —
+        # so a failure there finds the user's bytes already durably on
+        # disk instead of only held in this function's memory.
+        for rel, (content, mode) in custom_payload.items():
+            _restore_custom_payload_entry(dest_dir / rel, content, mode)
 
         # NOTE: the durable staging backup is intentionally NOT cleaned up
         # here.  Command/skill/hook registration and the final registry.add()
@@ -2662,9 +2871,35 @@ class ExtensionManager:
             if normalized_catalog_name
             else "local"
         )
+        # Producer hashes cover bytes this install actually wrote under
+        # dest_dir, including extension.yml's own produced bytes: workspace
+        # tracking's required-file handling keeps the manifest durable
+        # independently of this baseline, so recording it here only lets a
+        # later force reinstall tell a hand-edited manifest from one whose
+        # version was simply bumped by a fresh install. Any
+        # *-config.yml/*-config.local.yml is still excluded by name, since
+        # those are genuinely user-editable with no such independent
+        # durability guarantee — including on a reinstall, where a config
+        # file may hold rescued user edits rather than the packaged
+        # default. Paths just restored from custom_payload (already
+        # written to disk above, including a hand-edited extension.yml)
+        # are excluded too, by relative path, so a restored path is never
+        # recorded as matching a produced hash.
+        generated_files = _hash_produced_files(
+            dest_dir,
+            self.workspace_root,
+            frozenset(),
+            excluded_relpaths=frozenset(custom_payload.keys()),
+        )
+        # A force reinstall's old registry entry may carry a field this
+        # version does not recognize (forward compatibility, or a hand
+        # edit). Start from it so registry.add()'s full-replace semantics
+        # do not silently discard it; the fields below always override it
+        # with fresh values since add() re-derives them for this install.
         self.registry.add(
             manifest.id,
             {
+                **(old_metadata if isinstance(old_metadata, dict) else {}),
                 "version": manifest.version,
                 "source": source,
                 "manifest_hash": manifest.get_hash(),
@@ -2672,6 +2907,7 @@ class ExtensionManager:
                 "priority": priority,
                 "registered_commands": registered_commands,
                 "registered_skills": registered_skills,
+                "generated_files": generated_files,
             },
         )
 
@@ -2690,6 +2926,20 @@ class ExtensionManager:
                 _fsync_directory(rescue_staging_dir)
                 shutil.rmtree(rescue_staging_dir)
                 _fsync_directory(rescue_staging_dir.parent)
+            except OSError:
+                pass  # Best-effort; install already committed to the registry.
+
+        # Same reasoning for the preserved custom/edited payload's own
+        # staging directory: every entry has now been restored onto
+        # dest_dir and the registry commit above has succeeded, so the
+        # durable copy has served its purpose.
+        if (
+            custom_payload_staging_dir is not None
+            and custom_payload_staging_dir.is_dir()
+            and not custom_payload_staging_dir.is_symlink()
+        ):
+            try:
+                shutil.rmtree(custom_payload_staging_dir)
             except OSError:
                 pass  # Best-effort; install already committed to the registry.
 

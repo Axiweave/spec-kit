@@ -12,6 +12,7 @@ from uuid import uuid4
 from specify_cli.workspace import (
     Project, atomic_json, confined, project_record_path, read_json, workspace_root_for,
 )
+from specify_cli.workspace_git import WorkspaceGitError, initialize_workspace_git, preflight_workspace_git
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,7 @@ class PreparedMove:
     project_id: str
     active_feature: str | None
     files: tuple[str, ...]
+    no_workspace_git: bool
     _roots: tuple[str, ...] = field(repr=False)
     _source: tuple[_Entry, ...] = field(repr=False)
     _stage: tuple[_Entry, ...] = field(repr=False)
@@ -115,7 +117,7 @@ def _local_roots(repository: Path) -> tuple[tuple[str, ...], str | None]:
     return tuple(roots), active
 
 
-def prepare_move(repository: Path, destination: Path) -> PreparedMove:
+def prepare_move(repository: Path, destination: Path, *, no_workspace_git: bool = False) -> PreparedMove:
     """Copy and verify owned artifacts without changing source or project state."""
     repository = repository.expanduser().resolve()
     raw = destination.expanduser()
@@ -126,6 +128,8 @@ def prepare_move(repository: Path, destination: Path) -> PreparedMove:
         raise ValueError(f"Workspace overlaps the repository: {workspace}. Choose a separate empty directory.")
     if workspace.exists() and (not workspace.is_dir() or any(workspace.iterdir())):
         raise ValueError(f"Workspace is occupied: {workspace}. Choose an absent or empty directory.")
+    if not no_workspace_git:
+        preflight_workspace_git(workspace)
     roots, active = _local_roots(repository)
     source = _inventory(repository, roots)
     project_id = str(uuid4())
@@ -151,7 +155,8 @@ def prepare_move(repository: Path, destination: Path) -> PreparedMove:
         ) from exc
     return PreparedMove(
         repository, workspace, project_id, active,
-        tuple(entry.path for entry in source if entry.digest is not None), roots, source, staged,
+        tuple(entry.path for entry in source if entry.digest is not None),
+        no_workspace_git, roots, source, staged,
     )
 
 
@@ -241,7 +246,7 @@ def _restore_sources(prepared: PreparedMove, recovery: Path, moved: list[str], c
     recovery.rmdir()
 
 
-def commit_move(prepared: PreparedMove) -> Project:
+def commit_move(prepared: PreparedMove, *, report: dict[str, str] | None = None) -> Project:
     """Recheck the verified stage and make a recoverable external-storage cutover."""
     from . import _move_commands
 
@@ -294,6 +299,8 @@ def commit_move(prepared: PreparedMove) -> Project:
     moved = []
     attempted = []
     refreshed = False
+    committed = False
+    commit_id = None
     try:
         _relocate_workflow_dirs(prepared)
         for name in roots:
@@ -313,12 +320,18 @@ def commit_move(prepared: PreparedMove) -> Project:
             raise ValueError("The project does not resolve to the staged workspace.")
         refreshed = True
         _move_commands.refresh_commands(repository)
+        if not prepared.no_workspace_git:
+            commit_id = initialize_workspace_git(workspace)
+            committed = True
         # Source originals remain recoverable until every cutover step succeeds.
         shutil.rmtree(recovery)
     except Exception as exc:
+        committed = committed or (isinstance(exc, WorkspaceGitError) and exc.committed)
         failures = []
         protected = set()
         for path, data in reversed(attempted):
+            if committed and path.is_relative_to(workspace):
+                continue
             try:
                 if path.exists() or path.is_symlink():
                     if path.is_symlink() or read_json(path) != data:
@@ -350,10 +363,11 @@ def commit_move(prepared: PreparedMove) -> Project:
                     parent.rmdir()
             except OSError as rollback_error:
                 failures.append(str(rollback_error))
-        try:
-            _restore_metadata(prepared, contents, protected)
-        except (ValueError, OSError) as rollback_error:
-            failures.append(str(rollback_error))
+        if not committed:
+            try:
+                _restore_metadata(prepared, contents, protected)
+            except (ValueError, OSError) as rollback_error:
+                failures.append(str(rollback_error))
         try:
             _restore_sources(prepared, recovery, moved, contents)
         except (ValueError, OSError) as rollback_error:
@@ -362,8 +376,16 @@ def commit_move(prepared: PreparedMove) -> Project:
             f" Recovery needs attention at {recovery}: {' '.join(failures)}"
             if failures else f" Source remains usable at {repository}."
         )
+        if committed:
+            raise ValueError(
+                f"Move failed after the workspace commit: {exc}.{detail} "
+                f"The external workspace keeps its initial commit and identity at {workspace}. "
+                "Inspect both locations, then use specify project link to relink if needed."
+            ) from exc
         raise ValueError(
             f"Move failed: {exc}.{detail} Staged copy remains at {workspace}. "
             "Inspect both copies, then choose an empty destination to retry."
         ) from exc
+    if report is not None and commit_id is not None:
+        report["commit_id"] = commit_id
     return Project(repository, workspace, prepared.project_id, workspace / active if active else None)

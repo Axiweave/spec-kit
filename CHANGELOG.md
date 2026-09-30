@@ -6,6 +6,10 @@
 
 ### Added
 
+- Give new external workspaces one independent initial Git commit, with an explicit `--no-workspace-git` opt-out for setup and migration.
+- Track durable workspace content while excluding private state and unchanged generated files through producer hashes.
+- Preserve committed workspaces after migration recovery failures and preserve custom package content during explicit restoration.
+- Restore presets through `preset update` without discarding custom files. Validate the replacement identity before removal and retain normal `preset add` call behavior.
 - Add opt-in external workspaces during project initialization and `specify project info --json`.
 - Keep feature artifacts and workflow state outside the code repository while preserving repository execution paths.
 - Add verified workspace relinking and runtime command composition for the invoking project.

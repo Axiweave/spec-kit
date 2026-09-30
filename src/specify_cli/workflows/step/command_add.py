@@ -51,15 +51,15 @@ def workflow_step_add(
         )
         raise cli.typer.Exit(1)
 
-    # Reject if already installed
+    # Fetch any existing registry record before touching disk: a record
+    # marks this as a restore (the directory may be missing or partially
+    # edited after a clone) rather than a fresh install, and its
+    # generated_files baseline tells a producer-matched file from a user
+    # edit or fully custom content below.
     registry = StepRegistry(project_root)
-    if registry.is_installed(step_id):
-        cli.console.print(
-            f"[red]Error:[/red] Step type '{step_id}' is already installed. "
-            "Remove it first with: [cyan]specify workflow step remove "
-            f"{step_id}[/cyan]"
-        )
-        raise cli.typer.Exit(1)
+    existing = registry.get(step_id)
+    is_restore = isinstance(existing, dict)
+    old_baseline = cli._generated_files_baseline(existing)
 
     declared_step_yml_url = info.get("step_yml_url")
     if declared_step_yml_url is not None and not isinstance(declared_step_yml_url, str):
@@ -164,9 +164,12 @@ def workflow_step_add(
     import shutil
     import tempfile
 
-    # Refuse if step_dir already exists (e.g. leftover from a previous failed/manual
-    # install that wasn't registered). The user should remove it before retrying.
-    if step_dir.exists():
+    # Refuse an unregistered leftover directory (e.g. from a previous
+    # failed/manual install) -- there is no baseline to merge against, so
+    # the user must remove it before retrying. A *registered* step's
+    # directory being present (or partially missing after a clone) is a
+    # restore, not a conflict, and proceeds below.
+    if step_dir.exists() and not is_restore:
         cli.console.print(
             f"[red]Error:[/red] Step directory already exists at '{step_dir}'. "
             f"Remove it manually or use: [cyan]specify workflow step remove {step_id}[/cyan]"
@@ -185,6 +188,8 @@ def workflow_step_add(
             f"[red]Error:[/red] Failed to create staging directory: {exc}"
         )
         raise cli.typer.Exit(1)
+    backup_dir: cli.Path | None = None
+    preserved: dict = {}
     try:
         try:
             step_yml_content = _safe_fetch(step_yml_url)
@@ -327,48 +332,78 @@ def workflow_step_add(
                 )
                 raise cli.typer.Exit(1)
 
-        # Atomically rename the staging directory to the final location.
-        # Both paths are under steps_base_dir (same filesystem), so os.rename()
-        # is atomic on POSIX and won't leave a partially-written directory at
-        # step_dir on failure.
+        # Merge any existing step_dir content into the staging directory
+        # before the atomic swap: an edited or fully custom file is copied
+        # forward so a restore never silently discards it, while an
+        # unmodified producer-matched file is left to the freshly staged
+        # copy. Both paths are under steps_base_dir (same filesystem), so
+        # the swap is atomic on POSIX and never leaves a partially-written
+        # directory at step_dir on failure.
         try:
-            cli.os.rename(tmp_path, step_dir)
+            preserved = cli._preserve_custom_content_into_staged(
+                project_root, tmp_path, step_dir, old_baseline
+            )
+        except OSError as exc:
+            cli.console.print(
+                f"[red]Error:[/red] Failed to install step '{step_id}': {exc}"
+            )
+            raise cli.typer.Exit(1)
+        try:
+            backup_dir = cli._swap_dir_with_backup(
+                tmp_path, step_dir, steps_base_dir, f".{step_id}.backup-"
+            )
         except OSError as exc:
             cli.console.print(
                 f"[red]Error:[/red] Failed to install step '{step_id}': {exc}"
             )
             raise cli.typer.Exit(1)
     finally:
-        # Clean up if the rename hasn't moved tmp_path yet (i.e. on any failure).
+        # Clean up if the swap hasn't moved tmp_path yet (i.e. on any failure).
         shutil.rmtree(tmp_path, ignore_errors=True)
 
     step_name = info.get("name") or step_id
     step_version = info.get("version") or step_meta.get("version") or "0.0.0"
 
-    # Register in step registry
-    registry = StepRegistry(project_root)
+    # Register in step registry, reusing the same registry object opened
+    # above so its baseline snapshot and this write see a consistent view.
+    entry = dict(existing) if isinstance(existing, dict) else {}
+    entry.update(
+        {
+            "name": step_name,
+            "version": step_version,
+            "description": info.get(
+                "description", step_meta.get("description", "")
+            ),
+            "author": info.get("author", step_meta.get("author", "")),
+            "source": "catalog",
+            "catalog_name": info.get("_catalog_name", ""),
+            "type_key": type_key,
+            "generated_files": cli._generated_files_entry_from_dir(
+                project_root, step_dir, preserved=preserved
+            ),
+        }
+    )
     try:
-        registry.add(
-            step_id,
-            {
-                "name": step_name,
-                "version": step_version,
-                "description": info.get(
-                    "description", step_meta.get("description", "")
-                ),
-                "author": info.get("author", step_meta.get("author", "")),
-                "source": "catalog",
-                "catalog_name": info.get("_catalog_name", ""),
-                "type_key": type_key,
-            },
-        )
+        registry.add(step_id, entry)
     except StepValidationError as exc:
-        # Roll back the just-installed directory so the system isn't left with
-        # an unregistered step package on disk after a registry write failure
-        # (e.g. read-only filesystem, permission denied).
-        shutil.rmtree(step_dir, ignore_errors=True)
+        # Roll back the just-installed directory so the system isn't left
+        # with a broken step package on disk after a registry write failure
+        # (e.g. read-only filesystem, permission denied). A restore's prior
+        # content (backup_dir) is put back rather than merely deleted.
+        cli._discard_or_restore_dir_after_failure(
+            step_dir, backup_dir, steps_base_dir, f".{step_id}.failed-"
+        )
         cli.console.print(f"[red]Error:[/red] {exc}")
         raise cli.typer.Exit(1)
+
+    if backup_dir is not None:
+        try:
+            shutil.rmtree(backup_dir)
+        except OSError as exc:
+            cli.console.print(
+                "[yellow]Warning:[/yellow] Step installed, but its backup "
+                f"directory could not be removed: {exc}"
+            )
 
     cli.console.print(f"[green]✓[/green] Step type '{step_name}' ({step_id}) installed")
     cli.console.print(
