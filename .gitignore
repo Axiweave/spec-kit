@@ -61,3 +61,7 @@ docs/dev
 .grok/
 .specify/
 specs/
+
+# Local reference studies
+refs/
+ref-docs/
