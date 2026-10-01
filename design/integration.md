@@ -101,6 +101,16 @@ context-file handling to the CLI. `specify init` does not enable the extension
 implicitly. Extensions and presets register command or skill overrides for the
 current default integration, not every installed integration.
 
+Naming migrations use the extension's read-only `discover_managed_sections`
+interface. The extension reads its configuration and selects existing managed
+regions. The migration supplies a safe, fingerprinted file reader, applies
+generic path replacements within those regions, and commits the approved
+changes through its transaction. It loads the bundled extension implementation,
+not scripts from the project workspace. This interface does not create context
+files or seed extension configuration.
+The migration resolves that implementation through the public
+`specify_cli.locate_bundled_extension` interface.
+
 ## Adding an agent
 
 1. Run `specify integration scaffold my-agent --type markdown` from this

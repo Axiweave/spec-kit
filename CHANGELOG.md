@@ -6,6 +6,9 @@
 
 ### Added
 
+- Add `specify project migrate-naming` for reviewed conversion between sequential and timestamp feature names. Preserve feature identity and owned references. Bind approval to source-state digests. Refuse unsafe changes and retain private backups when restoration fails. Leave Git history and opaque caller values unchanged.
+- Handle migration lock write, close, and removal failures with structured results and exact recovery operations. Report skipped no-op features and opaque workflow locations. Preserve epoch modification times, BOM bytes, and CRLF bytes in managed context files.
+- Report completed migration details when only lock cleanup remains. Preserve rejected and rolled-back transaction outcomes in recovery guidance. Correct the documented JSON approval flow.
 - Default feature selection to invocation context without changing saved state. Agents infer the feature from the conversation or ask when unclear. Configure `feature_selection` as `context` or `automatic` globally for new projects or in project setup options. Apply the policy across CLI resolution, all script languages, presets, and agent-context updates.
 - Honor explicit feature context in every agent-context mode. Keep PowerShell pre-creation permission separate from selection persistence. Verify TOML body preservation and document shared integration instructions.
 - Give new external workspaces one independent initial Git commit, with an explicit `--no-workspace-git` opt-out for setup and migration.

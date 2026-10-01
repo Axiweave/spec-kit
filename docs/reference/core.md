@@ -197,6 +197,54 @@ New Git configuration leaves `branch_numbering` empty so it inherits the project
 A nonempty value selects a separate branch mode.
 Branch creation never changes the active feature directory.
 
+### Migrate existing feature names
+
+`specify project migrate-naming` converts existing feature directories between `sequential` and `timestamp`.
+It preserves each feature's suffix and parent scope.
+It reserves occupied prefixes across the workspace and leaves custom names unchanged.
+The command does not rename Git branches or change Git history.
+
+Stop agents and workflow writers before approval.
+The workspace lock coordinates naming migrations, not other writers.
+
+```bash
+specify project migrate-naming --feature-numbering timestamp --dry-run --json
+specify project migrate-naming --feature-numbering timestamp --apply APPROVAL_TOKEN
+```
+
+Replace `APPROVAL_TOKEN` with the `approval_token` value from the reviewed JSON preview.
+Without these flags, the command asks for approval only in a terminal.
+`--json` and nonterminal invocations only preview unless you supply `--apply`.
+`--dry-run` and `--apply` are mutually exclusive.
+A fresh request for the existing scheme returns `noop` without writes.
+Its human report includes skipped feature paths and reasons.
+
+Approval tokens bind the repository, workspace, target scheme, local clock, and source-state digests.
+Tokens are not authentication secrets.
+If files or metadata change after preview, request a new preview.
+
+The migration updates owned Markdown paths, existing saved selections, and affected paused or failed workflow resource directories.
+The opt-in agent-context extension supplies managed regions for native context path updates.
+The migration does not create or change extension configuration.
+It preserves selection policy, opaque workflow values, completed history, and installation records.
+It reports possible stale references in copied workflow definitions and logs without exposing full values.
+
+An affected running workflow blocks application.
+Other worktrees retain their own native context files.
+Review caller notices for external scripts, notes, and conversations.
+
+After a handled data-transaction failure, the command restores completed changes or retains private original backups.
+If restoration or lock removal fails, the result lists the recovery directory and exact remaining operations.
+Complete those operations before another migration.
+
+If lock removal fails, the report distinguishes completed application, rejection, and complete rollback.
+If application completed, preserve its changes.
+If the command rejected or completely rolled back the attempt, no migration data changes remain.
+The recovery directory can contain only lock-cleanup instructions when no original backups were needed.
+
+Stop every writer before you remove the reported lock.
+The command does not guarantee recovery after power loss or forced termination.
+
 ### Move an existing local project
 
 Stop active agents and workflows before a move.
