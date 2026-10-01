@@ -56,10 +56,11 @@ Its rollback includes these confined shared files, but not global OMP launchers.
 
 ## Output flavors
 
-Choose the smallest base class that matches the agent's native format. The
-format bases render shared `templates/commands/*.md`; `IntegrationBase.setup()`
-copies templates raw unless overridden. Paths below are relative to each
-agent's configured root.
+Choose the smallest base class that matches the agent's native format.
+The format bases render shared `templates/commands/*.md`.
+`IntegrationBase.setup()` adds shared workspace and feature-context instructions
+without replacing template placeholders.
+Paths below are relative to each agent's configured root.
 
 | Flavor | Base class | Typical output | Arguments |
 |---|---|---|---|

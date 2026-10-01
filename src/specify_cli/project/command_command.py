@@ -7,7 +7,7 @@ import typer
 
 from ..agents import CommandRegistrar
 from ..presets import PresetValidationError
-from ..workspace import resolve_project
+from ..workspace import feature_selection_mode, resolve_project
 
 
 _FEATURE_COMMANDS = frozenset({
@@ -27,16 +27,18 @@ def register(app: typer.Typer) -> None:
             project = resolve_project()
             content = CommandRegistrar().render_project_command(name, project.repository_root)
             feature = project.feature_dir
+            selection_mode = feature_selection_mode(project.workspace_root)
             if name in _FEATURE_COMMANDS:
-                if feature is None:
-                    raise ValueError("No active feature. Run speckit.specify or set SPECIFY_FEATURE_DIRECTORY.")
-                if not feature.is_dir():
+                if feature is None and selection_mode == "automatic":
+                    raise ValueError("No active feature. Set SPECIFY_FEATURE_DIRECTORY or create a feature.")
+                if feature is not None and not feature.is_dir():
                     raise ValueError(f"Feature directory is unavailable: {feature}")
             result = {
                 "content": content,
                 "repository_root": str(project.repository_root),
                 "workspace_root": str(project.workspace_root),
                 "feature_dir": str(feature.resolve()) if feature else None,
+                "feature_selection": selection_mode,
             }
         except (ValueError, OSError, PresetValidationError) as exc:
             typer.echo(f"Error: {exc}", err=True)

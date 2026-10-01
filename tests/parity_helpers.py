@@ -150,6 +150,21 @@ def write_feature_json(
     )
 
 
+def set_feature_selection(root: Path, mode: str = "automatic") -> None:
+    """Choose the saved-feature policy in a project or workspace root.
+
+    Tests that rely on a saved feature must call this: scripts ignore saved
+    features unless the project policy is ``automatic``.
+    """
+    path = root / ".specify" / "init-options.json"
+    options = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({**options, "feature_selection": mode}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
 def install_composition_stack(
     repo: Path, template_name: str, core_content: str
 ) -> str:

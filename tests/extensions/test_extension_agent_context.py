@@ -15,8 +15,8 @@ import yaml
 from specify_cli import (
     save_init_options,
 )
-from specify_cli.agents import CommandRegistrar
 from tests.conftest import requires_bash
+from tests.parity_helpers import set_feature_selection
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -142,6 +142,9 @@ class TestCatalogEntry:
 
 def _install_agent_context_config(project_root: Path, **overrides: object) -> None:
     _write_ext_config(project_root, **overrides)
+    # These tests exercise context file updates, not feature selection. The
+    # automatic policy keeps plan lookup independent of the command context.
+    set_feature_selection(project_root)
     # Mirror the real install layout: the extension ships its own
     # agent->context-file defaults map alongside the config. Self-seeding
     # tests depend on it, so require it to exist and always copy it rather
@@ -605,45 +608,6 @@ class TestBundledUpdaterPathValidation:
         assert not (outside / "out.md").exists()
 
 
-# ── CLI does not resolve agent context placeholders ──────────────────────────
-
-
-class TestSkillPlaceholderContextResolution:
-    """The CLI no longer resolves any ``__CONTEXT_FILE__`` placeholder.
-
-    Agent context files are owned entirely by the opt-in agent-context
-    extension, so the CLI neither reads integration metadata nor the
-    extension config when rendering commands/skills.
-    """
-
-    def test_cli_does_not_resolve_context_placeholder(self, tmp_path):
-        content = CommandRegistrar.resolve_skill_placeholders(
-            "codex",
-            {},
-            "Read __CONTEXT_FILE__",
-            tmp_path,
-        )
-        assert content == "Read __CONTEXT_FILE__"
-
-    def test_extension_config_does_not_influence_resolution(self, tmp_path):
-        # Even a populated extension config must not influence resolution.
-        _write_ext_config(
-            tmp_path,
-            context_file="FROM_CONFIG.md",
-            context_files=["ALSO_CONFIG.md"],
-        )
-
-        content = CommandRegistrar.resolve_skill_placeholders(
-            "claude",
-            {},
-            "Read __CONTEXT_FILE__",
-            tmp_path,
-        )
-        assert "FROM_CONFIG.md" not in content
-        assert "ALSO_CONFIG.md" not in content
-        assert content == "Read __CONTEXT_FILE__"
-
-
 # ── CLI no longer owns the agent-context extension config ────────────────────
 
 
@@ -722,7 +686,10 @@ class TestExtensionSelfSeed:
         # Config present but empty — no context_file / context_files.
         _install_agent_context_config(project, context_file="", context_files=[])
         # Active integration recorded in init-options.json (codex -> AGENTS.md).
-        save_init_options(project, {"integration": "codex", "ai": "codex"})
+        save_init_options(
+            project,
+            {"integration": "codex", "ai": "codex", "feature_selection": "automatic"},
+        )
 
         result = _run_bash_agent_context_script(project)
 

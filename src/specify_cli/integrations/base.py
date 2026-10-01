@@ -817,7 +817,7 @@ class IntegrationBase(ABC):
 
     @staticmethod
     def add_workspace_note(content: str) -> str:
-        """Add workspace instructions without changing the existing prompt."""
+        """Add workspace and invocation-scoped feature instructions."""
         newline = "\r\n" if "\r\n" in content else "\n"
         note = (
             "\n## Workspace resolution\n\n"
@@ -826,6 +826,15 @@ class IntegrationBase(ABC):
             "Resolve `.specify/` asset paths below against that workspace, not against the code repository.\n"
             "Use absolute, shell-quoted paths when running the selected workspace scripts.\n"
             "Keep the code repository as the working directory for Git and implementation commands.\n\n"
+            "## Feature context\n\n"
+            "For an existing-feature command, read `feature_selection` from `.specify/init-options.json`. Its default is `context`.\n"
+            "In `context` mode, use the user's explicit feature or the feature established in this conversation.\n"
+            "If the target is unclear, ask the user before hooks, helpers, or file changes.\n"
+            "Do not infer the target from the newest directory, a saved pointer, or another worktree's selection.\n"
+            "In `automatic` mode, use `active_feature` from project info unless the user names another feature.\n"
+            "Pass `SPECIFY_FEATURE_DIRECTORY` only for each helper or hook invocation. Do not export it for later commands.\n"
+            "Keep saved selection unchanged in `context` mode. This rule overrides saved-selection instructions below.\n"
+            "Creating a specification needs no existing feature. Carry its new path in conversation context.\n\n"
         ).replace("\n", newline)
         if note in content:
             return content
@@ -935,10 +944,7 @@ class IntegrationBase(ABC):
         )
 
         if project_root is not None:
-            from ..workspace import workspace_root_for
-
-            if workspace_root_for(project_root) != project_root:
-                content = IntegrationBase.add_workspace_note(content)
+            content = IntegrationBase.add_workspace_note(content)
         return content
 
     def setup(
@@ -950,11 +956,9 @@ class IntegrationBase(ABC):
     ) -> list[Path]:
         """Install integration command files into *project_root*.
 
-        Returns the list of files created.  Copies raw templates without
-        processing.  Integrations that need placeholder replacement
-        (e.g. ``{SCRIPT}``, ``__AGENT__``) should override ``setup()``
-        and call ``process_template()`` in their own loop — see
-        ``CopilotIntegration`` for an example.
+        Copy templates with workspace and feature-context instructions.
+        Integrations that need placeholder replacement should override
+        ``setup()`` and call ``process_template()`` in their own loop.
         """
         templates = self.list_command_templates()
         if not templates:
@@ -981,7 +985,8 @@ class IntegrationBase(ABC):
         for src_file in templates:
             dst_name = self.command_filename(src_file.stem)
             dst_file = manifest.record_file(
-                (dest / dst_name).relative_to(project_root_resolved), src_file.read_bytes()
+                (dest / dst_name).relative_to(project_root_resolved),
+                self.add_workspace_note(src_file.read_text(encoding="utf-8")).encode("utf-8"),
             )
             created.append(dst_file)
 

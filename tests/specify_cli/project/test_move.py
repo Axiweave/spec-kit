@@ -61,7 +61,10 @@ def local_project(tmp_path, monkeypatch):
         ".specify/workflows/workflow-registry.json": b'{ "schema_version": "1.0", "workflows": {}, "user_note": "keep" }\n',
         ".specify/extensions/.registry": b'{ "extensions": {}, "user_note": "edited" }\n',
         ".specify/presets/.registry": b'{ "presets": {}, "user_note": "edited" }\n',
-        ".specify/init-options.json": b'{ "integration": "omp", "script": "sh", "feature_numbering": "timestamp" }\n',
+        ".specify/init-options.json": (
+            b'{ "integration": "omp", "script": "sh", "feature_numbering": "timestamp",'
+            b' "feature_selection": "automatic" }\n'
+        ),
         ".specify/integration.json": b'{ "integration": "omp", "custom": true }\n',
         ".specify/.gitignore": b"*.local\n",
         ".specify/feature.json": b'{ "feature_directory": "specs/002-active" }\n',

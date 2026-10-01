@@ -597,6 +597,8 @@ class CommandRegistrar:
         extension_id: Optional[str] = None,
     ) -> str:
         """Resolve script placeholders for skills-backed agents."""
+        from .integrations.base import IntegrationBase
+
         if not isinstance(frontmatter, dict):
             frontmatter = {}
 
@@ -610,8 +612,6 @@ class CommandRegistrar:
 
         script_variant = init_opts.get("script")
         if scripts:
-            from specify_cli.integrations.base import IntegrationBase
-
             script_variant = IntegrationBase.select_script_variant(
                 script_variant, scripts
             )
@@ -643,7 +643,7 @@ class CommandRegistrar:
             body = CommandRegistrar.resolve_workspace_paths(
                 body, workspace, script_variant, markup_only=True
             )
-        return body
+        return IntegrationBase.add_workspace_note(body)
 
     def _convert_argument_placeholder(
         self, content: str, from_placeholder: str, to_placeholder: str

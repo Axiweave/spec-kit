@@ -218,10 +218,52 @@ function Resolve-StoragePath {
     return Join-Path $Storage.Root $Path
 }
 
+# Read the project's saved-feature policy from the workspace init options.
+# Returns 'context' (the default) or 'automatic'. A context project never reads
+# or writes the saved feature, so each command names its feature with
+# SPECIFY_FEATURE_DIRECTORY. An invalid choice throws before any write.
+function Get-FeatureSelectionMode {
+    param([Parameter(Mandatory = $true)]$Storage)
+    $optionsPath = Resolve-StoragePath $Storage '.specify/init-options.json'
+    $item = Get-Item -LiteralPath $optionsPath -Force -ErrorAction SilentlyContinue
+    if (-not $item) { return 'context' }
+    if ($item.PSIsContainer -or ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+        throw "Cannot read project choices at ${optionsPath}: Project choices must be a regular file."
+    }
+    $text = [System.IO.File]::ReadAllText($optionsPath, [System.Text.Encoding]::UTF8)
+    try {
+        $options = $text | ConvertFrom-Json
+    } catch {
+        throw "Cannot read project choices at ${optionsPath}: $($_.Exception.Message)"
+    }
+    if (-not $text.TrimStart().StartsWith('{') -or $options -isnot [PSCustomObject]) {
+        throw "Cannot read project choices at ${optionsPath}: Project choices must be a JSON object."
+    }
+    $mode = 'context'
+    if ($options.PSObject.Properties.Name -ccontains 'feature_selection') {
+        $mode = $options.feature_selection
+    }
+    if ($mode -isnot [string] -or $mode -cnotin @('context', 'automatic')) {
+        throw "feature_selection must be context or automatic: $optionsPath"
+    }
+    return $mode
+}
+
+# Only automatic projects save the active feature, and no-persist always wins.
+# SPECIFY_FEATURE_NO_PERSIST is the environment-level equivalent of -NoPersist,
+# letting an orchestrator (multi-agent runner, CI matrix) guarantee that no
+# script invocation in the process tree writes the saved feature, even scripts
+# that don't pass -NoPersist themselves (#4128).
+function Test-PersistFeatureSelection {
+    param([Parameter(Mandatory = $true)][string]$Mode, [switch]$NoPersist)
+    $disabled = [bool]$NoPersist -or $env:SPECIFY_FEATURE_NO_PERSIST -eq '1' -or $env:SPECIFY_FEATURE_NO_PERSIST -eq 'true'
+    return ($Mode -ceq 'automatic') -and -not $disabled
+}
+
 function Get-CurrentBranch {
     # Return feature name from explicit state only.
     # Feature state is set by SPECIFY_FEATURE (from create-new-feature or
-    # the git extension) or implicitly via .specify/feature.json.
+    # the git extension) or, in automatic projects, via .specify/feature.json.
     if ($env:SPECIFY_FEATURE) {
         return $env:SPECIFY_FEATURE
     }
@@ -305,38 +347,47 @@ function Get-FeaturePathsEnv {
         [switch]$ReturnNullOnError
     )
 
-    # The environment flag also prevents writes to the saved active feature.
-    $noPersist = [bool]$NoPersist -or $env:SPECIFY_FEATURE_NO_PERSIST -eq '1' -or $env:SPECIFY_FEATURE_NO_PERSIST -eq 'true'
-
     $repoRoot = Get-RepoRoot -ReturnNullOnError:$ReturnNullOnError
     if (-not $repoRoot) { return $null }
     try {
         $storage = Get-StorageContext -RepoRoot $repoRoot
+        $selectionMode = Get-FeatureSelectionMode -Storage $storage
     } catch {
         [Console]::Error.WriteLine("ERROR: $($_.Exception.Message)")
         if ($ReturnNullOnError) { return $null }
         throw
     }
+    # Automatic projects save an explicit feature. -NoPersist and the
+    # SPECIFY_FEATURE_NO_PERSIST flag always prevent that write.
+    $persist = Test-PersistFeatureSelection -Mode $selectionMode -NoPersist:$NoPersist
     $currentBranch = Get-CurrentBranch
 
     # Resolve feature directory.  Priority:
     #   1. SPECIFY_FEATURE_DIRECTORY env var (explicit override)
-    #   2. Machine-local active_feature in external mode, or local feature.json
+    #   2. Automatic projects only: machine-local active_feature in external mode, or local feature.json
     #   3. Error - no feature context available
+    if (-not $env:SPECIFY_FEATURE_DIRECTORY -and $selectionMode -cne 'automatic') {
+        # Context projects never read the saved feature, so every command names its own.
+        [Console]::Error.WriteLine("ERROR: Feature directory not found. Set SPECIFY_FEATURE_DIRECTORY for this command. This project uses feature_selection context, so scripts ignore the saved feature.")
+        if ($ReturnNullOnError) { return $null }
+        exit 1
+    }
     $featureJson = Join-Path $repoRoot '.specify/feature.json'
     if ($storage.External) {
         try {
             $selected = if ($env:SPECIFY_FEATURE_DIRECTORY) { $env:SPECIFY_FEATURE_DIRECTORY } else { $storage.Record.active_feature }
             if (-not $selected) { throw "No active feature in workspace: $($storage.Root). Create or select a feature." }
             $featureDir = Resolve-StoragePath $storage $selected
-            $preCreation = $env:SPECIFY_FEATURE_DIRECTORY -and $noPersist -and -not (Test-Path -LiteralPath $featureDir)
+            $preCreation = $env:SPECIFY_FEATURE_DIRECTORY -and
+                ($NoPersist -or $env:SPECIFY_FEATURE_NO_PERSIST -eq '1' -or $env:SPECIFY_FEATURE_NO_PERSIST -eq 'true') -and
+                -not (Test-Path -LiteralPath $featureDir)
             if (-not $preCreation -and -not (Test-Path -LiteralPath $featureDir -PathType Container)) {
                 throw "Selected feature directory does not exist: $featureDir"
             }
             foreach ($artifact in @('spec.md', 'plan.md', 'tasks.md', 'research.md', 'data-model.md', 'quickstart.md', 'contracts')) {
                 $null = Resolve-StoragePath $storage (Join-Path $featureDir $artifact)
             }
-            if ($env:SPECIFY_FEATURE_DIRECTORY -and -not $noPersist) {
+            if ($env:SPECIFY_FEATURE_DIRECTORY -and $persist) {
                 Save-FeatureJson -RepoRoot $repoRoot -FeatureDirectory $featureDir
             }
         } catch {
@@ -351,8 +402,9 @@ function Get-FeaturePathsEnv {
             $featureDir = Join-Path $repoRoot $featureDir
         }
         # Persist to feature.json so future sessions without the env var still
-        # work - unless the caller opted out for read-only resolution (#3025).
-        if (-not $noPersist) {
+        # work in automatic projects - unless the caller opted out for read-only
+        # resolution (#3025).
+        if ($persist) {
             Save-FeatureJson -RepoRoot $repoRoot -FeatureDirectory $env:SPECIFY_FEATURE_DIRECTORY
         }
     } elseif (Test-Path $featureJson) {

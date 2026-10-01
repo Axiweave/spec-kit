@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from tests.conftest import requires_bash
+from tests.parity_helpers import set_feature_selection
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 COMMON_SH = PROJECT_ROOT / "scripts" / "bash" / "common.sh"
@@ -80,6 +81,7 @@ def plan_repo(tmp_path: Path) -> Path:
     repo.mkdir()
     _git_init(repo)
     (repo / ".specify").mkdir()
+    set_feature_selection(repo)
     _minimal_templates(repo)
     _install_bash_scripts(repo)
     _install_ps_scripts(repo)

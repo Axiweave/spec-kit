@@ -33,7 +33,7 @@ def select_storage(
     metadata = repository / ".specify"
     locator = metadata / "project.json"
     if locator.exists() or locator.is_symlink():
-        project = _load_project(repository)
+        project = _load_project(repository, select_feature=False)
         if storage == "local":
             raise ValueError("This project uses external storage. Use specify project move to change storage.")
         if workspace is not None and workspace.expanduser().resolve() != project.workspace_root:

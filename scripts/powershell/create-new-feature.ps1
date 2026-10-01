@@ -112,6 +112,8 @@ function Get-FittedBranchName {
 # Use common.ps1 functions which prioritize .specify
 $repoRoot = Get-RepoRoot
 $storage = Get-StorageContext -RepoRoot $repoRoot
+# Read the saved-feature policy before any write so an invalid choice creates nothing.
+$selectionMode = Get-FeatureSelectionMode -Storage $storage
 
 # Explicit per-feature choices take precedence over saved project choices.
 $hasNumber = $PSBoundParameters.ContainsKey('Number') -and $Number -ne ''
@@ -316,8 +318,9 @@ if (-not $DryRun) {
         }
     }
 
-    # Save the active feature in the selected storage record unless persistence is disabled.
-    if ($env:SPECIFY_FEATURE_NO_PERSIST -ne '1' -and $env:SPECIFY_FEATURE_NO_PERSIST -ne 'true') {
+    # Only automatic projects save the active feature in the selected storage record.
+    # Context projects keep it as it is, and SPECIFY_FEATURE_NO_PERSIST always wins.
+    if (Test-PersistFeatureSelection -Mode $selectionMode) {
         Save-FeatureJson -RepoRoot $repoRoot -FeatureDirectory $featureDir
     }
 

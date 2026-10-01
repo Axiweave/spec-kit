@@ -454,6 +454,7 @@ def saved_init_defaults(isolated_init_home: Path):
         json.dumps({
             "storage_root": "~/saved-workspaces",
             "feature_numbering": "timestamp",
+            "feature_selection": "automatic",
             "integration": "omp",
             "script": "py",
         }),
@@ -464,7 +465,7 @@ def saved_init_defaults(isolated_init_home: Path):
 
 def _init_choices(workspace: Path):
     options = json.loads((workspace / ".specify/init-options.json").read_text(encoding="utf-8"))
-    return {key: options[key] for key in ("feature_numbering", "integration", "script")}
+    return {key: options[key] for key in ("feature_numbering", "feature_selection", "integration", "script")}
 
 
 @pytest.mark.parametrize("interactive", [False, True], ids=["noninteractive", "interactive"])
@@ -493,7 +494,7 @@ def test_saved_defaults_create_isolated_same_name_projects(
         assert project.repository_root == (parent / "same-name").resolve()
         assert project.workspace_root.parent == (isolated_init_home / "saved-workspaces").resolve()
         assert _init_choices(project.workspace_root) == {
-            "feature_numbering": "timestamp", "integration": "omp", "script": "py",
+            "feature_numbering": "timestamp", "feature_selection": "automatic", "integration": "omp", "script": "py",
         }
         locator = json.loads((project.repository_root / ".specify/project.json").read_text(encoding="utf-8"))
         identity = json.loads((project.workspace_root / ".specify/workspace.json").read_text(encoding="utf-8"))
@@ -519,6 +520,7 @@ def test_saved_defaults_create_isolated_same_name_projects(
         ("--storage", "local", None),
         ("--workspace", "exact-workspace", None),
         ("--feature-numbering", "sequential", "feature_numbering"),
+        ("--feature-selection", "context", "feature_selection"),
         ("--integration", "copilot", "integration"),
         ("--script", "sh", "script"),
     ],
@@ -537,7 +539,7 @@ def test_explicit_init_choice_overrides_only_its_saved_default(
     result = _init(tmp_path, "project", option, value, integration=None)
     assert result.exit_code == 0, _strip(result.output)
     project = resolve_project(tmp_path / "project")
-    expected = {"feature_numbering": "timestamp", "integration": "omp", "script": "py"}
+    expected = {"feature_numbering": "timestamp", "feature_selection": "automatic", "integration": "omp", "script": "py"}
     if changed_choice:
         expected[changed_choice] = value
     assert _init_choices(project.workspace_root) == expected
@@ -575,6 +577,7 @@ def test_integration_environment_overrides_defaults_but_not_explicit_choice(
     assert project.workspace_root.parent == (isolated_init_home / "saved-workspaces").resolve()
     assert _init_choices(project.workspace_root) == {
         "feature_numbering": "timestamp",
+        "feature_selection": "automatic",
         "integration": "claude" if explicit else "copilot",
         "script": "py",
     }
@@ -628,7 +631,7 @@ def test_each_missing_init_choice_accepts_interactive_input_independently(
     assert result.exit_code == 0, _strip(result.output)
     project = resolve_project(tmp_path / "project")
     assert project.storage == "external"
-    expected = {"feature_numbering": "timestamp", "integration": "omp", "script": "py"}
+    expected = {"feature_numbering": "timestamp", "feature_selection": "automatic", "integration": "omp", "script": "py"}
     if choice == "storage_root":
         assert project.workspace_root == workspace.resolve()
     else:
@@ -639,7 +642,7 @@ def test_each_missing_init_choice_accepts_interactive_input_independently(
 
 
 @pytest.mark.parametrize("defaults", [None, {}, {
-    "storage_root": "", "feature_numbering": "", "integration": "", "script": "",
+    "storage_root": "", "feature_numbering": "", "feature_selection": "", "integration": "", "script": "",
 }], ids=["missing-file", "absent-keys", "empty-values"])
 def test_noninteractive_init_uses_fallbacks_without_personal_choices(
     tmp_path: Path,
@@ -664,6 +667,7 @@ def test_noninteractive_init_uses_fallbacks_without_personal_choices(
     assert project.workspace_root == project.repository_root == (tmp_path / "project").resolve()
     assert _init_choices(project.workspace_root) == {
         "feature_numbering": "sequential",
+        "feature_selection": "context",
         "integration": "copilot",
         "script": "ps" if os.name == "nt" else "sh",
     }
@@ -686,6 +690,7 @@ def test_changed_defaults_do_not_change_existing_project_choices(
     saved_init_defaults.write_text(json.dumps({
         "storage_root": str(new_storage),
         "feature_numbering": "sequential",
+        "feature_selection": "context",
         "integration": "copilot",
         "script": "sh",
     }), encoding="utf-8")
@@ -718,6 +723,7 @@ def test_changed_defaults_do_not_change_existing_project_choices(
     "{",
     "[]",
     '{"feature_numbering": "random"}',
+    '{"feature_selection": "random"}',
     '{"integration": "not-an-integration"}',
     '{"script": "ruby"}',
     '{"storage_root": 42}',
@@ -740,6 +746,94 @@ def test_invalid_personal_defaults_fail_before_any_file_changes(
         path.relative_to(tmp_path): path.read_bytes() if path.is_file() else None
         for path in tmp_path.rglob("*")
     } == before
+
+
+def _tree(root: Path):
+    return {path.relative_to(root): path.read_bytes() if path.is_file() else None for path in root.rglob("*")}
+
+
+@pytest.mark.parametrize("mode", ["context", "automatic"])
+def test_feature_selection_flag_is_saved_and_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: str):
+    result = _init(tmp_path, "project", "--storage", "local", "--feature-selection", mode)
+    assert result.exit_code == 0, _strip(result.output)
+    repository = tmp_path / "project"
+    assert json.loads((repository / ".specify/init-options.json").read_text(encoding="utf-8"))["feature_selection"] == mode
+    monkeypatch.chdir(repository)
+    info = CliRunner().invoke(app, ["project", "info", "--json"])
+    assert info.exit_code == 0, _strip(info.output)
+    assert json.loads(info.stdout)["feature_selection"] == mode
+
+
+def test_reinit_keeps_feature_selection_until_the_flag_changes_it(tmp_path: Path):
+    first = _init(tmp_path, "project", "--storage", "local", "--feature-selection", "automatic")
+    assert first.exit_code == 0, _strip(first.output)
+    repository = tmp_path / "project"
+    for options, expected in (((), "automatic"), (("--feature-selection", "context"), "context"), ((), "context")):
+        refreshed = _init(repository, ".", "--force", *options)
+        assert refreshed.exit_code == 0, _strip(refreshed.output)
+        saved = json.loads((repository / ".specify/init-options.json").read_text(encoding="utf-8"))
+        assert saved["feature_selection"] == expected
+
+
+def test_project_saved_before_feature_selection_existed_defaults_to_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    first = _init(tmp_path, "project", "--storage", "local", "--feature-selection", "automatic")
+    assert first.exit_code == 0, _strip(first.output)
+    repository = tmp_path / "project"
+    path = repository / ".specify/init-options.json"
+    options = json.loads(path.read_text(encoding="utf-8"))
+    del options["feature_selection"]
+    path.write_text(json.dumps(options), encoding="utf-8")
+    monkeypatch.chdir(repository)
+    info = CliRunner().invoke(app, ["project", "info", "--json"])
+    assert info.exit_code == 0, _strip(info.output)
+    assert json.loads(info.stdout)["feature_selection"] == "context"
+    refreshed = _init(repository, ".", "--force")
+    assert refreshed.exit_code == 0, _strip(refreshed.output)
+    assert json.loads(path.read_text(encoding="utf-8"))["feature_selection"] == "context"
+
+
+@pytest.mark.parametrize("saved", ["sometimes", "AUTOMATIC", None, "", False, 0, []],
+                         ids=["unknown", "wrong-case", "null", "empty", "false", "zero", "list"])
+@pytest.mark.parametrize("storage", ["local", "external"])
+def test_invalid_saved_feature_selection_fails_before_any_file_changes(tmp_path: Path, storage: str, saved):
+    first = _init(tmp_path, "project", "--storage", storage)
+    assert first.exit_code == 0, _strip(first.output)
+    repository = tmp_path / "project"
+    path = resolve_project(repository).workspace_root / ".specify/init-options.json"
+    options = json.loads(path.read_text(encoding="utf-8"))
+    path.write_text(json.dumps({**options, "feature_selection": saved}), encoding="utf-8")
+    before = _tree(tmp_path)
+    result = _init(repository, ".", "--force")
+    assert result.exit_code != 0
+    assert _tree(tmp_path) == before
+
+
+@pytest.mark.parametrize("flag", ["sometimes", "", "Automatic"], ids=["unknown", "empty", "wrong-case"])
+@pytest.mark.parametrize("existing", [False, True], ids=["new-project", "reinit"])
+def test_invalid_feature_selection_flag_fails_before_any_file_changes(tmp_path: Path, flag: str, existing: bool):
+    if existing:
+        first = _init(tmp_path, "project", "--storage", "local")
+        assert first.exit_code == 0, _strip(first.output)
+    before = _tree(tmp_path)
+    if existing:
+        result = _init(tmp_path / "project", ".", "--force", "--feature-selection", flag)
+    else:
+        result = _init(tmp_path, "project", "--storage", "local", "--feature-selection", flag)
+    assert result.exit_code != 0
+    assert _tree(tmp_path) == before
+
+
+@pytest.mark.parametrize("saved", ["sometimes", None, ""], ids=["unknown", "null", "empty"])
+def test_explicit_feature_selection_replaces_an_invalid_saved_value(tmp_path: Path, saved):
+    first = _init(tmp_path, "project", "--storage", "local")
+    assert first.exit_code == 0, _strip(first.output)
+    repository = tmp_path / "project"
+    path = repository / ".specify/init-options.json"
+    options = json.loads(path.read_text(encoding="utf-8"))
+    path.write_text(json.dumps({**options, "feature_selection": saved}), encoding="utf-8")
+    refreshed = _init(repository, ".", "--force", "--feature-selection", "automatic")
+    assert refreshed.exit_code == 0, _strip(refreshed.output)
+    assert json.loads(path.read_text(encoding="utf-8"))["feature_selection"] == "automatic"
 
 
 @pytest.mark.parametrize("condition", ["occupied", "contended", "interrupted"])

@@ -100,16 +100,18 @@ Given that feature description, do this:
    - Resolve the active `spec-template` through the Spec Kit preset/template resolution stack (equivalent to `specify preset resolve spec-template`)
    - Copy the resolved `spec-template` file to `SPECIFY_FEATURE_DIRECTORY/spec.md` as the starting point
    - Set `SPEC_FILE` to `SPECIFY_FEATURE_DIRECTORY/spec.md`
-   - Persist the selection through the installed common helper, not by writing JSON directly.
-     Set `SPECIFY_FEATURE_DIRECTORY` to the absolute feature directory for that helper invocation.
+   - Read `feature_selection` from the workspace's `.specify/init-options.json`. Its default is `context`.
+     In `context` mode, keep the saved feature selection unchanged.
+     Carry the new feature path in conversation context for the next command.
+     In `automatic` mode, persist the selection through the installed common helper.
+     Set `SPECIFY_FEATURE_DIRECTORY` to the absolute feature directory for that invocation only.
      Keep the code repository as the working directory.
      Use the selected script language from `.specify/init-options.json`:
      - Bash: source the workspace's `.specify/scripts/bash/common.sh`, then call `get_feature_paths`.
      - PowerShell: dot-source the workspace's `.specify/scripts/powershell/common.ps1`, then call `Get-FeaturePathsEnv`.
      - Python: load the workspace's `.specify/scripts/python/common.py`, then call `get_feature_paths()`.
-     These helpers preserve local `.specify/feature.json` behavior and update the external machine-local record when applicable.
-     Unless `SPECIFY_FEATURE_NO_PERSIST` disables persistence, verify a fresh `specify project info --json` reports this feature.
-     Downstream commands must recover the selection without a per-command environment override.
+     If persistence is enabled, verify `specify project info --json` reports the new feature.
+     Otherwise, verify the saved feature selection remains unchanged.
 
    **IMPORTANT**:
    - You must only create one feature per `__SPECKIT_COMMAND_SPECIFY__` invocation

@@ -7,7 +7,7 @@ from typing import Any
 
 from .workspace import atomic_json, confined, read_json
 
-_KEYS = frozenset({"storage_root", "feature_numbering", "integration", "script"})
+_KEYS = frozenset({"storage_root", "feature_numbering", "feature_selection", "integration", "script"})
 
 
 def config_path() -> Path:
@@ -44,6 +44,8 @@ def _validate_value(key: str, value: str) -> None:
         return
     if key == "feature_numbering" and value not in ("sequential", "timestamp"):
         raise ValueError("Default feature_numbering must be sequential or timestamp.")
+    if key == "feature_selection" and value not in ("context", "automatic"):
+        raise ValueError("Default feature_selection must be context or automatic.")
     if key == "script" and value not in ("sh", "ps", "py"):
         raise ValueError("Default script must be sh, ps, or py.")
     if key == "integration":

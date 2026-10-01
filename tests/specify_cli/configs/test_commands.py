@@ -39,6 +39,7 @@ def save(path, data):
 @pytest.mark.parametrize("key,value", [
     ("storage_root", "~/spec storage"),
     ("feature_numbering", "timestamp"),
+    ("feature_selection", "automatic"),
     ("integration", "omp"),
     ("script", "py"),
 ])
@@ -47,6 +48,7 @@ def test_config_round_trip_outside_project_preserves_other_settings(config_file,
     saved = {
         "storage_root": "/saved/specs",
         "feature_numbering": "sequential",
+        "feature_selection": "context",
         "integration": "copilot",
         "script": "sh",
         "future": {"enabled": True, "items": [1, "keep"]},
@@ -78,7 +80,7 @@ def test_config_round_trip_outside_project_preserves_other_settings(config_file,
     assert list(Path.cwd().iterdir()) == []
 
 
-@pytest.mark.parametrize("key", ["storage_root", "feature_numbering", "integration", "script"])
+@pytest.mark.parametrize("key", ["storage_root", "feature_numbering", "feature_selection", "integration", "script"])
 def test_get_missing_default_is_empty_and_read_only(config_file, key):
     result = CliRunner().invoke(app, ["config", "get", key])
     assert result.exit_code == 0, result.output
@@ -92,6 +94,7 @@ def test_get_missing_default_is_empty_and_read_only(config_file, key):
     (["set", "unknown", "value"], "unknown"),
     (["clear", "unknown"], "unknown"),
     (["set", "feature_numbering", "random"], "feature_numbering"),
+    (["set", "feature_selection", "random"], "feature_selection"),
     (["set", "integration", "not-a-registered-integration"], "integration"),
     (["set", "script", "bash"], "script"),
 ])

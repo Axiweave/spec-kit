@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import datetime
 import json
-import os
 import re
 import shlex
 import sys
@@ -16,8 +15,10 @@ try:
     from common import (
         TemplateResolutionError,
         confined_workspace_path,
+        feature_selection_mode,
         get_repo_root,
         get_workspace_root,
+        may_persist_feature_selection,
         persist_feature_json,
         resolve_template_content,
     )
@@ -26,8 +27,10 @@ except ImportError:  # pragma: no cover - direct execution from unusual cwd
     from common import (
         TemplateResolutionError,
         confined_workspace_path,
+        feature_selection_mode,
         get_repo_root,
         get_workspace_root,
+        may_persist_feature_selection,
         persist_feature_json,
         resolve_template_content,
     )
@@ -261,6 +264,8 @@ def main(argv: list[str] | None = None) -> int:
 
     repo_root = get_repo_root(Path(__file__))
     workspace_root = get_workspace_root(repo_root, report=True)
+    # Read the policy before any write so an invalid choice creates nothing.
+    selection_mode = feature_selection_mode(workspace_root)
     use_timestamp = args.use_timestamp
     if not use_timestamp and not args.branch_number:
         options_path = workspace_root / ".specify" / "init-options.json"
@@ -441,8 +446,9 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 spec_file.touch()
 
-        # Save the active feature unless the orchestrator disables persistence.
-        if os.environ.get("SPECIFY_FEATURE_NO_PERSIST", "") not in ("1", "true"):
+        # Only automatic projects save the active feature. Context projects keep
+        # the saved feature as it is, and SPECIFY_FEATURE_NO_PERSIST always wins.
+        if may_persist_feature_selection(selection_mode):
             persist_feature_json(repo_root, f"specs/{branch_name}")
 
         # Inform the user how to set feature state in their own shell.

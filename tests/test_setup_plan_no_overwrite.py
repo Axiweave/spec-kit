@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from tests.conftest import requires_bash
+from tests.parity_helpers import set_feature_selection
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 COMMON_SH = PROJECT_ROOT / "scripts" / "bash" / "common.sh"
@@ -44,6 +45,7 @@ def _minimal_templates(repo: Path) -> None:
 def _write_feature_json(
     repo: Path, feature_directory: str = "specs/001-my-feature"
 ) -> None:
+    set_feature_selection(repo)  # A saved feature applies only to automatic projects.
     (repo / ".specify" / "feature.json").write_text(
         json.dumps({"feature_directory": feature_directory}),
         encoding="utf-8",

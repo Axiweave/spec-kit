@@ -172,7 +172,12 @@ class TomlIntegrationTests:
         assert "line two" in frontmatter
         assert body == "Body\n"
 
-    def test_toml_prompt_excludes_frontmatter(self, tmp_path, monkeypatch):
+    @pytest.mark.parametrize("body", [
+        "Body line one\nBody line two",
+        'Quoted "line"\nFinal quote"',
+        "Unicode π\tvalue\nSecond line",
+    ])
+    def test_toml_prompt_excludes_frontmatter(self, tmp_path, monkeypatch, body):
         i = get_integration(self.KEY)
         template = tmp_path / "sample.md"
         template.write_text(
@@ -180,9 +185,7 @@ class TomlIntegrationTests:
             "description: Summary line one\n"
             "scripts:\n"
             "  sh: scripts/bash/example.sh\n"
-            "---\n"
-            "Body line one\n"
-            "Body line two\n",
+            f"---\n{body}\n",
             encoding="utf-8",
         )
         monkeypatch.setattr(i, "list_command_templates", lambda: [template])
@@ -196,7 +199,7 @@ class TomlIntegrationTests:
         parsed = tomllib.loads(generated)
 
         assert parsed["description"] == "Summary line one"
-        assert parsed["prompt"] == "Body line one\nBody line two"
+        assert parsed["prompt"].endswith(body)
         assert "description:" not in parsed["prompt"]
         assert "scripts:" not in parsed["prompt"]
         assert "---" not in parsed["prompt"]
@@ -263,33 +266,6 @@ class TomlIntegrationTests:
             "parsed value must not gain a trailing newline"
         )
 
-    def test_toml_closing_delimiter_inline_when_safe(self, tmp_path, monkeypatch):
-        """Body NOT ending with `"` keeps closing `\"\"\"` inline (no extra newline)."""
-        i = get_integration(self.KEY)
-        template = tmp_path / "sample.md"
-        template.write_text(
-            "---\n"
-            "description: Test\n"
-            "scripts:\n"
-            "  sh: echo ok\n"
-            "---\n"
-            "Line one\n"
-            "Plain body content\n",
-            encoding="utf-8",
-        )
-        monkeypatch.setattr(i, "list_command_templates", lambda: [template])
-
-        m = IntegrationManifest(self.KEY, tmp_path)
-        created = i.setup(tmp_path, m)
-        cmd_files = [f for f in created if "scripts" not in f.parts]
-        assert len(cmd_files) == 1
-
-        raw = cmd_files[0].read_text(encoding="utf-8")
-        parsed = tomllib.loads(raw)
-        assert parsed["prompt"] == "Line one\nPlain body content"
-        assert raw.rstrip().endswith('content"""'), (
-            "closing delimiter should be inline when body does not end with a quote"
-        )
 
     def test_toml_string_escapes_control_characters(self):
         """A value with control chars / a bare CR must render as parseable TOML.

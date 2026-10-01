@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 
 from tests.conftest import requires_bash
+from tests.parity_helpers import set_feature_selection
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 COMMON_SH = PROJECT_ROOT / "scripts" / "bash" / "common.sh"
@@ -185,8 +186,9 @@ def test_composes_with_feature_directory_override(tmp_path: Path) -> None:
 
 @requires_bash
 def test_composes_with_target_feature_json(tmp_path: Path) -> None:
-    """P6: the target project's .specify/feature.json is honored."""
+    """P6: the target project's .specify/feature.json is honored in automatic mode."""
     web = _make_project(tmp_path, "web")
+    set_feature_selection(web)
     (web / ".specify" / "feature.json").write_text(
         '{"feature_directory": "specs/004-fj"}'
     )

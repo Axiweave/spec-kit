@@ -51,7 +51,10 @@ def external_project(tmp_path, monkeypatch):
         json.dumps({"schema_version": 1, "project_id": PROJECT_ID}), encoding="utf-8"
     )
     (workspace / ".specify/init-options.json").write_text(
-        json.dumps({"integration": "omp", "script": "sh", "feature_numbering": "timestamp"}),
+        json.dumps({
+            "integration": "omp", "script": "sh", "feature_numbering": "timestamp",
+            "feature_selection": "automatic",
+        }),
         encoding="utf-8",
     )
     feature = workspace / "specs/001-existing"

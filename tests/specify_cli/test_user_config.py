@@ -11,11 +11,13 @@ import pytest
 from specify_cli import user_config, workspace
 
 
-FIELDS = ("storage_root", "feature_numbering", "integration", "script")
+FIELDS = ("storage_root", "feature_numbering", "feature_selection", "integration", "script")
 VALID_VALUES = (
     ("storage_root", "~/spec storage"),
     ("feature_numbering", "sequential"),
     ("feature_numbering", "timestamp"),
+    ("feature_selection", "context"),
+    ("feature_selection", "automatic"),
     ("integration", "omp"),
     ("integration", "copilot"),
     ("script", "sh"),
@@ -95,6 +97,8 @@ def test_invalid_key_cannot_read_or_change_saved_data(config_file, key):
 
 @pytest.mark.parametrize("key,value", [
     ("feature_numbering", "random"),
+    ("feature_selection", "random"),
+    ("feature_selection", "AUTOMATIC"),
     ("integration", "not-a-registered-integration"),
     ("script", "bash"),
 ])

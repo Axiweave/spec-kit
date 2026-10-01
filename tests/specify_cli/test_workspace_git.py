@@ -39,6 +39,7 @@ def test_ten_operation_lifecycle_never_commits_or_transfers(tmp_path, monkeypatc
     monkeypatch.chdir(repo)
     assert CliRunner().invoke(app, ["project", "link", str(root)]).exit_code == 0
     install_shared_infra(repo, "py", version="test", console=Console(quiet=True))
+    (root / ".specify/init-options.json").write_text(json.dumps({"feature_selection": "automatic"}))
     generated = root / ".specify/scripts/python/check_prerequisites.py"
     head = initialize_workspace_git(root)
     project = resolve_project(repo)

@@ -1,4 +1,4 @@
-"""Tests that update-agent-context.sh/.ps1 prefer feature.json over mtime."""
+"""Tests that update-agent-context.sh/.ps1 follow the feature_selection policy."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from tests.conftest import requires_bash
+from tests.parity_helpers import set_feature_selection
 from tests.extensions.test_extension_agent_context import (
     POWERSHELL,
     _bash_posix_path,
@@ -18,7 +19,9 @@ from tests.extensions.test_extension_agent_context import (
 )
 
 
-def _setup_project(root: Path, context_file: str = "CLAUDE.md") -> None:
+def _setup_project(
+    root: Path, context_file: str = "CLAUDE.md", policy: str | None = "automatic"
+) -> None:
     """Write agent-context extension config as JSON.
 
     JSON is valid YAML so bash+PyYAML can parse it, and PowerShell's built-in
@@ -38,6 +41,8 @@ def _setup_project(root: Path, context_file: str = "CLAUDE.md") -> None:
         }),
         encoding="utf-8",
     )
+    if policy is not None:
+        set_feature_selection(root, policy)
 
 
 def _write_feature_json(root: Path, feature_directory: str) -> None:
@@ -208,3 +213,127 @@ def test_ps_absolute_feature_dir_outside_project_root(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr + result.stdout
     ctx = (project / "CLAUDE.md").read_text(encoding="utf-8")
     assert external.resolve().as_posix() + "/plan.md" in ctx
+
+
+def _snapshot(root: Path) -> dict[str, bytes]:
+    return {
+        p.relative_to(root).as_posix(): p.read_bytes()
+        for p in root.rglob("*")
+        if p.is_file() and ".test-python-bin" not in p.parts
+    }
+
+
+def _selection_traps(root: Path, policy: str | None) -> None:
+    """A saved feature, a named feature and a newer plan: only one may win."""
+    _setup_project(root, policy=policy)
+    saved = _make_plan(root, "specs/001-saved")
+    named = _make_plan(root, "specs/002-named")
+    newest = _make_plan(root, "specs/003-newest")
+    now = time.time()
+    os.utime(saved, (now - 20, now - 20))
+    os.utime(named, (now - 10, now - 10))
+    os.utime(newest, (now, now))
+    _write_feature_json(root, "specs/001-saved")
+
+
+@requires_bash
+@pytest.mark.parametrize("policy", [None, "context"])
+def test_bash_context_policy_uses_only_the_named_feature(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, policy: str | None
+) -> None:
+    """A missing policy means context: feature.json and the newest plan are ignored."""
+    _selection_traps(tmp_path, policy)
+    monkeypatch.setenv("SPECIFY_FEATURE_DIRECTORY", "specs/002-named")
+    before = _snapshot(tmp_path)
+
+    result = _run_bash_agent_context_script(tmp_path)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    ctx = (tmp_path / "CLAUDE.md").read_text(encoding="utf-8")
+    assert "at specs/002-named/plan.md" in ctx
+    assert "001-saved" not in ctx
+    assert "003-newest" not in ctx
+    written = (tmp_path / "CLAUDE.md").read_bytes()
+    assert _snapshot(tmp_path) == {**before, "CLAUDE.md": written}
+
+
+@requires_bash
+@pytest.mark.parametrize("policy", [None, "context"])
+def test_bash_context_policy_requires_a_named_feature(
+    tmp_path: Path, policy: str | None
+) -> None:
+    _selection_traps(tmp_path, policy)
+    before = _snapshot(tmp_path)
+
+    result = _run_bash_agent_context_script(tmp_path)
+
+    assert result.returncode == 1
+    assert "Feature directory not found" in result.stderr
+    assert "SPECIFY_FEATURE_DIRECTORY" in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+@requires_bash
+def test_bash_context_policy_adds_no_plan_for_a_feature_without_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The newest plan must not stand in for a plan that does not exist yet."""
+    _setup_project(tmp_path, policy="context")
+    _make_plan(tmp_path, "specs/000-old")
+    monkeypatch.setenv("SPECIFY_FEATURE_DIRECTORY", "specs/001-new")
+
+    result = _run_bash_agent_context_script(tmp_path)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "plan.md" not in (tmp_path / "CLAUDE.md").read_text(encoding="utf-8")
+
+
+@requires_bash
+@pytest.mark.parametrize("policy", ["Context", "auto", ""])
+def test_bash_invalid_policy_stops_before_any_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, policy: str
+) -> None:
+    _selection_traps(tmp_path, policy)
+    monkeypatch.setenv("SPECIFY_FEATURE_DIRECTORY", "specs/002-named")
+    before = _snapshot(tmp_path)
+
+    result = _run_bash_agent_context_script(tmp_path)
+
+    assert result.returncode == 1
+    assert "feature_selection must be context or automatic" in result.stderr
+    assert _snapshot(tmp_path) == before
+
+
+@pytest.mark.skipif(not POWERSHELL, reason="no PowerShell available")
+@pytest.mark.parametrize("policy", [None, "context"])
+def test_ps_context_policy_uses_only_the_named_feature(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, policy: str | None
+) -> None:
+    _selection_traps(tmp_path, policy)
+    monkeypatch.setenv("SPECIFY_FEATURE_DIRECTORY", "specs/002-named")
+    before = _snapshot(tmp_path)
+
+    result = _run_powershell_agent_context_script(tmp_path)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    ctx = (tmp_path / "CLAUDE.md").read_text(encoding="utf-8")
+    assert "at specs/002-named/plan.md" in ctx
+    assert "001-saved" not in ctx
+    assert "003-newest" not in ctx
+    written = (tmp_path / "CLAUDE.md").read_bytes()
+    assert _snapshot(tmp_path) == {**before, "CLAUDE.md": written}
+
+
+@pytest.mark.skipif(not POWERSHELL, reason="no PowerShell available")
+@pytest.mark.parametrize("policy", [None, "context"])
+def test_ps_context_policy_requires_a_named_feature(
+    tmp_path: Path, policy: str | None
+) -> None:
+    _selection_traps(tmp_path, policy)
+    before = _snapshot(tmp_path)
+
+    result = _run_powershell_agent_context_script(tmp_path)
+
+    assert result.returncode == 1
+    assert "SPECIFY_FEATURE_DIRECTORY" in (result.stderr + result.stdout)
+    assert _snapshot(tmp_path) == before

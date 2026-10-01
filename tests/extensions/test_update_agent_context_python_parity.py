@@ -25,6 +25,7 @@ from tests.extensions.test_extension_agent_context import (
     POWERSHELL,
     _bundled_script_env,
 )
+from tests.parity_helpers import set_feature_selection
 
 PY_SCRIPT = EXT_DIR / "scripts" / "python" / "update_agent_context.py"
 BASH_SCRIPT = EXT_DIR / "scripts" / "bash" / "update-agent-context.sh"
@@ -100,9 +101,14 @@ def write_config(project_root: Path, **overrides: object) -> None:
     )
 
 
-def make_project(root: Path, **config: object) -> Path:
+def make_project(
+    root: Path, *, policy: str | None = "automatic", **config: object
+) -> Path:
+    """Create a project whose plan lookup follows ``policy`` (None: no saved choice)."""
     root.mkdir(parents=True, exist_ok=True)
     write_config(root, **config)
+    if policy is not None:
+        set_feature_selection(root, policy)
     return root
 
 
@@ -465,7 +471,8 @@ def test_python_self_seed_from_init_options_matching_bash(tmp_path: Path) -> Non
     for repo in (repo_a, repo_b):
         add_plan(repo)
         (repo / ".specify" / "init-options.json").write_text(
-            json.dumps({"integration": "claude"}), encoding="utf-8"
+            json.dumps({"integration": "claude", "feature_selection": "automatic"}),
+            encoding="utf-8",
         )
         shutil.copy(
             EXT_DIR / "agent-context-defaults.json",
@@ -562,3 +569,159 @@ def test_python_upsert_matches_powershell(tmp_path: Path) -> None:
 
     assert ps.returncode == py.returncode == 0, ps.stderr + py.stderr
     assert (repo_a / "AGENTS.md").read_bytes() == (repo_b / "AGENTS.md").read_bytes()
+
+
+# ── Feature selection policy ─────────────────────────────────────────────────
+
+
+def seed_selection_traps(repo: Path) -> None:
+    """A saved feature, a named feature and a newer plan: only one may win."""
+    now = time.time()
+    add_plan(repo, "specs/001-saved")
+    for feature, age in (("specs/002-named", 10), ("specs/003-newest", 0)):
+        plan = repo / feature / "plan.md"
+        plan.parent.mkdir(parents=True, exist_ok=True)
+        plan.write_text("# plan\n", encoding="utf-8")
+        os.utime(plan, (now - age, now - age))
+
+
+def tree(root: Path) -> dict[str, bytes]:
+    return {
+        p.relative_to(root).as_posix(): p.read_bytes()
+        for p in root.rglob("*")
+        if p.is_file() and ".test-python-bin" not in p.parts
+    }
+
+
+@requires_posix_bash
+@pytest.mark.parametrize("policy", [None, "context"])
+def test_context_policy_uses_only_the_named_feature_matching_bash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, policy: str | None
+) -> None:
+    repo_a, repo_b = twin_projects(tmp_path, context_file="AGENTS.md", policy=policy)
+    for repo in (repo_a, repo_b):
+        seed_selection_traps(repo)
+    saved = (repo_b / ".specify" / "feature.json").read_bytes()
+    monkeypatch.setenv("SPECIFY_FEATURE_DIRECTORY", "specs/002-named")
+
+    bash = run_bash(repo_a)
+    py = run_python(repo_b)
+
+    assert_parity(bash, py, repo_a, repo_b)
+    assert py.returncode == 0, py.stderr
+    content = (repo_b / "AGENTS.md").read_bytes()
+    assert content == (repo_a / "AGENTS.md").read_bytes()
+    assert b"at specs/002-named/plan.md" in content
+    assert b"001-saved" not in content
+    assert b"003-newest" not in content
+    assert (repo_b / ".specify" / "feature.json").read_bytes() == saved
+
+
+@requires_posix_bash
+@pytest.mark.parametrize("policy", [None, "context"])
+def test_context_policy_requires_a_named_feature_matching_bash(
+    tmp_path: Path, policy: str | None
+) -> None:
+    repo_a, repo_b = twin_projects(tmp_path, context_file="AGENTS.md", policy=policy)
+    for repo in (repo_a, repo_b):
+        seed_selection_traps(repo)
+    before = tree(repo_b)
+
+    bash = run_bash(repo_a)
+    py = run_python(repo_b)
+
+    assert_parity(bash, py, repo_a, repo_b)
+    assert py.returncode == 1
+    assert "Feature directory not found" in py.stderr
+    assert "SPECIFY_FEATURE_DIRECTORY" in py.stderr
+    assert tree(repo_b) == before
+
+
+@requires_posix_bash
+def test_context_policy_accepts_an_explicit_plan_matching_bash(tmp_path: Path) -> None:
+    repo_a, repo_b = twin_projects(tmp_path, context_file="AGENTS.md", policy="context")
+    for repo in (repo_a, repo_b):
+        seed_selection_traps(repo)
+
+    bash = run_bash(repo_a, "specs/002-named/plan.md")
+    py = run_python(repo_b, "specs/002-named/plan.md")
+
+    assert_parity(bash, py, repo_a, repo_b)
+    content = (repo_b / "AGENTS.md").read_bytes()
+    assert content == (repo_a / "AGENTS.md").read_bytes()
+    assert b"at specs/002-named/plan.md" in content
+
+
+@requires_posix_bash
+@pytest.mark.parametrize("policy", ["Context", "auto", ""])
+def test_invalid_policy_stops_before_any_write_matching_bash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, policy: str
+) -> None:
+    repo_a, repo_b = twin_projects(tmp_path, context_file="AGENTS.md", policy=policy)
+    for repo in (repo_a, repo_b):
+        seed_selection_traps(repo)
+    monkeypatch.setenv("SPECIFY_FEATURE_DIRECTORY", "specs/002-named")
+    before = tree(repo_b)
+
+    bash = run_bash(repo_a)
+    py = run_python(repo_b)
+
+    assert_parity(bash, py, repo_a, repo_b)
+    assert py.returncode == 1
+    assert "feature_selection must be context or automatic" in py.stderr
+    assert tree(repo_b) == before
+
+
+@pytest.mark.skipif(not POWERSHELL, reason="no PowerShell available")
+@pytest.mark.parametrize("policy", [None, "context"])
+def test_context_policy_matches_powershell(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, policy: str | None
+) -> None:
+    repo_a = make_project(tmp_path / "proj-ps", context_file="AGENTS.md", policy=policy)
+    repo_b = make_project(tmp_path / "proj-py", context_file="AGENTS.md", policy=policy)
+    for repo in (repo_a, repo_b):
+        seed_selection_traps(repo)
+
+    refused = run_powershell(repo_a)
+    assert refused.returncode == 1
+    assert "SPECIFY_FEATURE_DIRECTORY" in (refused.stderr + refused.stdout)
+    assert not (repo_a / "AGENTS.md").exists()
+
+    monkeypatch.setenv("SPECIFY_FEATURE_DIRECTORY", "specs/002-named")
+    ps = run_powershell(repo_a)
+    py = run_python(repo_b)
+
+    assert ps.returncode == py.returncode == 0, ps.stderr + py.stderr
+    assert (repo_a / "AGENTS.md").read_bytes() == (repo_b / "AGENTS.md").read_bytes()
+    assert b"at specs/002-named/plan.md" in (repo_b / "AGENTS.md").read_bytes()
+
+
+@pytest.mark.parametrize("runner", [
+    run_python,
+    pytest.param(run_bash, marks=requires_posix_bash),
+    pytest.param(run_powershell, marks=pytest.mark.skipif(not POWERSHELL, reason="no PowerShell available")),
+])
+@pytest.mark.parametrize("policy", ["context", "automatic"])
+def test_invocation_feature_overrides_saved_feature_without_selection_writes(
+    tmp_path, monkeypatch, runner, policy,
+):
+    """Invariant: invocation targets win in either mode and conserve saved selection."""
+    repo = make_project(tmp_path / "project", context_file="AGENTS.md", policy=policy)
+    seed_selection_traps(repo)
+    pointer = repo / ".specify/feature.json"
+    before = pointer.read_bytes()
+    for feature in ("specs/002-named", "specs/001-saved"):
+        monkeypatch.setenv("SPECIFY_FEATURE_DIRECTORY", feature)
+        result = runner(repo)
+        assert result.returncode == 0, result.stderr + result.stdout
+        content = (repo / "AGENTS.md").read_text(encoding="utf-8")
+        assert f"at {feature}/plan.md" in content
+        other = "specs/001-saved" if feature.endswith("002-named") else "specs/002-named"
+        assert f"at {other}/plan.md" not in content
+        assert pointer.read_bytes() == before
+    monkeypatch.setenv("SPECIFY_FEATURE_DIRECTORY", "specs/999-missing")
+    result = runner(repo)
+    assert result.returncode == 0, result.stderr + result.stdout
+    content = (repo / "AGENTS.md").read_text(encoding="utf-8")
+    assert "specs/" not in content
+    assert pointer.read_bytes() == before

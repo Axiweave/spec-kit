@@ -9,11 +9,15 @@ from the agent-context extension config:
 
 Usage: update_agent_context.py [plan_path]
 
-When ``plan_path`` is omitted, the script derives it from
-``.specify/feature.json`` (written by /speckit-specify). Falls back to the most
-recently modified ``plan.md`` found anywhere under ``specs/`` — scoped layouts
-nest it as ``specs/<scope>/<feature>/plan.md`` — only when feature.json is
-absent or its plan does not exist yet.
+When ``plan_path`` is omitted, the script uses the project choice
+``feature_selection`` from ``.specify/init-options.json``:
+
+- ``context`` (the default): the plan of the feature in
+  ``SPECIFY_FEATURE_DIRECTORY``. The script never reads ``.specify/feature.json``
+  and never scans ``specs/``. It stops with an error when the variable is not set.
+- ``automatic``: use ``SPECIFY_FEATURE_DIRECTORY`` when set. Otherwise, use
+  ``.specify/feature.json`` (written by /speckit-specify), then the newest
+  ``plan.md`` under ``specs/`` when the saved plan does not exist.
 
 External projects read configuration and the selected plan from their workspace.
 The native context files remain in the repository. External selection does not
@@ -159,12 +163,16 @@ def _validate_context_file(project_root: str, context_file: str) -> str | None:
     return None
 
 
-def _resolve_plan_path(project_root: str) -> str:
-    """Derive the plan path: feature.json first, then the mtime fallback."""
+def _resolve_plan_path(project_root: str, automatic: bool) -> str:
+    """Derive the plan path from the selected feature.
+
+    An invocation feature wins in both modes. Only automatic projects without
+    an invocation feature use feature.json, then the mtime fallback.
+    """
     plan_path = ""
+    feature_dir = os.environ.get("SPECIFY_FEATURE_DIRECTORY", "")
     feature_json = Path(project_root) / ".specify" / "feature.json"
-    if feature_json.is_file():
-        feature_dir = ""
+    if not feature_dir and automatic and feature_json.is_file():
         try:
             with open(feature_json, "r", encoding="utf-8") as fh:
                 data = json.load(fh)
@@ -172,27 +180,27 @@ def _resolve_plan_path(project_root: str) -> str:
             feature_dir = value if isinstance(value, str) else ""
         except Exception:
             feature_dir = ""
-        # Normalize backslashes (written by PS on Windows) before path ops.
-        feature_dir = feature_dir.replace("\\", "/").rstrip("/")
-        if feature_dir:
-            # feature_directory may be relative or absolute (absolute paths
-            # outside the project root are preserved as-is), including
-            # drive-qualified paths (C:/...) written by PowerShell on Windows.
-            if feature_dir.startswith("/") or re.match(r"^[A-Za-z]:/", feature_dir):
-                candidate = Path(feature_dir) / "plan.md"
-            else:
-                candidate = Path(project_root) / feature_dir / "plan.md"
-            if candidate.is_file():
-                # Resolve symlinks before comparing so paths like /var/… vs
-                # /private/var/… (macOS) are treated as equivalent.
-                root = Path(project_root).resolve()
-                resolved = candidate.resolve()
-                try:
-                    plan_path = resolved.relative_to(root).as_posix()
-                except ValueError:
-                    plan_path = resolved.as_posix()
+    # Normalize backslashes (written by PS on Windows) before path ops.
+    feature_dir = feature_dir.replace("\\", "/").rstrip("/")
+    if feature_dir:
+        # feature_directory may be relative or absolute (absolute paths
+        # outside the project root are preserved as-is), including
+        # drive-qualified paths (C:/...) written by PowerShell on Windows.
+        if feature_dir.startswith("/") or re.match(r"^[A-Za-z]:/", feature_dir):
+            candidate = Path(feature_dir) / "plan.md"
+        else:
+            candidate = Path(project_root) / feature_dir / "plan.md"
+        if candidate.is_file():
+            # Resolve symlinks before comparing so paths like /var/… vs
+            # /private/var/… (macOS) are treated as equivalent.
+            root = Path(project_root).resolve()
+            resolved = candidate.resolve()
+            try:
+                plan_path = resolved.relative_to(root).as_posix()
+            except ValueError:
+                plan_path = resolved.as_posix()
 
-    if not plan_path:
+    if not plan_path and automatic and not os.environ.get("SPECIFY_FEATURE_DIRECTORY"):
         root = Path(project_root).resolve()
         specs = root / "specs"
 
@@ -384,6 +392,18 @@ def main(argv: list[str] | None = None) -> int:
     marker_end = _get_str(data, "context_markers", "end") or DEFAULT_END
 
     plan_path = args[0] if args else ""
+    # Without the core helper the policy file is unreadable, so the default (context) applies.
+    automatic = (
+        core is not None and core.feature_selection_mode(workspace_root) == "automatic"
+    )
+    if not plan_path and not automatic and not os.environ.get("SPECIFY_FEATURE_DIRECTORY"):
+        _err(
+            "agent-context: Feature directory not found. Pass a plan path or set "
+            "SPECIFY_FEATURE_DIRECTORY for this command. This project uses "
+            "feature_selection context, so the script ignores the saved feature "
+            "and the newest plan."
+        )
+        return 1
     if external:
         if plan_path:
             print(f"[specify] Workspace: {workspace_root}", file=sys.stderr)
@@ -391,7 +411,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             plan_path = core.get_feature_paths(no_persist=True).impl_plan.as_posix()
     elif not plan_path:
-        plan_path = _resolve_plan_path(project_root)
+        plan_path = _resolve_plan_path(project_root, automatic)
 
     section = _build_section(marker_start, marker_end, plan_path)
 

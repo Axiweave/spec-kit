@@ -5,7 +5,7 @@ import json
 
 import typer
 
-from ..workspace import read_json, resolve_project
+from ..workspace import feature_selection_mode, read_json, resolve_project
 
 
 def register(app: typer.Typer) -> None:
@@ -28,6 +28,7 @@ def register(app: typer.Typer) -> None:
                 "workspace_root": str(project.workspace_root),
                 "active_feature": selected,
                 "feature_numbering": options.get("feature_numbering", "sequential"),
+                "feature_selection": feature_selection_mode(project.workspace_root),
                 "integration": options.get("integration", options.get("ai")),
                 "script": options.get("script"),
                 "command_scope": options.get("command_scope", "project"),

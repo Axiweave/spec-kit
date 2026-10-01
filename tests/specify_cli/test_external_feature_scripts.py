@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 from uuid import uuid4
@@ -94,7 +95,7 @@ def _write_json(path, payload):
     path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
 
 
-def _make_project(tmp_path, external):
+def _make_project(tmp_path, external, policy="automatic"):
     repo = tmp_path / "code project"
     workspace = tmp_path / "external workspace" if external else repo
     (repo / ".specify").mkdir(parents=True)
@@ -117,6 +118,8 @@ def _make_project(tmp_path, external):
     templates.mkdir(parents=True)
     for name, content in TEMPLATES.items():
         (templates / f"{name}.md").write_text(content, encoding="utf-8")
+    if policy is not None:
+        _write_json(workspace / ".specify/init-options.json", {"feature_selection": policy})
     return repo, workspace, record
 
 
@@ -323,11 +326,12 @@ def test_invalid_external_workspace_fails_before_any_content_write(
     assert [_snapshot(root) for root in roots] == before
 
 
+@pytest.mark.parametrize("policy", ["automatic", "context"])
 @pytest.mark.parametrize("override", ["relative-escape", "absolute-escape", "symlink-escape"])
 def test_external_feature_override_cannot_write_outside_workspace(
-    tmp_path, variant, script_env, override,
+    tmp_path, variant, script_env, override, policy,
 ):
-    project = _make_project(tmp_path, True)
+    project = _make_project(tmp_path, True, policy)
     repo, workspace, _ = project
     _select(project)
     outside = tmp_path / "outside"
@@ -463,7 +467,8 @@ def test_distinct_data_directories_survive_init_link_and_fresh_discovery(tmp_pat
     script_type = {"bash": "sh", "python": "py", "powershell": "ps"}[variant]
     initialized = run([
         *cli, "init", str(repo), "--workspace", str(workspace), "--integration", "omp",
-        "--script", script_type, "--offline", "--non-interactive", "--ignore-agent-tools",
+        "--script", script_type, "--feature-selection", "automatic", "--offline",
+        "--non-interactive", "--ignore-agent-tools",
     ], tmp_path, env=script_env)
     assert initialized.returncode == 0, initialized.stderr
     created = _success(_invoke(
@@ -518,7 +523,6 @@ def test_invalid_saved_numbering_preserves_files_and_selection(project, variant,
     ({"feature_numbering": "sequential"}, None, "001"),
     ({"feature_numbering": "timestamp"}, None, "timestamp"),
     ({"feature_numbering": "invalid"}, "number", "000"),
-    ([], "timestamp", "timestamp"),
 ])
 def test_numbering_defaults_and_explicit_choices(project, variant, script_env, options, choice, expected):
     """Saved valid choices apply only when the caller supplies no explicit choice."""
@@ -537,3 +541,169 @@ def test_numbering_defaults_and_explicit_choices(project, variant, script_env, o
         assert data["BRANCH_NAME"] == f"{expected}-choice"
     assert Path(data["SPEC_FILE"]).is_file()
     assert json.loads((workspace / ".specify/init-options.json").read_text(encoding="utf-8")) == options
+
+
+def _selection_state(project):
+    repo, _, record = project
+    return record if record is not None else repo / ".specify/feature.json"
+
+
+def _roots(tmp_path, project):
+    repo, workspace, record = project
+    return (repo, workspace) + ((tmp_path / "data",) if record is not None else ())
+
+
+@pytest.mark.parametrize("external", [False, True], ids=["local", "external"])
+@pytest.mark.parametrize("policy", [None, "context"])
+def test_context_policy_creation_keeps_the_saved_selection(
+    tmp_path, variant, script_env, external, policy,
+):
+    """A missing policy means context: creating a feature never selects it."""
+    project = _make_project(tmp_path, external, policy)
+    repo, workspace, _ = project
+    _select(project)
+    state = _selection_state(project)
+    before = state.read_bytes()
+
+    created = _success(_invoke(
+        variant, workspace, repo, script_env, "create-new-feature",
+        "--json", "--number", "5", "--short-name", "context-create", "Create in context",
+    ))
+
+    assert Path(created["SPEC_FILE"]) == workspace / "specs/005-context-create/spec.md"
+    assert state.read_bytes() == before
+
+
+@pytest.mark.parametrize("external", [False, True], ids=["local", "external"])
+def test_context_policy_creation_saves_no_selection(tmp_path, variant, script_env, external):
+    project = _make_project(tmp_path, external, None)
+    repo, workspace, record = project
+
+    _success(_invoke(
+        variant, workspace, repo, script_env, "create-new-feature",
+        "--json", "--short-name", "unsaved", "Unsaved feature",
+    ))
+
+    if record is None:
+        assert not (repo / ".specify/feature.json").exists()
+    else:
+        assert json.loads(record.read_text(encoding="utf-8"))["active_feature"] is None
+
+
+@pytest.mark.parametrize("external", [False, True], ids=["local", "external"])
+@pytest.mark.parametrize("script", ["setup-plan", "setup-tasks", "check-prerequisites"])
+def test_context_policy_ignores_the_saved_selection(
+    tmp_path, variant, script_env, external, script,
+):
+    """Context scripts need a feature named for this command, never the saved one."""
+    project = _make_project(tmp_path, external, "context")
+    repo, workspace, _ = project
+    _select(project)
+    roots = _roots(tmp_path, project)
+    before = [_snapshot(root) for root in roots]
+
+    result = _invoke(variant, workspace, repo, script_env, script, "--json")
+
+    assert result.returncode != 0
+    assert result.stdout == ""
+    assert "Feature directory not found" in result.stderr
+    assert [_snapshot(root) for root in roots] == before
+
+
+@pytest.mark.parametrize("external", [False, True], ids=["local", "external"])
+def test_context_policy_explicit_features_never_change_the_saved_selection(
+    tmp_path, variant, script_env, external,
+):
+    project = _make_project(tmp_path, external, "context")
+    repo, workspace, _ = project
+    saved = _select(project)
+    state = _selection_state(project)
+    before = state.read_bytes()
+    for name in ("008-first", "009-second"):
+        selected = workspace / "specs" / name
+        selected.mkdir()
+        script_env["SPECIFY_FEATURE_DIRECTORY"] = f"specs/{name}"
+        for script, args in (
+            ("setup-plan", ("--json",)),
+            ("check-prerequisites", ("--json", "--paths-only")),
+        ):
+            paths = _success(_invoke(variant, workspace, repo, script_env, script, *args))
+            assert Path(paths["FEATURE_DIR"]) == selected
+            assert state.read_bytes() == before
+        assert (selected / "plan.md").read_text(encoding="utf-8") == TEMPLATES["plan-template"]
+    assert not (saved / "plan.md").exists()
+
+
+INVALID_POLICY_OPTIONS = [
+    [], "context", None,
+    *({"feature_selection": value} for value in (
+        "Context", "AUTOMATIC", "auto", "automatic\n", "", None, ["context"],
+    )),
+]
+
+
+@pytest.mark.parametrize("external", [False, True], ids=["local", "external"])
+@pytest.mark.parametrize("script", ["create-new-feature", "setup-plan"])
+@pytest.mark.parametrize("options", INVALID_POLICY_OPTIONS)
+def test_invalid_policy_fails_before_any_write(
+    tmp_path, variant, script_env, external, script, options,
+):
+    project = _make_project(tmp_path, external, None)
+    repo, workspace, _ = project
+    _select(project)
+    _write_json(workspace / ".specify/init-options.json", options)
+    args = ("--json",)
+    if script == "create-new-feature":
+        args = ("--json", "--short-name", "rejected", "Rejected policy")
+    else:
+        script_env["SPECIFY_FEATURE_DIRECTORY"] = "specs/008-explicit"
+    roots = _roots(tmp_path, project)
+    before = [_snapshot(root) for root in roots]
+
+    result = _invoke(variant, workspace, repo, script_env, script, *args)
+
+    assert result.returncode != 0, result.stdout
+    assert "feature_selection" in result.stderr or "project choices" in result.stderr
+    assert [_snapshot(root) for root in roots] == before
+
+
+@pytest.mark.parametrize("options", [{"feature_selection": "context"}, {"feature_selection": "automatic"}, []])
+def test_bash_policy_without_a_json_parser_refuses_without_writes(tmp_path, script_env, options):
+    """A missing parser cannot turn unreadable policy into an implicit default."""
+    repo, workspace, record = _make_project(tmp_path, False, None)
+    _write_json(workspace / ".specify/init-options.json", options)
+    before = _snapshot(repo)
+    common = workspace / ".specify/scripts/bash/common.sh"
+    result = subprocess.run(
+        ["/bin/bash", "-c",
+         'source "$1"; _python3_command() { return 1; }; PATH=/nonexistent; get_feature_selection_mode "$2"',
+         "policy", str(common), str(workspace)],
+        cwd=repo, env=script_env, text=True, capture_output=True, timeout=30,
+    )
+    assert result.returncode != 0
+    assert result.stdout == ""
+    assert "Install jq or Python 3" in result.stderr
+    assert _snapshot(repo) == before
+
+
+@pytest.mark.skipif(not HAS_POWERSHELL, reason="no PowerShell available")
+@pytest.mark.parametrize("precreation_flag", [None, "1", "true"])
+def test_powershell_context_missing_feature_requires_explicit_precreation_flag(
+    tmp_path, script_env, precreation_flag,
+):
+    """Invariant: context mode does not grant permission to create a missing feature."""
+    project = _make_project(tmp_path, True, "context")
+    repo, workspace, _ = project
+    script_env["SPECIFY_FEATURE_DIRECTORY"] = "specs/999-missing"
+    before = [_snapshot(root) for root in _roots(tmp_path, project)]
+    if precreation_flag is not None:
+        script_env["SPECIFY_FEATURE_NO_PERSIST"] = precreation_flag
+    result = _invoke("powershell", workspace, repo, script_env, "setup-plan", "--json")
+    if precreation_flag is not None:
+        data = _success(result)
+        assert Path(data["FEATURE_DIR"]) == workspace / "specs/999-missing"
+        assert (workspace / "specs/999-missing/plan.md").is_file()
+    else:
+        assert result.returncode != 0
+        assert "Selected feature directory does not exist" in result.stderr
+        assert [_snapshot(root) for root in _roots(tmp_path, project)] == before

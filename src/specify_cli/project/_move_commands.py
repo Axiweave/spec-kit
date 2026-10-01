@@ -200,26 +200,6 @@ def native_paths(repository: Path) -> tuple[Path, ...]:
     return tuple(sorted(paths))
 
 
-def _workspace_note(content: str) -> str:
-    content = IntegrationBase.add_workspace_note(content)
-    note = (
-        "\n## External feature selection\n\n"
-        "In external mode, read the active selection from `specify project info --json`.\n"
-        "Use the installed workspace feature helpers to update the selection.\n"
-        "Never read or write `.specify/feature.json` directly in external mode, even if older instructions below say otherwise.\n\n"
-    )
-    if "\r\n" in content:
-        note = note.replace("\n", "\r\n")
-    if note in content:
-        return content
-    lines = content.splitlines(keepends=True)
-    if lines and lines[0].rstrip("\r\n") == "---":
-        for index in range(1, len(lines)):
-            if lines[index].rstrip("\r\n") == "---":
-                return "".join(lines[:index + 1]) + note + "".join(lines[index + 1:])
-    return note + content
-
-
 def _refresh_core_assets(
     repository: Path, manifests: list[IntegrationManifest], modified: dict[str, set[str]],
 ) -> None:
@@ -318,7 +298,7 @@ def _toml_prompt(content: str, replacement: str | None = None) -> str:
     prompt = data.get("prompt")
     if not isinstance(prompt, str):
         raise ValueError("A native TOML command must have a string prompt.")
-    updated = _workspace_note(prompt if replacement is None else replacement)
+    updated = IntegrationBase.add_workspace_note(prompt if replacement is None else replacement)
     if updated == prompt:
         return content
     expected = {**data, "prompt": updated}
@@ -355,7 +335,7 @@ def _yaml_prompt(content: str, replacement: str | None = None) -> str:
         prompt = data.get(field)
         if not isinstance(prompt, str):
             raise ValueError("A native YAML command must have string instructions.")
-        updated = _workspace_note(prompt if replacement is None else replacement)
+        updated = IntegrationBase.add_workspace_note(prompt if replacement is None else replacement)
         if updated == prompt:
             return content
         candidates = [value for key, value in node.value if key.value == field]
@@ -426,7 +406,7 @@ def refresh_commands(repository: Path) -> None:
             if replacement is not None:
                 header = re.match(r"\A---[ \t]*\r?\n.*?^---[ \t]*(?:\r?\n|$)", content, re.M | re.S)
                 content = (header.group(0) if header else "") + "\n" + replacement + "\n"
-            updated = _workspace_note(content)
+            updated = IntegrationBase.add_workspace_note(content)
         if updated != original_content:
             replacements[path] = updated.encode("utf-8")
     for path, content in replacements.items():

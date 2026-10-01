@@ -25,6 +25,7 @@ from tests.parity_helpers import (
     ps_cmd,
     py_cmd,
     run,
+    set_feature_selection,
 )
 
 SCRIPT = "create-new-feature"
@@ -454,6 +455,8 @@ def test_all_variants_branch_truncation_match(repo: Path) -> None:
 @requires_bash
 def test_python_full_run_matches_bash(repo_pair: tuple[Path, Path]) -> None:
     repo_a, repo_b = repo_pair
+    for current in repo_pair:
+        set_feature_selection(current)
     description = "Add user authentication system"
 
     bash = run(bash_cmd(repo_a, SCRIPT, "--json", description), repo_a)
@@ -687,6 +690,7 @@ def test_python_help_matches_bash(repo: Path) -> None:
 
 @requires_bash
 def test_python_persists_relative_feature_json(repo: Path) -> None:
+    set_feature_selection(repo)
     py = run(py_cmd(repo, SCRIPT, "--json", "add rate limiting"), repo)
 
     assert py.returncode == 0, py.stderr
@@ -980,6 +984,7 @@ def test_all_variants_persist_symlinked_specs_path_lexically(
         _setup_repo(tmp_path, "python"),
     ]
     for current in repos:
+        set_feature_selection(current)
         specs_target = tmp_path / f"{current.name}-specs"
         specs_target.mkdir()
         try:

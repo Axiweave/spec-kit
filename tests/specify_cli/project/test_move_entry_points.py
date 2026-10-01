@@ -41,7 +41,7 @@ def test_native_command_keeps_content_and_finds_external_workspace(tmp_path, mon
     repository = tmp_path / "code"
     result = CliRunner().invoke(app, [
         "init", str(repository), "--storage", "local", "--integration", agent,
-        "--script", "py", "--feature-numbering", "sequential",
+        "--script", "py", "--feature-numbering", "sequential", "--feature-selection", "automatic",
         "--non-interactive", "--ignore-agent-tools",
     ])
     assert result.exit_code == 0, result.output

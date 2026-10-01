@@ -11,8 +11,12 @@
 # Usage: update-agent-context.ps1 [plan_path]
 #
 # External projects read configuration and feature selection from the workspace.
-# Local projects use `.specify/feature.json`, then the most recently modified
-# `specs/**/plan.md` when the saved plan does not exist.
+# Without a plan path, the project choice `feature_selection` in
+# `.specify/init-options.json` decides the plan:
+#   context (default)  the plan of the feature in SPECIFY_FEATURE_DIRECTORY.
+#                      The script never reads `.specify/feature.json` or scans `specs/`.
+#   automatic          SPECIFY_FEATURE_DIRECTORY when set, otherwise
+#                      `.specify/feature.json`, then the newest `specs/**/plan.md`.
 
 [CmdletBinding()]
 param(
@@ -388,6 +392,15 @@ if ($cm) {
     }
 }
 
+# Read the project choice before any write so an invalid one stops the update.
+# Context projects (the default) ignore the saved feature and the newest plan,
+# so a plan path or SPECIFY_FEATURE_DIRECTORY must name the feature.
+$SelectionMode = Get-FeatureSelectionMode -Storage $Storage
+if (-not $PlanPath -and $SelectionMode -cne 'automatic' -and -not $env:SPECIFY_FEATURE_DIRECTORY) {
+    Write-Warning 'agent-context: Feature directory not found. Pass a plan path or set SPECIFY_FEATURE_DIRECTORY for this command. This project uses feature_selection context, so the script ignores the saved feature and the newest plan.'
+    exit 1
+}
+
 if ($Storage.External) {
     if ($PlanPath) {
         $PlanPath = Resolve-StoragePath $Storage $PlanPath
@@ -397,11 +410,16 @@ if ($Storage.External) {
     $PlanPath = (Get-CanonicalStoragePath $PlanPath).Replace('\', '/')
 } elseif (-not $PlanPath) {
     # Prefer .specify/feature.json (written by /speckit-specify) over mtime heuristic.
+    # Context projects never read it: SPECIFY_FEATURE_DIRECTORY names the feature.
     $FeatureJson = Join-Path $ProjectRoot '.specify/feature.json'
-    if (Test-Path -LiteralPath $FeatureJson) {
+    if ($env:SPECIFY_FEATURE_DIRECTORY -or ($SelectionMode -ceq 'automatic' -and (Test-Path -LiteralPath $FeatureJson))) {
         try {
-            $fj = Get-Content -LiteralPath $FeatureJson -Raw -Encoding UTF8 | ConvertFrom-Json
-            $featureDir = $fj.feature_directory
+            if ($env:SPECIFY_FEATURE_DIRECTORY) {
+                $featureDir = $env:SPECIFY_FEATURE_DIRECTORY
+            } else {
+                $fj = Get-Content -LiteralPath $FeatureJson -Raw -Encoding UTF8 | ConvertFrom-Json
+                $featureDir = $fj.feature_directory
+            }
             if ($featureDir -isnot [string] -or -not $featureDir) {
                 $featureDir = $null
             } else {
@@ -435,8 +453,9 @@ if ($Storage.External) {
         }
     }
 
-    # Fall back to mtime only when feature.json is absent or its plan does not exist yet.
-    if (-not $PlanPath) {
+    # Automatic projects fall back to mtime only when feature.json is absent or its
+    # plan does not exist yet.
+    if (-not $PlanPath -and $SelectionMode -ceq 'automatic' -and -not $env:SPECIFY_FEATURE_DIRECTORY) {
         try {
             $specsDir = Join-Path $ProjectRoot 'specs'
             # Recurse (rather than the old one-level specs/*/plan.md scan) so scoped

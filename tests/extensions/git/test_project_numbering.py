@@ -105,6 +105,7 @@ def _set_modes(project, project_mode, branch_mode=None):
     _, workspace, _ = project
     _write_json(workspace / ".specify/init-options.json", {
         "feature_numbering": project_mode,
+        "feature_selection": "automatic",
         "integration": "copilot",
         "script": "sh",
     })

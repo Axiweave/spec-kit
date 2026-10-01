@@ -42,6 +42,16 @@ While this extension is disabled (or not installed), nothing in Spec Kit creates
 
 > NOTE: The command ID above is canonical. Invoke it using the syntax for your integration: `/speckit.agent-context.update` for dot-command integrations; `/speckit-agent-context-update` for hyphen/skills integrations (including Forge and Cline); `$speckit-agent-context-update` for Codex or ZCode in skills mode; or `/skill:speckit-agent-context-update` for Kimi.
 
+The default `feature_selection` mode is `context`.
+Pass an explicit plan path or set `SPECIFY_FEATURE_DIRECTORY` for that invocation.
+The agent asks when conversation context does not identify the feature.
+Context mode keeps saved selection unchanged and never chooses the newest plan.
+`automatic` preserves saved selection and the legacy newest-plan fallback.
+
+An explicit plan path overrides feature selection.
+Without a plan path, `SPECIFY_FEATURE_DIRECTORY` overrides saved selection in both modes.
+An explicit feature never selects another plan through the newest-plan fallback.
+
 ## Configuration
 
 All configuration flows through the extension's own config file at `.specify/extensions/agent-context/agent-context-config.yml` ([agent-context-config.yml](./agent-context-config.yml) in the repo).

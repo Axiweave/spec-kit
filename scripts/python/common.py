@@ -169,6 +169,42 @@ def get_workspace_root(repo_root: Path, *, report: bool = False) -> Path:
     return workspace
 
 
+FEATURE_SELECTION_MODES = ("context", "automatic")
+
+
+def feature_selection_mode(workspace_root: Path) -> str:
+    """Return the project policy for saved features: "context" (default) or "automatic"."""
+    path = workspace_root / ".specify" / "init-options.json"
+    if not os.path.lexists(path):
+        return "context"
+    try:
+        if path.is_symlink():
+            raise ValueError("Project choices must not be a symlink.")
+        if (workspace_root / ".specify" / "workspace.json").exists():
+            confined_workspace_path(workspace_root, path)
+        options = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(options, dict):
+            raise ValueError("Project choices must be a JSON object.")
+    except (OSError, UnicodeError, ValueError) as exc:
+        _storage_error(f"Cannot read project choices at {path}: {exc}")
+    mode = options.get("feature_selection", "context")
+    if mode not in FEATURE_SELECTION_MODES:
+        _storage_error(f"feature_selection must be context or automatic: {path}")
+    return mode
+
+
+def may_persist_feature_selection(mode: str, *, no_persist: bool = False) -> bool:
+    """Only automatic projects save the active feature, and no-persist always wins.
+
+    SPECIFY_FEATURE_NO_PERSIST is the environment-level equivalent of no_persist=True,
+    letting an orchestrator (multi-agent runner, CI matrix) guarantee that no
+    script invocation in the process tree writes the saved feature, even scripts
+    that don't pass no_persist themselves (#4128).
+    """
+    no_persist = no_persist or os.environ.get("SPECIFY_FEATURE_NO_PERSIST", "") in ("1", "true")
+    return mode == "automatic" and not no_persist
+
+
 def get_current_branch() -> str:
     return os.environ.get("SPECIFY_FEATURE", "")
 
@@ -257,13 +293,8 @@ def get_feature_paths(
     workspace_root = Path(external[1]["workspace"]).resolve() if external else repo_root
     if external:
         print(f"[specify] Workspace: {workspace_root}", file=sys.stderr)
+    selection_mode = feature_selection_mode(workspace_root)
     current_branch = get_current_branch()
-
-    # SPECIFY_FEATURE_NO_PERSIST is the environment-level equivalent of no_persist=True,
-    # letting an orchestrator (multi-agent runner, CI matrix) guarantee that no
-    # script invocation in the process tree writes .specify/feature.json, even
-    # scripts that don't pass no_persist themselves (#4128).
-    no_persist = no_persist or os.environ.get("SPECIFY_FEATURE_NO_PERSIST", "") in ("1", "true")
 
     feature_dir_raw = os.environ.get("SPECIFY_FEATURE_DIRECTORY", "")
     if feature_dir_raw:
@@ -273,6 +304,14 @@ def get_feature_paths(
             feature_dir = Path(feature_dir_raw)
             if not feature_dir.is_absolute():
                 feature_dir = repo_root / feature_dir
+    elif selection_mode != "automatic":
+        # Context projects never read the saved feature, so every command names its own.
+        print(
+            "ERROR: Feature directory not found. Set SPECIFY_FEATURE_DIRECTORY for this command. "
+            "This project uses feature_selection context, so scripts ignore the saved feature.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
     elif external:
         stored = external[1].get("active_feature")
         if not stored:
@@ -308,7 +347,7 @@ def get_feature_paths(
     if external:
         for name in ("spec.md", "plan.md", "tasks.md", "research.md", "data-model.md", "quickstart.md", "contracts"):
             confined_workspace_path(workspace_root, feature_dir / name)
-    if feature_dir_raw and not no_persist:
+    if feature_dir_raw and may_persist_feature_selection(selection_mode, no_persist=no_persist):
         persist_feature_json(repo_root, feature_dir_raw)
 
     if not current_branch:

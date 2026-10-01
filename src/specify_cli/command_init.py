@@ -280,6 +280,9 @@ def register(app: typer.Typer) -> None:
         feature_numbering: str = typer.Option(
             None, "--feature-numbering", help="Feature numbering mode: sequential or timestamp."
         ),
+        feature_selection: str = typer.Option(
+            None, "--feature-selection", help="Feature selection mode: context or automatic."
+        ),
         global_commands: bool = typer.Option(
             False, "--global-commands", help="Use shared OMP commands instead of project-local command copies."
         ),
@@ -450,6 +453,14 @@ def register(app: typer.Typer) -> None:
             integration = integration or defaults.get("integration") or defaults.get("ai")
             script_type = script_type or defaults.get("script")
             feature_numbering = feature_numbering or defaults.get("feature_numbering")
+            if feature_selection is None:
+                # A saved project value must be valid. Only a personal default may be empty.
+                feature_selection = (
+                    defaults.get("feature_selection", "context") if existing_project
+                    else defaults.get("feature_selection") or "context"
+                )
+            if feature_selection not in ("context", "automatic"):
+                raise ValueError(f"Feature selection must be context or automatic, not {feature_selection!r}.")
             storage_root = defaults.get("storage_root") if not existing_project else None
         except (ValueError, OSError) as exc:
             console.print(f"[red]Error:[/red] {_escape_markup(str(exc))}")
@@ -818,6 +829,7 @@ def register(app: typer.Typer) -> None:
                     "here": here,
                     "script": selected_script,
                     "feature_numbering": feature_numbering,
+                    "feature_selection": feature_selection,
                     "speckit_version": get_speckit_version(),
                     "command_scope": "global" if global_commands else "project",
                 }

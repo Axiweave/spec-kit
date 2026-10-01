@@ -100,6 +100,7 @@ def _run_init(integration: str, *, script_type: str, offline: bool = False) -> N
             storage=None,
             workspace=None,
             feature_numbering=None,
+            feature_selection=None,
             global_commands=False,
             ignore_agent_tools=True,
             here=True,

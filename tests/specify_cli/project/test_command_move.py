@@ -85,7 +85,7 @@ def local_project(tmp_path, monkeypatch):
         ".specify/feature.json": b'{ "feature_directory": "specs/007-current" }\n',
         ".specify/init-options.json": json.dumps({
             "integration": "omp", "ai": "omp", "script": "sh",
-            "feature_numbering": "timestamp", "command_scope": "project",
+            "feature_numbering": "timestamp", "feature_selection": "automatic", "command_scope": "project",
         }).encode(),
         ".specify/memory/constitution.md": b"# User constitution\nKeep this edit.\n",
         ".specify/templates/plan-template.md": b"# Project plan template\n",
@@ -164,6 +164,7 @@ def assert_moved(
     assert info["workspace_root"] == str(workspace)
     assert info["active_feature"] == ACTIVE_FEATURE
     assert info["feature_numbering"] == "timestamp"
+    assert info["feature_selection"] == "automatic"
     assert info["integration"] == "omp"
     assert info["script"] == "sh"
     return info

@@ -219,10 +219,74 @@ check_workspace_path() {
     fi
 }
 
+# Read the project's saved-feature policy from the workspace init options.
+# Prints "context" (the default) or "automatic". A context project never reads
+# or writes the saved feature, so each command names its feature with
+# SPECIFY_FEATURE_DIRECTORY. An invalid choice fails before any write.
+get_feature_selection_mode() {
+    local workspace_root="$1"
+    local options="$workspace_root/.specify/init-options.json" mode python_spec
+    if [[ ! -e "$options" && ! -L "$options" ]]; then
+        printf 'context\n'
+        return 0
+    fi
+    check_workspace_path "$workspace_root" "$options" || return 1
+    if [[ -L "$options" || ! -f "$options" ]]; then
+        echo "ERROR: Cannot read project choices at $options: Project choices must be a regular file." >&2
+        return 1
+    fi
+    # Pick a parser by whether it runs, not by whether it exists. On Windows
+    # `python3` can be a Store alias stub that fails at runtime (issue #3304).
+    if command -v jq >/dev/null 2>&1 && jq -n . >/dev/null 2>&1; then
+        mode=$(jq -ers '
+            if length != 1 or (.[0] | type) != "object" then error("Project choices must be a JSON object.")
+            else .[0] end
+            | if has("feature_selection") then .feature_selection else "context" end
+            | if . == "context" or . == "automatic" then . else "invalid" end
+        ' "$options" 2>/dev/null) || mode="unreadable"
+    elif python_spec=$(_python3_command); then
+        local -a python_cmd
+        read -r -a python_cmd <<< "$python_spec"
+        mode=$("${python_cmd[@]}" -c '
+import json, sys
+options = json.load(open(sys.argv[1], encoding="utf-8"))
+if not isinstance(options, dict):
+    sys.exit(1)
+mode = options.get("feature_selection", "context")
+print(mode if mode in ("context", "automatic") else "invalid")
+' "$options" 2>/dev/null) || mode="unreadable"
+    else
+        echo "ERROR: Cannot read project choices at $options. Install jq or Python 3 to validate the JSON." >&2
+        return 1
+    fi
+    case "$mode" in
+        context|automatic) printf '%s\n' "$mode" ;;
+        unreadable)
+            echo "ERROR: Cannot read project choices at $options: Project choices must be a JSON object." >&2
+            return 1
+            ;;
+        *)
+            echo "ERROR: feature_selection must be context or automatic: $options" >&2
+            return 1
+            ;;
+    esac
+}
+
+# Only automatic projects save the active feature, and no-persist always wins.
+# Arguments: the selection mode, then "true" when the caller passed --no-persist.
+# SPECIFY_FEATURE_NO_PERSIST is the environment-level equivalent of --no-persist,
+# letting an orchestrator (multi-agent runner, CI matrix) guarantee that no
+# script invocation in the process tree writes the saved feature, even scripts
+# that don't pass --no-persist themselves (#4128).
+may_persist_feature_selection() {
+    [[ "$1" == automatic && "${2:-false}" != true &&
+        "${SPECIFY_FEATURE_NO_PERSIST:-}" != "1" && "${SPECIFY_FEATURE_NO_PERSIST:-}" != "true" ]]
+}
+
 # Get current feature name from explicit state only.
 # Returns the feature identifier or empty string if none is set.
 # Feature state is set by SPECIFY_FEATURE (from create-new-feature or
-# the git extension) or implicitly via .specify/feature.json.
+# the git extension) or, in automatic projects, via .specify/feature.json.
 get_current_branch() {
     if [[ -n "${SPECIFY_FEATURE:-}" ]]; then
         echo "$SPECIFY_FEATURE"
@@ -335,13 +399,6 @@ get_feature_paths() {
         no_persist=true
         shift
     fi
-    # SPECIFY_FEATURE_NO_PERSIST is the environment-level equivalent of --no-persist,
-    # letting an orchestrator (multi-agent runner, CI matrix) guarantee that no
-    # script invocation in the process tree writes .specify/feature.json, even
-    # scripts that don't pass --no-persist themselves (#4128).
-    if [[ "${SPECIFY_FEATURE_NO_PERSIST:-}" == "1" || "${SPECIFY_FEATURE_NO_PERSIST:-}" == "true" ]]; then
-        no_persist=true
-    fi
 
     # Split decl/assignment so a SPECIFY_INIT_DIR validation failure in
     # get_repo_root propagates as a hard error instead of being masked by `local`.
@@ -352,12 +409,14 @@ get_feature_paths() {
     if [[ -n "$project_record" ]]; then
         printf '[specify] Workspace: %s\n' "$workspace_root" >&2
     fi
+    local selection_mode
+    selection_mode=$(get_feature_selection_mode "$workspace_root") || return 1
     local current_branch
     current_branch=$(get_current_branch)
 
     # Resolve feature directory.  Priority:
     #   1. SPECIFY_FEATURE_DIRECTORY env var (explicit override)
-    #   2. External machine record, or local .specify/feature.json
+    #   2. Automatic projects only: external machine record, or local .specify/feature.json
     #   3. Error — no feature context available
     local feature_dir
     if [[ -n "${SPECIFY_FEATURE_DIRECTORY:-}" ]]; then
@@ -367,6 +426,10 @@ get_feature_paths() {
         else
             [[ "$feature_dir" != /* ]] && feature_dir="$workspace_root/$feature_dir"
         fi
+    elif [[ "$selection_mode" != automatic ]]; then
+        # Context projects never read the saved feature, so every command names its own.
+        echo "ERROR: Feature directory not found. Set SPECIFY_FEATURE_DIRECTORY for this command. This project uses feature_selection context, so scripts ignore the saved feature." >&2
+        return 1
     elif [[ -n "$project_record" ]]; then
         local saved_feature
         saved_feature=$(_storage_json "$project_record" record active_feature) || return 1
@@ -401,7 +464,7 @@ get_feature_paths() {
             workspace_path "$workspace_root" "$feature_dir/$artifact" >/dev/null || return 1
         done
     fi
-    if [[ -n "${SPECIFY_FEATURE_DIRECTORY:-}" && "$no_persist" != true ]]; then
+    if [[ -n "${SPECIFY_FEATURE_DIRECTORY:-}" ]] && may_persist_feature_selection "$selection_mode" "$no_persist"; then
         _persist_feature_json "$repo_root" "$SPECIFY_FEATURE_DIRECTORY" || return 1
     fi
 

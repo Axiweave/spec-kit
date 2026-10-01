@@ -21,6 +21,7 @@ specify init [<project_name>]
 | `--workspace <path>` | Select an exact external workspace. Conflicts with `--storage local` |
 | `--global-commands` | Use one shared OMP command set without repository-local command copies |
 | `--feature-numbering sequential\|timestamp` | Save the project's feature-directory numbering mode |
+| `--feature-selection context\|automatic` | Use invocation context (default) or save the selected feature |
 
 Creates a new Spec Kit project with the necessary directory structure, templates, scripts, and AI coding agent integration files.
 
@@ -69,8 +70,8 @@ An unavailable or foreign workspace produces an error instead of a repository-lo
 
 Run `specify project info --json` from the code repository to inspect its effective roots and active feature.
 Git and workflow shell commands keep the code repository as their working directory.
-External scripts recover feature selection from the machine-local project record.
-Local projects retain `.specify/feature.json` and existing absolute feature overrides.
+In `context` mode, scripts use an explicit feature path for that invocation and keep saved selection unchanged.
+In `automatic` mode, external scripts use the machine-local record and local scripts use `.specify/feature.json`.
 In external mode, feature overrides must remain inside the selected workspace.
 
 Machine records use `$XDG_DATA_HOME/specify/projects/`, or `~/.local/share/specify/projects/` on Unix when unset.
@@ -120,6 +121,7 @@ specify config set storage_root "~/speckit-specs"
 specify config set feature_numbering timestamp
 specify config set integration omp
 specify config set script py
+specify config set feature_selection context
 specify config get storage_root
 specify config clear script
 ```
@@ -140,6 +142,42 @@ Setup expands `~` without changing the saved string.
 Explicit `--storage local` and `--workspace` override that location choice.
 `SPECKIT_INTEGRATION_DEFAULT` overrides the personal integration value unless `--integration` is explicit.
 Changed personal defaults do not change an existing project's workspace or saved choices, including during forced reinitialization.
+
+### Feature selection
+
+`feature_selection` accepts `context` and `automatic`.
+The default is `context`, including projects whose saved choices do not contain this field.
+Creating a specification does not change `.specify/feature.json` or the external record in this mode.
+Helpers also ignore old saved selections.
+
+The agent uses the feature established in conversation context or an explicit user request.
+If the target is unclear, the agent asks before hooks, helpers, or file changes.
+It passes `SPECIFY_FEATURE_DIRECTORY` only for the current invocation.
+Concurrent worktrees can use different features without changing shared selection state.
+
+`automatic` restores the saved-selection behavior.
+Feature creation selects the new feature, and later helpers can recover it from the saved state.
+`SPECIFY_FEATURE_NO_PERSIST=1` still prevents automatic writes.
+
+```bash
+# Set a default for new projects
+specify config set feature_selection context
+
+# Opt a new project into saved selection
+specify init my-project --integration omp --feature-selection automatic
+
+# Local storage: run one helper without a session-wide export
+SPECIFY_FEATURE_DIRECTORY=specs/002-example python .specify/scripts/python/setup_plan.py --json
+```
+
+For external storage, use the helper under the reported `workspace_root`.
+
+For an existing project, edit only `feature_selection` in the workspace's `.specify/init-options.json`.
+Preserve its other fields.
+The helpers read that field on each invocation.
+`specify project info --json` reports the mode.
+In `context` mode, `active_feature` is null unless that invocation provides an explicit feature path.
+No special `feature.json` value or new selection file is required.
 
 ### Feature and branch numbering
 

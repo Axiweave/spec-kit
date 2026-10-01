@@ -126,6 +126,7 @@ def find_repository(start: Path | None = None) -> Path:
 
 
 def resolve_project(start: Path | None = None) -> Project:
+    """Resolve both roots and this call's feature: the env override, else the saved one in automatic mode."""
     return _load_project(find_repository(start))
 
 
@@ -135,6 +136,17 @@ def workspace_root_for(repository: Path) -> Path:
     if not locator.exists() and not locator.is_symlink():
         return repository
     return _load_project(repository.resolve(), select_feature=False).workspace_root
+
+
+def feature_selection_mode(workspace_root: Path) -> str:
+    """Return the project's saved-feature policy: "context" (default) or "automatic"."""
+    path = workspace_root / ".specify/init-options.json"
+    if not path.exists() and not path.is_symlink():
+        return "context"
+    mode = read_json(path).get("feature_selection", "context")
+    if mode not in ("context", "automatic"):
+        raise ValueError(f"feature_selection must be context or automatic: {path}")
+    return mode
 
 
 def _load_project(repository: Path, *, select_feature: bool = True) -> Project:
@@ -159,10 +171,11 @@ def _load_project(repository: Path, *, select_feature: bool = True) -> Project:
         if not isinstance(value, str) or not Path(value).is_absolute():
             raise ValueError(f"Workspace must be an absolute path: {record_path}")
         workspace = verify_workspace(Path(value), project_id)
-        saved = record.get("active_feature")
-        if saved is not None and (not isinstance(saved, str) or not saved or Path(saved).is_absolute()):
-            raise ValueError(f"Active feature must be a workspace-relative path: {record_path}")
-    elif select_feature:
+        if select_feature and feature_selection_mode(workspace) == "automatic":
+            saved = record.get("active_feature")
+            if saved is not None and (not isinstance(saved, str) or not saved or Path(saved).is_absolute()):
+                raise ValueError(f"Active feature must be a workspace-relative path: {record_path}")
+    elif select_feature and feature_selection_mode(repository) == "automatic":
         pointer = repository / ".specify/feature.json"
         if pointer.is_file():
             saved = read_json(pointer).get("feature_directory")

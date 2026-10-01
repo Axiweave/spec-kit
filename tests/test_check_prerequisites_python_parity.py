@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from tests.conftest import requires_bash
-from tests.parity_helpers import install_composition_stack
+from tests.parity_helpers import install_composition_stack, set_feature_selection
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 COMMON_SH = PROJECT_ROOT / "scripts" / "bash" / "common.sh"
@@ -48,6 +48,7 @@ def _install_scripts(repo: Path) -> None:
 def _write_feature_json(
     repo: Path, feature_directory: str = "specs/001-my-feature"
 ) -> None:
+    set_feature_selection(repo)  # A saved feature applies only to automatic projects.
     (repo / ".specify" / "feature.json").write_text(
         json.dumps({"feature_directory": feature_directory}, separators=(",", ":"))
         + "\n",
@@ -503,6 +504,7 @@ def test_persisted_feature_json_is_lexical_when_specs_is_symlink(
     """A symlinked specs/ dir must persist "specs/NNN" like Bash does with its
     lexical prefix strip — resolve() would escape the repo and store a
     machine-specific absolute path."""
+    set_feature_selection(prereq_repo)
     real_specs = tmp_path / "real-specs"
     feat = real_specs / "002-other"
     feat.mkdir(parents=True)

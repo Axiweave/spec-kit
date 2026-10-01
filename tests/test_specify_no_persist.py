@@ -1,12 +1,12 @@
 """Tests for SPECIFY_FEATURE_NO_PERSIST, the env-level equivalent of --no-persist (#4128).
 
 Scripts like setup-plan/setup-tasks call get_feature_paths() without
---no-persist, so every invocation with SPECIFY_FEATURE_DIRECTORY set
-overwrites .specify/feature.json. In multi-agent setups where several
-processes each set their own SPECIFY_FEATURE_DIRECTORY, this creates a
-write-write race on the shared file. SPECIFY_FEATURE_NO_PERSIST lets an orchestrator
-suppress that write across every script invocation without having to patch
-each call site.
+--no-persist, so in an automatic project every invocation with
+SPECIFY_FEATURE_DIRECTORY set overwrites .specify/feature.json. In
+multi-agent setups where several processes each set their own
+SPECIFY_FEATURE_DIRECTORY, this creates a write-write race on the shared
+file. SPECIFY_FEATURE_NO_PERSIST lets an orchestrator suppress that write
+across every script invocation without having to patch each call site.
 """
 
 import json
@@ -26,6 +26,7 @@ from tests.parity_helpers import (
     ps_cmd,
     py_cmd,
     run,
+    set_feature_selection,
 )
 
 SCRIPT = "setup-plan"
@@ -34,6 +35,7 @@ PLAN_TEMPLATE = PROJECT_ROOT / "templates" / "plan-template.md"
 
 def _setup_repo(tmp_path: Path, name: str = "proj") -> Path:
     repo = make_repo(tmp_path, name)
+    set_feature_selection(repo)
     install_scripts(repo, SCRIPT)
     templates = repo / ".specify" / "templates"
     templates.mkdir(parents=True, exist_ok=True)
@@ -54,7 +56,7 @@ def repo(tmp_path: Path) -> Path:
 
 
 @requires_bash
-def test_bash_persists_by_default(repo: Path) -> None:
+def test_bash_persists_in_automatic_mode(repo: Path) -> None:
     (repo / "specs" / "001-a").mkdir(parents=True)
     env = clean_env()
     env["SPECIFY_FEATURE_DIRECTORY"] = "specs/001-a"
@@ -123,6 +125,7 @@ SPEC_TEMPLATE_BODY = "# Spec Template\n\nBody.\n"
 
 def _create_feature_repo(tmp_path: Path, name: str = "proj") -> Path:
     repo = make_repo(tmp_path, name)
+    set_feature_selection(repo)
     install_scripts(repo, CREATE_SCRIPT)
     templates = repo / ".specify" / "templates"
     templates.mkdir(parents=True, exist_ok=True)

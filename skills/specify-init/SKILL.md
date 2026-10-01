@@ -40,6 +40,7 @@ Use these topics in order:
 | Workspace history | For fresh external setup, create the initial Git commit or select `--no-workspace-git`. Explain the commit before approval. |
 | Scripts | Offer the CLI's supported script types. Recommend the platform shell, or Python for cross-platform use. |
 | Numbering | Sequential numbers support an ordered feature list. Timestamps reduce shared-number conflicts. Preserve an existing choice. |
+| Feature selection | If supported, recommend `context` for independent sessions and worktrees. `automatic` saves the newest selected feature for later commands. |
 | Extras | Install no preset or extension unless requested. Resolve requested sources before setup. |
 
 For OMP, ask about project-local commands versus shared commands only when that choice matters.
@@ -52,7 +53,7 @@ If the user wants different storage for an existing project, use the documented 
 
 ## 3. Approve the setup
 
-1. Show the code directory, workspace choice, integration, script type, numbering, and requested extras.
+1. Show the code directory, workspace choice, integration, script type, numbering, feature selection, and requested extras.
 2. Show the exact command with each argument safely quoted.
 3. Explain any initial workspace commit, global command writes, package installation, or overwrite risk.
 4. Get approval for unresolved side effects and the exact target paths.
@@ -74,8 +75,9 @@ Keep Git identity, signing, hooks, credentials, and existing staged changes unch
 3. Pass the integration, storage, script type, and numbering explicitly.
 4. For an exact external destination, also pass `--workspace` with that path.
 5. For the external history opt-out, add `--no-workspace-git`.
-6. Add only the approved integration options, preset, extensions, and risk-related flags.
-7. Capture the exit status, setup notices, warnings, and recovery paths.
+6. If supported, pass `--feature-selection` with the approved mode.
+7. Add only the approved integration options, preset, extensions, and risk-related flags.
+8. Capture the exit status, setup notices, warnings, and recovery paths.
 
 Pass arguments separately when the execution tool supports argument arrays.
 If setup fails, inspect its reported cause before another action.

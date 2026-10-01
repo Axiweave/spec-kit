@@ -10,7 +10,7 @@ $ARGUMENTS
 
 ## Outline
 
-1. Read `.specify/feature.json` to get the feature directory path.
+1. Resolve the feature using the Feature context instructions above. Ask the user if the target is unclear.
 
 2. **Load context**: `.specify/memory/constitution.md` and `<feature_directory>/spec.md` and `<feature_directory>/plan.md`.
 

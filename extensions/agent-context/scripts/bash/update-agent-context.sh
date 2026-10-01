@@ -11,8 +11,12 @@
 # Usage: update-agent-context.sh [plan_path]
 #
 # External projects read configuration and feature selection from the workspace.
-# Local projects use `.specify/feature.json`, then the most recently modified
-# `specs/**/plan.md` when the saved plan does not exist.
+# Without a plan path, the project choice `feature_selection` in
+# `.specify/init-options.json` decides the plan:
+#   context (default)  the plan of the feature in SPECIFY_FEATURE_DIRECTORY.
+#                      The script never reads `.specify/feature.json` or scans `specs/`.
+#   automatic          `.specify/feature.json`, then the most recently modified
+#                      `specs/**/plan.md` when the saved plan does not exist.
 
 set -euo pipefail
 
@@ -265,6 +269,14 @@ unset _cf_parts _seg
 [[ -z "$MARKER_END"   ]] && MARKER_END="$DEFAULT_END"
 
 PLAN_PATH="${1:-}"
+# Read the project choice before any write so an invalid one stops the update.
+# Context projects (the default) ignore the saved feature and the newest plan,
+# so a plan path or SPECIFY_FEATURE_DIRECTORY must name the feature.
+SELECTION_MODE="$(get_feature_selection_mode "$WORKSPACE_ROOT")" || exit 1
+if [[ -z "$PLAN_PATH" && "$SELECTION_MODE" != automatic && -z "${SPECIFY_FEATURE_DIRECTORY:-}" ]]; then
+  echo "agent-context: Feature directory not found. Pass a plan path or set SPECIFY_FEATURE_DIRECTORY for this command. This project uses feature_selection context, so the script ignores the saved feature and the newest plan." >&2
+  exit 1
+fi
 if [[ -n "$PROJECT_RECORD" ]]; then
   if [[ -n "$PLAN_PATH" ]]; then
     printf '[specify] Workspace: %s\n' "$WORKSPACE_ROOT" >&2
@@ -275,10 +287,12 @@ if [[ -n "$PROJECT_RECORD" ]]; then
     PLAN_PATH="$IMPL_PLAN"
   fi
 elif [[ -z "$PLAN_PATH" ]]; then
-  # Prefer .specify/feature.json (written by /speckit-specify) over mtime heuristic.
-  _feature_json="$PROJECT_ROOT/.specify/feature.json"
-  if [[ -f "$_feature_json" ]]; then
-    _feature_dir="$("$_python" - "$_feature_json" <<'PY'
+  _feature_dir="${SPECIFY_FEATURE_DIRECTORY:-}"
+  if [[ -z "$_feature_dir" && "$SELECTION_MODE" == automatic ]]; then
+    # Prefer .specify/feature.json (written by /speckit-specify) over mtime heuristic.
+    _feature_json="$PROJECT_ROOT/.specify/feature.json"
+    if [[ -f "$_feature_json" ]]; then
+      _feature_dir="$("$_python" - "$_feature_json" <<'PY'
 import sys, json
 try:
     with open(sys.argv[1], encoding="utf-8") as fh:
@@ -289,22 +303,24 @@ except Exception:
     print("")
 PY
 )"
-    # Normalize backslashes (written by PS on Windows) to forward slashes before path ops.
-    _feature_dir="$(printf '%s' "$_feature_dir" | tr '\\' '/')"
-    _feature_dir="${_feature_dir%/}"
-    if [[ -n "$_feature_dir" ]]; then
-      # feature_directory may be relative or absolute (absolute paths outside PROJECT_ROOT
-      # are preserved as-is by _persist_feature_json in common.sh).
-      # Also match drive-qualified paths (C:/...) written by PowerShell on Windows.
-      if [[ "$_feature_dir" == /* ]] || [[ "$_feature_dir" =~ ^[A-Za-z]:/ ]]; then
-        _candidate="$_feature_dir/plan.md"
-      else
-        _candidate="$PROJECT_ROOT/$_feature_dir/plan.md"
-      fi
-      if [[ -f "$_candidate" ]]; then
-        # Resolve symlinks before comparing so paths like /var/… vs /private/var/…
-        # (macOS) are treated as equivalent. Mirrors the mtime-fallback approach.
-        PLAN_PATH="$("$_python" - "$PROJECT_ROOT" "$_candidate" <<'PY'
+    fi
+  fi
+  # Normalize backslashes (written by PS on Windows) to forward slashes before path ops.
+  _feature_dir="$(printf '%s' "$_feature_dir" | tr '\\' '/')"
+  _feature_dir="${_feature_dir%/}"
+  if [[ -n "$_feature_dir" ]]; then
+    # feature_directory may be relative or absolute (absolute paths outside PROJECT_ROOT
+    # are preserved as-is by _persist_feature_json in common.sh).
+    # Also match drive-qualified paths (C:/...) written by PowerShell on Windows.
+    if [[ "$_feature_dir" == /* ]] || [[ "$_feature_dir" =~ ^[A-Za-z]:/ ]]; then
+      _candidate="$_feature_dir/plan.md"
+    else
+      _candidate="$PROJECT_ROOT/$_feature_dir/plan.md"
+    fi
+    if [[ -f "$_candidate" ]]; then
+      # Resolve symlinks before comparing so paths like /var/… vs /private/var/…
+      # (macOS) are treated as equivalent. Mirrors the mtime-fallback approach.
+      PLAN_PATH="$("$_python" - "$PROJECT_ROOT" "$_candidate" <<'PY'
 import sys
 from pathlib import Path
 root = Path(sys.argv[1]).resolve()
@@ -317,14 +333,14 @@ except ValueError:
     print(cand.as_posix())
 PY
 )"
-      fi
     fi
   fi
 
-  # Fall back to mtime only when feature.json is absent or its plan does not exist yet.
+  # Automatic projects fall back to mtime only when feature.json is absent or its
+  # plan does not exist yet.
   # Python emits a project-relative POSIX path directly to avoid bash prefix-strip
   # issues with backslash paths on Windows (Git bash / MSYS2).
-  if [[ -z "$PLAN_PATH" ]]; then
+  if [[ -z "$PLAN_PATH" && "$SELECTION_MODE" == automatic && -z "${SPECIFY_FEATURE_DIRECTORY:-}" ]]; then
     _plan_rel="$("$_python" - "$PROJECT_ROOT" <<'PY'
 import sys
 from pathlib import Path

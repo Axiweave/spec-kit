@@ -202,6 +202,8 @@ SPECS_DIR="$WORKSPACE_ROOT/specs"
 check_workspace_path "$WORKSPACE_ROOT" "$SPECS_DIR" || exit 1
 INIT_OPTIONS="$WORKSPACE_ROOT/.specify/init-options.json"
 check_workspace_path "$WORKSPACE_ROOT" "$INIT_OPTIONS" || exit 1
+# Read the saved-feature policy before any write so an invalid choice creates nothing.
+SELECTION_MODE=$(get_feature_selection_mode "$WORKSPACE_ROOT") || exit 1
 if [[ "$USE_TIMESTAMP" != true && "$NUMBER_EXPLICIT" != true && -f "$INIT_OPTIONS" ]]; then
     if command -v jq >/dev/null 2>&1; then
         FEATURE_NUMBERING=$(jq -er '
@@ -419,9 +421,10 @@ if [ "$DRY_RUN" != true ]; then
         fi
     fi
 
-    # Save the feature in the local pointer or external machine record.
-    # Honor the orchestrator's no-persist setting.
-    if [[ "${SPECIFY_FEATURE_NO_PERSIST:-}" != "1" && "${SPECIFY_FEATURE_NO_PERSIST:-}" != "true" ]]; then
+    # Only automatic projects save the feature in the local pointer or external
+    # machine record. Context projects keep the saved feature as it is, and
+    # SPECIFY_FEATURE_NO_PERSIST always wins.
+    if may_persist_feature_selection "$SELECTION_MODE"; then
         _persist_feature_json "$REPO_ROOT" "$FEATURE_DIR"
     fi
 

@@ -20,6 +20,7 @@ from tests.parity_helpers import (
     ps_cmd,
     py_cmd,
     run,
+    set_feature_selection,
     write_feature_json,
 )
 
@@ -30,6 +31,7 @@ def _setup_repo(tmp_path: Path) -> Path:
     repo = make_repo(tmp_path)
     install_scripts(repo, SCRIPT)
     write_feature_json(repo)
+    set_feature_selection(repo)
     feature = repo / "specs" / "001-my-feature"
     feature.mkdir(parents=True)
     (feature / "plan.md").write_text("# plan\n", encoding="utf-8")
@@ -190,14 +192,16 @@ def test_powershell_help_beats_unknown_option(repo: Path) -> None:
 
 @requires_bash
 @pytest.mark.skipif(not HAS_POWERSHELL, reason="no PowerShell available")
+@pytest.mark.parametrize("policy", ["context", "automatic"])
 @pytest.mark.parametrize(
     "context", ["missing", "invalid_json", "invalid_utf8", "invalid_init_dir"]
 )
 def test_all_variants_feature_context_error_matches(
-    tmp_path: Path, context: str
+    tmp_path: Path, context: str, policy: str
 ) -> None:
     repo = make_repo(tmp_path)
     install_scripts(repo, SCRIPT)
+    set_feature_selection(repo, policy)
     env = None
     if context == "invalid_json":
         (repo / ".specify" / "feature.json").write_text(

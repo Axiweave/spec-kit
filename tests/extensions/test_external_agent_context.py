@@ -74,6 +74,7 @@ def project(tmp_path, variant, request):
     })
     config = workspace / ".specify/extensions/agent-context/agent-context-config.yml"
     write_json(config, {"context_file": "AGENTS.md"})
+    write_json(workspace / ".specify/init-options.json", {"feature_selection": "automatic"})
     for name in ("007-selected", "099-unselected"):
         feature = workspace / "specs" / name
         feature.mkdir(parents=True)
@@ -172,7 +173,7 @@ def test_external_context_ignores_stale_repository_config_and_selection(project)
 def test_external_context_self_seeds_from_workspace_configuration(project):
     repo, workspace, _, config, _, _ = project
     write_json(config, {})
-    write_json(workspace / ".specify/init-options.json", {"integration": "claude"})
+    write_json(workspace / ".specify/init-options.json", {"integration": "claude", "feature_selection": "automatic"})
     write_json(config.parent / "agent-context-defaults.json", {"agents": {"claude": "CLAUDE.md"}})
     result = invoke(project)
     assert result.returncode == 0, result.stderr
@@ -219,7 +220,8 @@ def test_external_context_rejects_output_outside_repository(project):
     assert snapshot(workspace) == before_workspace
 
 
-def test_standalone_python_context_preserves_local_plan_fallback(tmp_path):
+def test_standalone_python_context_follows_the_default_policy(tmp_path):
+    """Without the core helper the policy file is unreadable, so context applies."""
     repo = tmp_path / "local project"
     config = repo / ".specify/extensions/agent-context/agent-context-config.yml"
     write_json(config, {"context_file": "AGENTS.md"})
@@ -229,11 +231,20 @@ def test_standalone_python_context_preserves_local_plan_fallback(tmp_path):
     script = tmp_path / "standalone/update_agent_context.py"
     script.parent.mkdir()
     shutil.copy2(EXT_DIR / "scripts/python/update_agent_context.py", script)
-    result = subprocess.run(
+    env = _bundled_script_env(repo)
+    refused = subprocess.run(
         [sys.executable, str(script)], cwd=repo,
-        env=_bundled_script_env(repo), capture_output=True, text=True, timeout=30,
+        env=env, capture_output=True, text=True, timeout=30,
     )
-    assert result.returncode == 0, result.stderr
+    assert refused.returncode == 1
+    assert "SPECIFY_FEATURE_DIRECTORY" in refused.stderr
+    assert not (repo / "AGENTS.md").exists()
+    named = subprocess.run(
+        [sys.executable, str(script)], cwd=repo,
+        env={**env, "SPECIFY_FEATURE_DIRECTORY": "specs/001-local"},
+        capture_output=True, text=True, timeout=30,
+    )
+    assert named.returncode == 0, named.stderr
     assert "at specs/001-local/plan.md" in (repo / "AGENTS.md").read_text(encoding="utf-8")
 
 
@@ -264,3 +275,62 @@ def test_external_context_rejects_selection_outside_workspace(project, override)
     assert result.returncode != 0, result.stdout + result.stderr
     assert snapshot(repo) == before_repo
     assert snapshot(workspace) == before_workspace
+
+
+def choose_policy(workspace: Path, mode: str | None) -> None:
+    path = workspace / ".specify/init-options.json"
+    if mode is None:
+        path.unlink()
+    else:
+        write_json(path, {"feature_selection": mode})
+
+
+@pytest.mark.parametrize("mode", [None, "context"])
+def test_external_context_policy_ignores_the_saved_feature(project, mode):
+    repo, workspace, record, _, _, _ = project
+    choose_policy(workspace, mode)
+    before_repo = snapshot(repo)
+    before_workspace = snapshot(workspace)
+    before_record = record.read_bytes()
+    result = invoke(project)
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "SPECIFY_FEATURE_DIRECTORY" in (result.stderr + result.stdout)
+    assert snapshot(repo) == before_repo
+    assert snapshot(workspace) == before_workspace
+    assert record.read_bytes() == before_record
+
+
+@pytest.mark.parametrize("override", ["feature", "plan"])
+@pytest.mark.parametrize("mode", [None, "context"])
+def test_external_context_policy_uses_explicit_selection_and_keeps_the_record(
+    project, mode, override
+):
+    repo, workspace, record, _, env, _ = project
+    choose_policy(workspace, mode)
+    before_record = record.read_bytes()
+    args = ()
+    if override == "feature":
+        env["SPECIFY_FEATURE_DIRECTORY"] = "specs/099-unselected"
+    else:
+        args = ("specs/099-unselected/plan.md",)
+    result = invoke(project, *args)
+    assert result.returncode == 0, result.stderr
+    content = (repo / "AGENTS.md").read_text(encoding="utf-8")
+    assert f"at {(workspace / 'specs/099-unselected/plan.md').resolve().as_posix()}" in content
+    assert "007-selected" not in content
+    assert record.read_bytes() == before_record
+
+
+def test_external_invalid_policy_stops_before_any_write(project):
+    repo, workspace, record, _, env, _ = project
+    choose_policy(workspace, "Context")
+    env["SPECIFY_FEATURE_DIRECTORY"] = "specs/099-unselected"
+    before_repo = snapshot(repo)
+    before_workspace = snapshot(workspace)
+    before_record = record.read_bytes()
+    result = invoke(project)
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "feature_selection" in (result.stderr + result.stdout)
+    assert snapshot(repo) == before_repo
+    assert snapshot(workspace) == before_workspace
+    assert record.read_bytes() == before_record

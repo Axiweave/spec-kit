@@ -6,6 +6,8 @@
 
 ### Added
 
+- Default feature selection to invocation context without changing saved state. Agents infer the feature from the conversation or ask when unclear. Configure `feature_selection` as `context` or `automatic` globally for new projects or in project setup options. Apply the policy across CLI resolution, all script languages, presets, and agent-context updates.
+- Honor explicit feature context in every agent-context mode. Keep PowerShell pre-creation permission separate from selection persistence. Verify TOML body preservation and document shared integration instructions.
 - Give new external workspaces one independent initial Git commit, with an explicit `--no-workspace-git` opt-out for setup and migration.
 - Track durable workspace content while excluding private state and unchanged generated files through producer hashes.
 - Preserve committed workspaces after migration recovery failures and preserve custom package content during explicit restoration.

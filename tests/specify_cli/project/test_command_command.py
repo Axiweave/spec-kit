@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 from uuid import uuid4
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from typer.testing import CliRunner
@@ -35,7 +36,7 @@ def isolated_home(tmp_path, monkeypatch):
     monkeypatch.delenv("SPECIFY_FEATURE_DIRECTORY", raising=False)
 
 
-def external_project(tmp_path, name, *, active_feature="specs/001-first"):
+def external_project(tmp_path, name, *, active_feature="specs/001-first", feature_selection="automatic"):
     repository = tmp_path / f"{name}-repo"
     workspace = tmp_path / f"{name} workspace"
     (repository / ".specify").mkdir(parents=True)
@@ -50,6 +51,7 @@ def external_project(tmp_path, name, *, active_feature="specs/001-first"):
     (workspace / ".specify/init-options.json").write_text(json.dumps({
         "integration": "omp", "ai": "omp", "script": "sh",
         "command_scope": "global", "feature_numbering": "sequential",
+        "feature_selection": feature_selection,
     }), encoding="utf-8")
     record = Path(os.environ["XDG_DATA_HOME"]) / "specify/projects" / f"{project_id}.json"
     record.parent.mkdir(parents=True, exist_ok=True)
@@ -181,6 +183,105 @@ def test_explicit_feature_wins_without_changing_saved_selection(tmp_path, monkey
     monkeypatch.delenv("SPECIFY_FEATURE_DIRECTORY")
     assert command("speckit.plan")["feature_dir"] == str(workspace / "specs/001-first")
 
+
+def test_context_command_ignores_saved_selection_and_preserves_all_state(tmp_path, monkeypatch):
+    repository, workspace, record = external_project(
+        tmp_path, "Context", feature_selection="context",
+    )
+    monkeypatch.chdir(repository)
+    before = files_under(tmp_path)
+
+    data = command("speckit.plan")
+
+    assert data["feature_selection"] == "context"
+    assert data["feature_dir"] is None
+    assert json.loads(record.read_text(encoding="utf-8"))["active_feature"] == "specs/001-first"
+    assert files_under(tmp_path) == before
+
+
+@pytest.mark.parametrize("selection", ["context", "automatic"])
+def test_explicit_command_context_does_not_leak_to_the_next_invocation(
+    tmp_path, monkeypatch, selection,
+):
+    repository, workspace, record = external_project(
+        tmp_path, "Invocation", feature_selection=selection,
+    )
+    second = workspace / "specs/002-second"
+    second.mkdir()
+    monkeypatch.chdir(repository)
+    before = files_under(tmp_path)
+    for relative in ("specs/002-second", "specs/001-first", "specs/002-second"):
+        monkeypatch.setenv("SPECIFY_FEATURE_DIRECTORY", relative)
+        assert command("speckit.plan")["feature_dir"] == str(workspace / relative)
+        assert files_under(tmp_path) == before
+    monkeypatch.delenv("SPECIFY_FEATURE_DIRECTORY")
+    expected = str(workspace / "specs/001-first") if selection == "automatic" else None
+    assert command("speckit.plan")["feature_dir"] == expected
+    assert record.read_bytes() == before[str(record)]
+
+
+def test_concurrent_git_worktrees_resolve_features_without_shared_selection_writes(
+    tmp_path, monkeypatch,
+):
+    """Invariant: concurrent worktrees retain independent invocation context and shared state bytes."""
+    repository, workspace, record = external_project(
+        tmp_path, "Worktrees", feature_selection="context",
+    )
+    second = workspace / "specs/002-second"
+    second.mkdir()
+    for role in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{role}_NAME", "Worktree Test")
+        monkeypatch.setenv(f"GIT_{role}_EMAIL", "worktree@example.test")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    subprocess.run(["git", "init"], cwd=repository, check=True, capture_output=True)
+    subprocess.run(["git", "add", ".specify/project.json"], cwd=repository, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "Workspace locator"], cwd=repository, check=True, capture_output=True)
+    worktrees = [tmp_path / name for name in ("first-worktree", "second-worktree")]
+    for worktree in worktrees:
+        subprocess.run(
+            ["git", "worktree", "add", "--detach", str(worktree)],
+            cwd=repository, check=True, capture_output=True,
+        )
+    before = files_under(workspace, record.parent)
+
+    def resolve(index):
+        relative = ("specs/001-first", "specs/002-second")[index]
+        env = {**os.environ, "SPECIFY_FEATURE_DIRECTORY": relative}
+        result = subprocess.run(
+            [sys.executable, "-c", "from specify_cli import main; main()",
+             "project", "command", "speckit.plan", "--json"],
+            cwd=worktrees[index], env=env, text=True, capture_output=True, timeout=30,
+        )
+        assert result.returncode == 0, (result.stdout, result.stderr)
+        data = json.loads(result.stdout)
+        assert data["repository_root"] == str(worktrees[index])
+        assert data["workspace_root"] == str(workspace)
+        assert data["feature_dir"] == str(workspace / relative)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(resolve, [0, 1]))
+    assert files_under(workspace, record.parent) == before
+
+
+
+def test_agent_context_configuration_does_not_change_public_command_resolution(tmp_path, monkeypatch):
+    """Invariant: extension-owned context configuration does not alter CLI command content."""
+    repository, workspace, _ = external_project(tmp_path, "ContextOwner")
+    plan = workspace / ".specify/templates/commands/plan.md"
+    plan.write_text(plan.read_text(encoding="utf-8") + "\nRead __CONTEXT_FILE__.\n", encoding="utf-8")
+    monkeypatch.chdir(repository)
+    baseline = command("speckit.plan")
+    assert "__CONTEXT_FILE__" in baseline["content"]
+    config = workspace / ".specify/extensions/agent-context/agent-context-config.yml"
+    config.parent.mkdir(parents=True)
+    for filename in ("FIRST.md", "nested/SECOND.md"):
+        config.write_text(yaml.safe_dump({
+            "context_file": filename, "context_files": [filename],
+        }), encoding="utf-8")
+        before = files_under(tmp_path)
+        assert command("speckit.plan") == baseline
+        assert files_under(tmp_path) == before
 
 def test_absent_command_does_not_use_another_projects_extension(tmp_path, monkeypatch):
     first, workspace, _ = external_project(tmp_path, "Owner")

@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from tests.conftest import requires_bash
+from tests.parity_helpers import set_feature_selection
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 COMMON_SH = PROJECT_ROOT / "scripts" / "bash" / "common.sh"
@@ -172,6 +173,7 @@ def tasks_repo(tmp_path: Path) -> Path:
     )
 
     (repo / ".specify").mkdir()
+    set_feature_selection(repo)
     _install_core_tasks_template(repo)
     _install_bash_scripts(repo)
     _install_ps_scripts(repo)

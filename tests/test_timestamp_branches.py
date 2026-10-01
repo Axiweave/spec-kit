@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from tests.conftest import requires_bash
+from tests.parity_helpers import clean_env, set_feature_selection
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CREATE_FEATURE = PROJECT_ROOT / "scripts" / "bash" / "create-new-feature.sh"
@@ -1239,6 +1240,7 @@ class TestFeatureDirectoryResolution:
     @requires_bash
     def test_feature_json_overrides_branch_lookup(self, git_repo: Path):
         """feature.json feature_directory takes priority over branch-based lookup."""
+        set_feature_selection(git_repo)
         custom_dir = git_repo / "specs" / "custom-feature"
         custom_dir.mkdir(parents=True)
 
@@ -1266,6 +1268,7 @@ class TestFeatureDirectoryResolution:
     @requires_bash
     def test_env_var_takes_priority_over_feature_json(self, git_repo: Path):
         """Env var wins over feature.json."""
+        set_feature_selection(git_repo)
         env_dir = git_repo / "specs" / "env-feature"
         env_dir.mkdir(parents=True)
         json_dir = git_repo / "specs" / "json-feature"
@@ -1294,8 +1297,10 @@ class TestFeatureDirectoryResolution:
             pytest.fail("FEATURE_DIR not found in output")
 
     @requires_bash
-    def test_errors_without_env_var_or_feature_json(self, git_repo: Path):
-        """Without env var or feature.json, get_feature_paths now errors."""
+    @pytest.mark.parametrize("mode", ["context", "automatic"])
+    def test_errors_without_env_var_or_feature_json(self, git_repo: Path, mode: str):
+        """Without env var or feature.json, get_feature_paths errors in both modes."""
+        set_feature_selection(git_repo, mode)
         spec_dir = git_repo / "specs" / "001-test-feat"
         spec_dir.mkdir(parents=True)
 
@@ -1307,6 +1312,56 @@ class TestFeatureDirectoryResolution:
         )
         assert result.returncode != 0
         assert "Feature directory not found" in result.stderr
+
+    @requires_bash
+    def test_context_mode_ignores_saved_feature_json(self, git_repo: Path):
+        """A context project never reads feature.json, so the caller must name the feature."""
+        custom_dir = git_repo / "specs" / "custom-feature"
+        custom_dir.mkdir(parents=True)
+        feature_json = git_repo / ".specify" / "feature.json"
+        feature_json.write_text(
+            json.dumps({"feature_directory": str(custom_dir)}) + "\n",
+            encoding="utf-8",
+        )
+        before = feature_json.read_bytes()
+
+        result = subprocess.run(
+            ["bash", "-c", f'source "{COMMON_SH}" && get_feature_paths'],
+            cwd=git_repo,
+            capture_output=True,
+            text=True,
+            env=clean_env(),
+        )
+        assert result.returncode != 0
+        assert "Feature directory not found" in result.stderr
+        assert str(custom_dir) not in result.stdout
+        assert feature_json.read_bytes() == before
+
+    @requires_bash
+    def test_context_mode_explicit_feature_keeps_saved_feature_json(self, git_repo: Path):
+        """An explicit feature in a context project never rewrites the saved feature."""
+        saved = git_repo / "specs" / "001-saved"
+        saved.mkdir(parents=True)
+        explicit = git_repo / "specs" / "002-explicit"
+        explicit.mkdir()
+        feature_json = git_repo / ".specify" / "feature.json"
+        feature_json.write_text(
+            json.dumps({"feature_directory": "specs/001-saved"}) + "\n",
+            encoding="utf-8",
+        )
+        before = feature_json.read_bytes()
+
+        result = subprocess.run(
+            ["bash", "-c", f'source "{COMMON_SH}" && get_feature_paths'],
+            cwd=git_repo,
+            capture_output=True,
+            text=True,
+            env={**clean_env(), "SPECIFY_FEATURE_DIRECTORY": str(explicit)},
+        )
+        assert result.returncode == 0, result.stderr
+        printed = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+        assert printed["FEATURE_DIR"].strip("'\"") == str(explicit)
+        assert feature_json.read_bytes() == before
 
     @pytest.mark.skipif(not _has_pwsh(), reason="pwsh not installed")
     def test_ps_env_var_overrides_branch_lookup(self, git_repo: Path):
@@ -1335,6 +1390,7 @@ class TestFeatureDirectoryResolution:
     @pytest.mark.skipif(not _has_pwsh(), reason="pwsh not installed")
     def test_ps_feature_json_overrides_branch_lookup(self, git_repo: Path):
         """PowerShell: feature.json takes priority over branch-based lookup."""
+        set_feature_selection(git_repo)
         common_ps = PROJECT_ROOT / "scripts" / "powershell" / "common.ps1"
         custom_dir = git_repo / "specs" / "ps-json-feature"
         custom_dir.mkdir(parents=True)
@@ -1360,6 +1416,31 @@ class TestFeatureDirectoryResolution:
                 break
         else:
             pytest.fail("FEATURE_DIR not found in PowerShell output")
+
+    @pytest.mark.skipif(not _has_pwsh(), reason="pwsh not installed")
+    def test_ps_context_mode_ignores_saved_feature_json(self, git_repo: Path):
+        """PowerShell: a context project never reads feature.json."""
+        common_ps = PROJECT_ROOT / "scripts" / "powershell" / "common.ps1"
+        custom_dir = git_repo / "specs" / "ps-json-feature"
+        custom_dir.mkdir(parents=True)
+        feature_json = git_repo / ".specify" / "feature.json"
+        feature_json.write_text(
+            json.dumps({"feature_directory": str(custom_dir)}) + "\n",
+            encoding="utf-8",
+        )
+        before = feature_json.read_bytes()
+
+        ps_cmd = f'. "{common_ps}"; $r = Get-FeaturePathsEnv; Write-Output "FEATURE_DIR=$($r.FEATURE_DIR)"'
+        result = subprocess.run(
+            ["pwsh", "-NoProfile", "-Command", ps_cmd],
+            cwd=git_repo,
+            capture_output=True,
+            text=True,
+            env=clean_env(),
+        )
+        assert result.returncode != 0
+        assert "Feature directory not found" in (result.stderr + result.stdout)
+        assert feature_json.read_bytes() == before
 
 
 

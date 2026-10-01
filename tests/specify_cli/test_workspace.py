@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import pytest
 
-from specify_cli.workspace import resolve_project, save_active_feature
+from specify_cli.workspace import feature_selection_mode, resolve_project, save_active_feature
 
 
 def external(tmp_path, monkeypatch):
@@ -26,9 +26,24 @@ def external(tmp_path, monkeypatch):
     return repo, workspace, record
 
 
+def local(tmp_path, monkeypatch):
+    monkeypatch.delenv("SPECIFY_INIT_DIR", raising=False)
+    monkeypatch.delenv("SPECIFY_FEATURE_DIRECTORY", raising=False)
+    (tmp_path / ".specify").mkdir()
+    return tmp_path, tmp_path, None
+
+
+def policy(workspace, mode):
+    (workspace / ".specify/init-options.json").write_text(json.dumps({"feature_selection": mode}))
+
+
+STORAGE = {"local": local, "external": external}
+
+
 @pytest.mark.parametrize("name", ["specs/001-first", "specs/002-next", "custom/path with spaces"])
 def test_selection_round_trip_is_external_and_repository_stays_fixed(tmp_path, monkeypatch, name):
     repo, workspace, _ = external(tmp_path, monkeypatch)
+    policy(workspace, "automatic")
     feature = workspace / name
     feature.mkdir(parents=True)
     project = resolve_project(repo)
@@ -41,9 +56,11 @@ def test_selection_round_trip_is_external_and_repository_stays_fixed(tmp_path, m
     assert sorted(p.name for p in (repo / ".specify").iterdir()) == ["project.json"]
 
 
+@pytest.mark.parametrize("mode", ["context", "automatic"])
 @pytest.mark.parametrize("absolute", [False, True])
-def test_explicit_selection_wins_without_mutating_saved_selection(tmp_path, monkeypatch, absolute):
+def test_explicit_selection_wins_without_mutating_saved_selection(tmp_path, monkeypatch, absolute, mode):
     repo, workspace, record = external(tmp_path, monkeypatch)
+    policy(workspace, mode)
     first, second = workspace / "specs/first", workspace / "specs/second"
     first.mkdir(parents=True)
     second.mkdir()
@@ -54,9 +71,11 @@ def test_explicit_selection_wins_without_mutating_saved_selection(tmp_path, monk
     assert record.read_bytes() == before
 
 
+@pytest.mark.parametrize("mode", ["context", "automatic"])
 @pytest.mark.parametrize("fault", ["mapping", "foreign", "version", "traversal", "missing", "locator_symlink"])
-def test_invalid_external_state_never_falls_back_or_writes(tmp_path, monkeypatch, fault):
+def test_invalid_external_state_never_falls_back_or_writes(tmp_path, monkeypatch, fault, mode):
     repo, workspace, record = external(tmp_path, monkeypatch)
+    policy(workspace, mode)
     if fault == "mapping":
         record.unlink()
     elif fault == "foreign":
@@ -82,8 +101,10 @@ def test_invalid_external_state_never_falls_back_or_writes(tmp_path, monkeypatch
     assert {str(p.relative_to(repo)): p.read_bytes() for p in repo.rglob("*") if p.is_file()} == before
 
 
-def test_symlink_feature_escape_is_rejected(tmp_path, monkeypatch):
+@pytest.mark.parametrize("mode", ["context", "automatic"])
+def test_symlink_feature_escape_is_rejected(tmp_path, monkeypatch, mode):
     repo, workspace, _ = external(tmp_path, monkeypatch)
+    policy(workspace, mode)
     outside = tmp_path / "outside"
     outside.mkdir()
     (workspace / "escape").symlink_to(outside, target_is_directory=True)
@@ -92,15 +113,110 @@ def test_symlink_feature_escape_is_rejected(tmp_path, monkeypatch):
         resolve_project(repo)
 
 
-def test_local_pointer_and_absolute_override_keep_existing_behavior(tmp_path, monkeypatch):
-    monkeypatch.delenv("SPECIFY_INIT_DIR", raising=False)
-    monkeypatch.delenv("SPECIFY_FEATURE_DIRECTORY", raising=False)
-    (tmp_path / ".specify").mkdir()
+@pytest.mark.parametrize("mode", ["context", "automatic"])
+def test_local_pointer_and_absolute_override_keep_existing_behavior(tmp_path, monkeypatch, mode):
+    local(tmp_path, monkeypatch)
     (tmp_path / ".specify/feature.json").write_text('{"feature_directory":"specs/old"}')
-    assert resolve_project(tmp_path).feature_dir == tmp_path / "specs/old"
+    policy(tmp_path, mode)
+    assert resolve_project(tmp_path).feature_dir == (tmp_path / "specs/old" if mode == "automatic" else None)
     outside = tmp_path.parent / "external-feature"
     monkeypatch.setenv("SPECIFY_FEATURE_DIRECTORY", str(outside))
     assert resolve_project(tmp_path).feature_dir == outside
+
+
+@pytest.mark.parametrize("storage", ["local", "external"])
+@pytest.mark.parametrize("options, saved_is_used", [
+    (None, False),
+    ({}, False),
+    ({"feature_selection": "context", "future_setting": [1]}, False),
+    ({"feature_selection": "automatic", "future_setting": [1]}, True),
+], ids=["no-file", "no-field", "context", "automatic"])
+def test_saved_feature_is_used_only_in_automatic_mode(tmp_path, monkeypatch, storage, options, saved_is_used):
+    repo, workspace, record = STORAGE[storage](tmp_path, monkeypatch)
+    feature = workspace / "specs/saved"
+    feature.mkdir(parents=True)
+    save_active_feature(resolve_project(repo), feature)
+    if options is not None:
+        (workspace / ".specify/init-options.json").write_text(json.dumps(options))
+    state = record or repo / ".specify/feature.json"
+    before = state.read_bytes()
+    assert resolve_project(repo).feature_dir == (feature if saved_is_used else None)
+    assert state.read_bytes() == before
+
+
+@pytest.mark.parametrize("storage", ["local", "external"])
+def test_malformed_saved_feature_breaks_only_automatic_mode(tmp_path, monkeypatch, storage):
+    repo, workspace, record = STORAGE[storage](tmp_path, monkeypatch)
+    if record:
+        record.write_text(json.dumps({"schema_version": 1, "workspace": str(workspace), "active_feature": ""}))
+    else:
+        (repo / ".specify/feature.json").write_text("{}")
+    policy(workspace, "context")
+    assert resolve_project(repo).feature_dir is None
+    policy(workspace, "automatic")
+    with pytest.raises(ValueError):
+        resolve_project(repo)
+
+
+def test_worktrees_sharing_one_record_resolve_only_their_own_explicit_feature(tmp_path, monkeypatch):
+    first, workspace, record = external(tmp_path, monkeypatch)
+    second = tmp_path / "second worktree"
+    (second / ".specify").mkdir(parents=True)
+    (second / ".specify/project.json").write_bytes((first / ".specify/project.json").read_bytes())
+    for name in ("shared", "one", "two"):
+        (workspace / "specs" / name).mkdir(parents=True)
+    # A stale shared selection and metadata this version does not know must both stay untouched.
+    record.write_text(json.dumps({
+        "schema_version": 1, "workspace": str(workspace), "active_feature": "specs/shared",
+        "future_setting": {"kept": True},
+    }))
+    before = record.read_bytes()
+    assert resolve_project(first).feature_dir is None
+    assert resolve_project(second).feature_dir is None
+    for repo, name in ((first, "one"), (second, "two")):
+        monkeypatch.setenv("SPECIFY_FEATURE_DIRECTORY", f"specs/{name}")
+        assert resolve_project(repo).feature_dir == workspace / "specs" / name
+    monkeypatch.delenv("SPECIFY_FEATURE_DIRECTORY")
+    assert resolve_project(first).feature_dir is None
+    assert resolve_project(second).feature_dir is None
+    assert record.read_bytes() == before
+
+
+def test_workspace_lookup_ignores_selection_policy_state_and_override(tmp_path, monkeypatch):
+    from specify_cli.workspace import workspace_root_for
+
+    repo, workspace, record = external(tmp_path, monkeypatch)
+    (workspace / ".specify/init-options.json").write_text('{"feature_selection": "sometimes"}')
+    record.write_text(json.dumps({"schema_version": 1, "workspace": str(workspace), "active_feature": ""}))
+    monkeypatch.setenv("SPECIFY_FEATURE_DIRECTORY", "../outside")
+    assert workspace_root_for(repo) == workspace
+    with pytest.raises(ValueError):
+        resolve_project(repo)
+
+
+@pytest.mark.parametrize("override", [None, "specs/one"])
+@pytest.mark.parametrize("text", ['{"feature_selection": "sometimes"}', '{"feature_selection": null}', "{", "[]"])
+@pytest.mark.parametrize("storage", ["local", "external"])
+def test_invalid_selection_policy_is_rejected_even_with_an_explicit_override(
+    tmp_path, monkeypatch, storage, text, override,
+):
+    repo, workspace, _ = STORAGE[storage](tmp_path, monkeypatch)
+    (workspace / ".specify/init-options.json").write_text(text)
+    if override:
+        monkeypatch.setenv("SPECIFY_FEATURE_DIRECTORY", override)
+    before = {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()}
+    with pytest.raises(ValueError):
+        resolve_project(repo)
+    assert {p: p.read_bytes() for p in tmp_path.rglob("*") if p.is_file()} == before
+
+
+def test_feature_selection_mode_rejects_a_symlinked_policy(tmp_path):
+    (tmp_path / ".specify").mkdir()
+    target = tmp_path / "elsewhere.json"
+    target.write_text('{"feature_selection": "automatic"}')
+    (tmp_path / ".specify/init-options.json").symlink_to(target)
+    with pytest.raises(ValueError):
+        feature_selection_mode(tmp_path)
 
 
 def test_strict_init_dir_does_not_search_parent(tmp_path, monkeypatch):
