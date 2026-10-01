@@ -1467,7 +1467,7 @@ def test_init_reports_workspace_git_commit_failure_without_traceback_and_preserv
     assert result.exit_code == 1
     assert isinstance(result.exception, SystemExit)
     assert "Traceback" not in result.output
-    assert "commit-hook refused" in _strip(result.output)
+    assert "commit-hookrefused" in re.sub(r"[\s\u2500-\u257f]", "", _strip(result.output))
     repository = tmp_path / "project"
     assert not repository.exists()
     assert not (workspace / ".git").exists()

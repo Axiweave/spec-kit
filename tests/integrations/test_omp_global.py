@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 from pathlib import Path
 
@@ -108,7 +109,7 @@ def test_global_lifecycle_preserves_modified_managed_files(action, force):
 
     assert modified.read_text(encoding="utf-8") == "My edited plan command.\n"
     assert unrelated.read_text(encoding="utf-8") == "My unrelated command.\n"
-    assert modified.name in result.output
+    assert modified.name in re.sub(r"[\s\u2500-\u257f]", "", result.output)
     if action == "uninstall":
         assert not (commands / "speckit.specify.md").exists()
     else:
@@ -128,7 +129,7 @@ def test_conflicting_user_command_is_never_claimed_or_removed():
     conflict = invoke("integration", "install", "omp", "--global")
 
     assert conflict.exit_code != 0
-    assert user_command.name in conflict.output
+    assert user_command.name in re.sub(r"[\s\u2500-\u257f]", "", conflict.output)
     assert user_command.read_text(encoding="utf-8") == "This name already belongs to me.\n"
     invoke("integration", "uninstall", "omp", "--global")
     assert user_command.read_text(encoding="utf-8") == "This name already belongs to me.\n"

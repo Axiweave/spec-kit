@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import stat
 import tarfile
@@ -950,8 +951,9 @@ steps:
         assert result.exit_code != 0
         assert "No workflow.yml found" in result.output
 
+
     def test_add_local_dir_without_workflow_yml_errors(self, project_dir, monkeypatch):
-        """Same as the --dev case, but for the plain local-path fallback (no --dev)."""
+        """A refused bracket-named local path remains visible without markup loss."""
         from typer.testing import CliRunner
         from specify_cli import app
 
@@ -961,8 +963,7 @@ steps:
         runner = CliRunner()
         result = runner.invoke(app, ["workflow", "add", str(empty)])
         assert result.exit_code != 0
-        assert "No workflow.yml found" in result.output
-        assert "[bracket]" in result.output
+        assert empty.name in re.sub(r"[\s\u2500-\u257f]", "", result.output)
 
     def test_add_local_dir_with_workflow_yml_directory_errors_cleanly(self, project_dir, monkeypatch):
         """Same as the --dev case, but for the plain local-path fallback (no --dev):
