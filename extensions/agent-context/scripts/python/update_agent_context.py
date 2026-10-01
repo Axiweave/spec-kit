@@ -67,11 +67,10 @@ def _get_str(obj: object, *keys: str) -> str:
     return node if isinstance(node, str) else ""
 
 
-def _collect_context_files(data: dict, workspace_root: str) -> list[str]:
-    """Resolve the managed context files from config, mirroring the bash logic."""
+def _configured_context_files(data: dict, *, case_insensitive: bool = False) -> list[str]:
+    """Read configured targets without reading defaults or writing configuration."""
     context_files: list[str] = []
     seen: set[str] = set()
-    case_insensitive = sys.platform.startswith(("win32", "cygwin", "msys"))
 
     def add(value: object) -> None:
         if not isinstance(value, str):
@@ -91,6 +90,14 @@ def _collect_context_files(data: dict, workspace_root: str) -> list[str]:
             add(value)
     if not context_files:
         add(_get_str(data, "context_file"))
+    return context_files
+
+
+def _collect_context_files(data: dict, workspace_root: str) -> list[str]:
+    """Resolve the managed context files from config, mirroring the bash logic."""
+    context_files = _configured_context_files(
+        data, case_insensitive=sys.platform.startswith(("win32", "cygwin", "msys"))
+    )
     if not context_files:
         # Self-seed: when the config declares no target, derive one from the
         # active integration recorded in init-options.json, mapped through the
@@ -124,7 +131,9 @@ def _collect_context_files(data: dict, workspace_root: str) -> list[str]:
                     "file. Set context_file in the extension config." % defaults_path
                 )
                 mapping = {}
-            add(mapping.get(integration_key, "") or "")
+            context_files = _configured_context_files({
+                "context_file": mapping.get(integration_key, "") or ""
+            })
             if not context_files:
                 _err(
                     "agent-context: no default context file is known for integration "
@@ -132,6 +141,93 @@ def _collect_context_files(data: dict, workspace_root: str) -> list[str]:
                     % integration_key
                 )
     return context_files
+
+
+def discover_managed_sections(
+    workspace: Path,
+    repository: Path,
+    integration: str | None,
+    *,
+    read_file,
+    mentions_reference,
+) -> tuple[list, list]:
+    """Find existing managed regions without writing or seeding configuration.
+
+    ``read_file`` supplies bytes, mode, and nanosecond modification time. It must
+    reject unsafe paths with ``ValueError``. Each section contains the path,
+    original bytes, metadata, and UTF-8 text offsets including both markers.
+    """
+    import yaml
+
+    base = workspace / ".specify/extensions/agent-context"
+    config = base / "agent-context-config.yml"
+    conflicts = []
+
+    def conflict(code: str, path: Path, message: str) -> None:
+        shown = path.relative_to(workspace).as_posix() if path.is_relative_to(workspace) else str(path)
+        conflicts.append({"path": shown, "code": code, "message": message})
+
+    try:
+        raw = read_file(config)[0]
+        data = None if raw is None else yaml.safe_load(raw)
+    except (ValueError, yaml.YAMLError):
+        conflict("invalid-context-config", config, "The agent-context configuration cannot be read.")
+        return [], conflicts
+    if raw is None:
+        return [], conflicts
+    data = data if isinstance(data, dict) else {}
+    names = _configured_context_files(data)
+    if not names and isinstance(integration, str):
+        defaults = base / "agent-context-defaults.json"
+        try:
+            listing = read_file(defaults)[0]
+        except ValueError:
+            conflict("invalid-context-config", defaults, "The agent-context defaults cannot be read safely.")
+            return [], conflicts
+        try:
+            agents = json.loads(listing or b"{}").get("agents", {})
+        except (ValueError, AttributeError):
+            agents = {}
+        names = _configured_context_files({
+            "context_file": agents.get(integration) if isinstance(agents, dict) else None
+        })
+    bad = [
+        name for name in names
+        if name.startswith("/") or re.match(r"[A-Za-z]:", name) or "\\" in name or ".." in name.split("/")
+    ]
+    for name in bad:
+        conflict("invalid-context-config", config, f"The context file path leaves the project: {name}")
+    if bad:
+        return [], conflicts
+    start = _get_str(data, "context_markers", "start") or DEFAULT_START
+    end = _get_str(data, "context_markers", "end") or DEFAULT_END
+    sections = []
+    for name in names:
+        path = repository / name
+        try:
+            raw, mode, mtime = read_file(path)
+        except ValueError:
+            conflict(
+                "unsupported-file-type", path,
+                "The context file, or a directory in its path, is not ordinary. Configure the real file instead.",
+            )
+            continue
+        if raw is None:
+            continue
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        first = text.find(start)
+        last = text.find(end, max(first, 0))
+        if first == -1 and last == -1:
+            continue
+        if first == -1 or last < first:
+            if mentions_reference(text):
+                conflict("ambiguous-context-section", path, "The managed section markers do not pair up.")
+            continue
+        sections.append((path, raw, mode, mtime, first, last + len(end)))
+    return sections, conflicts
 
 
 def _validate_context_file(project_root: str, context_file: str) -> str | None:

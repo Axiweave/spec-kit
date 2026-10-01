@@ -9,6 +9,7 @@ is unavailable.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import shutil
@@ -725,3 +726,85 @@ def test_invocation_feature_overrides_saved_feature_without_selection_writes(
     content = (repo / "AGENTS.md").read_text(encoding="utf-8")
     assert "specs/" not in content
     assert pointer.read_bytes() == before
+
+
+@pytest.mark.parametrize("selection", ["list", "single", "default", "missing-config", "missing-context"])
+def test_owner_discovers_existing_regions_without_writes(tmp_path, selection):
+    workspace = tmp_path / "workspace"
+    repo = tmp_path / "repository"
+    repo.mkdir()
+    markers = {"start": "<!-- CUSTOM START -->", "end": "<!-- CUSTOM END -->"}
+    config = {"context_markers": markers}
+    if selection == "list":
+        config.update(context_files=[" AGENTS.md ", "AGENTS.md", None], context_file="IGNORED.md")
+    elif selection == "single":
+        config.update(context_files=[None, ""], context_file="AGENTS.md")
+    if selection != "missing-config":
+        write_config(workspace, **config)
+    defaults = workspace / ".specify/extensions/agent-context/agent-context-defaults.json"
+    defaults.parent.mkdir(parents=True, exist_ok=True)
+    defaults.write_text('{"agents": {"custom": "AGENTS.md"}}', encoding="utf-8")
+    original = (
+        "\ufeffPréface specs/001-old/plan.md\r\n"
+        f"{markers['start']}\r\nspecs/001-old/plan.md\r\n{markers['end']}"
+        "\r\nUser notes specs/001-old/plan.md\r\n"
+    ).encode("utf-8")
+    path = repo / "AGENTS.md"
+    if selection != "missing-context":
+        path.write_bytes(original)
+    before = tree(tmp_path)
+    spec = importlib.util.spec_from_file_location("agent_context_owner", PY_SCRIPT)
+    owner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(owner)
+
+    def read_file(path):
+        if not path.exists():
+            return None, 0, 0
+        stat = path.stat()
+        return path.read_bytes(), stat.st_mode, stat.st_mtime_ns
+
+    sections, conflicts = owner.discover_managed_sections(
+        workspace, repo, "custom", read_file=read_file,
+        mentions_reference=lambda text: "specs/001-old" in text,
+    )
+
+    assert conflicts == []
+    if selection.startswith("missing-"):
+        assert sections == []
+    else:
+        text = original.decode("utf-8")
+        stat = path.stat()
+        assert sections == [(
+            path, original, stat.st_mode, stat.st_mtime_ns,
+            text.index(markers["start"]), text.index(markers["end"]) + len(markers["end"]),
+        )]
+    assert tree(tmp_path) == before
+
+
+@pytest.mark.parametrize("affected", [False, True])
+def test_owner_reports_partial_markers_only_for_affected_context(tmp_path, affected):
+    write_config(tmp_path, context_file="AGENTS.md")
+    path = tmp_path / "AGENTS.md"
+    original = b"<!-- SPECKIT START -->\r\n" + (
+        b"specs/001-old/plan.md" if affected else b"unrelated instructions"
+    )
+    path.write_bytes(original)
+    spec = importlib.util.spec_from_file_location("agent_context_owner", PY_SCRIPT)
+    owner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(owner)
+
+    def read_file(path):
+        stat = path.stat()
+        return path.read_bytes(), stat.st_mode, stat.st_mtime_ns
+
+    sections, conflicts = owner.discover_managed_sections(
+        tmp_path, tmp_path, None, read_file=read_file,
+        mentions_reference=lambda text: "specs/001-old" in text,
+    )
+
+    assert sections == []
+    assert conflicts == ([{
+        "path": "AGENTS.md", "code": "ambiguous-context-section",
+        "message": "The managed section markers do not pair up.",
+    }] if affected else [])
+    assert path.read_bytes() == original
