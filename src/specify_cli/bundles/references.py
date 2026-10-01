@@ -20,21 +20,21 @@ def _resolved_locally(root: Path, component: ComponentRef) -> bool:
     kind = component.kind
     try:
         if kind == "presets":
-            from .._assets import _locate_bundled_preset
+            from .. import _locate_bundled_preset
             from ..presets import PresetManager
 
             if _locate_bundled_preset(component.id) is not None:
                 return True
             return PresetManager(root).get_pack(component.id) is not None
         if kind == "extensions":
-            from .._assets import _locate_bundled_extension
+            from .. import locate_bundled_extension
             from ..extensions import ExtensionManager
 
-            if _locate_bundled_extension(component.id) is not None:
+            if locate_bundled_extension(component.id) is not None:
                 return True
             return ExtensionManager(root).registry.is_installed(component.id)
         if kind == "workflows":
-            from .._assets import _locate_bundled_workflow
+            from .. import _locate_bundled_workflow
             from ..workflows.catalog import WorkflowRegistry
 
             if _locate_bundled_workflow(component.id) is not None:

@@ -25,6 +25,7 @@ def extension_add(
     priority: int = typer.Option(10, "--priority", help="Resolution priority (lower = higher precedence, default 10)"),
 ):
     """Install an extension."""
+    from .. import locate_bundled_extension
     from . import ExtensionManager, ExtensionCatalog, ExtensionError, ValidationError, CompatibilityError, REINSTALL_COMMAND
 
     project_root = _commands._require_specify_project()
@@ -133,7 +134,7 @@ def extension_add(
 
             else:
                 # Try bundled extensions first (shipped with spec-kit)
-                bundled_path = _commands._locate_bundled_extension(extension)
+                bundled_path = locate_bundled_extension(extension)
                 if bundled_path is not None:
                     manifest = manager.install_from_directory(
                         bundled_path, speckit_version, priority=priority, force=force
@@ -158,7 +159,7 @@ def extension_add(
                     # If catalog resolved a display name to an ID, check bundled again
                     resolved_id = ext_info['id']
                     if resolved_id != extension:
-                        bundled_path = _commands._locate_bundled_extension(resolved_id)
+                        bundled_path = locate_bundled_extension(resolved_id)
                         if bundled_path is not None:
                             manifest = manager.install_from_directory(
                                 bundled_path, speckit_version, priority=priority, force=force

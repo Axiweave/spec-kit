@@ -448,7 +448,7 @@ class TestExtensionAddCLI:
         mock_catalog.search.return_value = []
 
         with patch("specify_cli.extensions.ExtensionCatalog", return_value=mock_catalog), \
-             patch("specify_cli._locate_bundled_extension", return_value=None), \
+             patch("specify_cli.locate_bundled_extension", return_value=None), \
              patch.object(Path, "cwd", return_value=project_dir):
             result = runner.invoke(
                 app,

@@ -48,7 +48,7 @@ from ._console import (
     show_banner,
 )
 from ._assets import (
-    _locate_bundled_extension as _locate_bundled_extension,
+    locate_bundled_extension as locate_bundled_extension,
     _locate_bundled_preset as _locate_bundled_preset,
     _locate_bundled_workflow as _locate_bundled_workflow,
     _locate_core_pack,

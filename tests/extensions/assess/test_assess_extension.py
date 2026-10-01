@@ -3,7 +3,7 @@
 Validates:
 - Bundled layout (manifest, README, five command files)
 - Catalog registration
-- Wheel/source-checkout resolution via ``_locate_bundled_extension``
+- Wheel/source-checkout resolution via ``locate_bundled_extension``
 - Install via ``ExtensionManager.install_from_directory`` copies the five
   command files and records them in the installed manifest (command
   registration with AI agents is exercised separately and not asserted here)
@@ -16,7 +16,7 @@ from pathlib import Path
 
 import yaml
 
-from specify_cli import _locate_bundled_extension
+from specify_cli import locate_bundled_extension
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
@@ -89,7 +89,7 @@ class TestCatalogEntry:
 
 class TestBundleResolution:
     def test_locate_bundled_extension_finds_assess(self):
-        located = _locate_bundled_extension("assess")
+        located = locate_bundled_extension("assess")
         assert located is not None
         assert (located / "extension.yml").is_file()
 

@@ -165,8 +165,7 @@ class _PresetKindManager:
         self._do_install(component, force=True)
 
     def _do_install(self, component: ComponentRef, *, force: bool) -> None:
-        from .. import get_speckit_version
-        from .._assets import _locate_bundled_preset
+        from .. import _locate_bundled_preset, get_speckit_version
 
         speckit_version = get_speckit_version()
         priority = DEFAULT_PRIORITY if component.priority is None else component.priority
@@ -252,13 +251,12 @@ class _ExtensionKindManager:
         self._do_install(component, force=True)
 
     def _do_install(self, component: ComponentRef, *, force: bool) -> None:
-        from .. import get_speckit_version
-        from .._assets import _locate_bundled_extension
+        from .. import get_speckit_version, locate_bundled_extension
 
         speckit_version = get_speckit_version()
         priority = DEFAULT_PRIORITY if component.priority is None else component.priority
 
-        bundled = _locate_bundled_extension(component.id)
+        bundled = locate_bundled_extension(component.id)
         if bundled is not None:
             # Enforce the manifest pin against the bundled asset's own version,
             # mirroring the catalog path below (the bundled path previously
@@ -338,7 +336,7 @@ class _WorkflowKindManager:
             return False
 
     def install(self, component: ComponentRef) -> None:
-        from .._assets import _locate_bundled_workflow
+        from .. import _locate_bundled_workflow
 
         bundled = _locate_bundled_workflow(component.id)
         if bundled is not None:

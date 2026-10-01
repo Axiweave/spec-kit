@@ -20,7 +20,7 @@ from rich.markup import escape as _escape_markup
 from rich.table import Table
 
 from .._console import console
-from .._assets import get_speckit_version as get_speckit_version
+from .. import get_speckit_version as get_speckit_version
 from .._download_security import (
     archive_format_from_name,
     detect_archive_format,
@@ -38,11 +38,6 @@ extension_app = typer.Typer(
 # `specify_cli.<name>` keeps working after the move.
 def _require_specify_project(*args, **kwargs):
     from .. import _require_specify_project as _f
-    return _f(*args, **kwargs)
-
-
-def _locate_bundled_extension(*args, **kwargs):
-    from .. import _locate_bundled_extension as _f
     return _f(*args, **kwargs)
 
 

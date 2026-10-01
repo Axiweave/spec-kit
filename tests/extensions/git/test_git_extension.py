@@ -214,10 +214,10 @@ class TestGitExtensionInstall:
         assert (ext_installed / "scripts" / "powershell" / "git-common.ps1").is_file()
 
     def test_bundled_extension_locator(self):
-        """_locate_bundled_extension finds the git extension."""
-        from specify_cli import _locate_bundled_extension
+        """locate_bundled_extension finds the git extension."""
+        from specify_cli import locate_bundled_extension
 
-        path = _locate_bundled_extension("git")
+        path = locate_bundled_extension("git")
         assert path is not None
         assert (path / "extension.yml").is_file()
 

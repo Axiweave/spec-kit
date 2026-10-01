@@ -85,7 +85,6 @@ def test_offline_refresh_explains_component_needs_network(tmp_path: Path, kind: 
 def test_offline_workflow_allows_bundled(tmp_path: Path, monkeypatch):
     # A workflow that ships with Spec Kit must install even with --offline.
     import specify_cli
-    import specify_cli._assets as assets
 
     bundled = tmp_path / "wf"
     bundled.mkdir()
@@ -93,7 +92,7 @@ def test_offline_workflow_allows_bundled(tmp_path: Path, monkeypatch):
         "workflow:\n  id: bundled-wf\n  version: 1.0.0\n", encoding="utf-8"
     )
     monkeypatch.setattr(
-        assets, "_locate_bundled_workflow", lambda wid: bundled
+        specify_cli, "_locate_bundled_workflow", lambda wid: bundled
     )
     calls: list[tuple] = []
     monkeypatch.setattr(
@@ -138,7 +137,7 @@ def test_workflow_version_mismatch_refuses(tmp_path: Path, monkeypatch):
 
 
 def test_preset_install_preserves_explicit_zero_priority(tmp_path: Path, monkeypatch):
-    import specify_cli._assets as assets
+    import specify_cli
 
     calls = {}
 
@@ -146,7 +145,7 @@ def test_preset_install_preserves_explicit_zero_priority(tmp_path: Path, monkeyp
         def install_from_directory(self, directory, speckit_version, priority):
             calls["priority"] = priority
 
-    monkeypatch.setattr(assets, "_locate_bundled_preset", lambda cid: tmp_path)
+    monkeypatch.setattr(specify_cli, "_locate_bundled_preset", lambda cid: tmp_path)
 
     manager = primitive_manager("presets", tmp_path, allow_network=False)
     manager._manager = _FakeManager()
@@ -159,7 +158,7 @@ def test_preset_install_preserves_explicit_zero_priority(tmp_path: Path, monkeyp
 def test_catalog_preset_install_and_refresh_forward_catalog_name(
     tmp_path: Path, monkeypatch
 ):
-    import specify_cli._assets as assets
+    import specify_cli
     from specify_cli.presets import PresetCatalog
 
     archive = tmp_path / "preset.zip"
@@ -170,7 +169,7 @@ def test_catalog_preset_install_and_refresh_forward_catalog_name(
         def install_from_zip(self, *args, **kwargs):
             calls.append(kwargs)
 
-    monkeypatch.setattr(assets, "_locate_bundled_preset", lambda _id: None)
+    monkeypatch.setattr(specify_cli, "_locate_bundled_preset", lambda _id: None)
     monkeypatch.setattr(
         PresetCatalog,
         "get_pack_info",
@@ -199,7 +198,7 @@ def test_catalog_preset_install_and_refresh_forward_catalog_name(
 def test_catalog_extension_install_and_refresh_forward_catalog_and_scaffolding(
     tmp_path: Path, monkeypatch
 ):
-    import specify_cli._assets as assets
+    import specify_cli
     from specify_cli.extensions import ExtensionCatalog
 
     archive = tmp_path / "extension.zip"
@@ -215,7 +214,7 @@ def test_catalog_extension_install_and_refresh_forward_catalog_and_scaffolding(
         def scaffold_config(self, extension_id):
             scaffolded.append(extension_id)
 
-    monkeypatch.setattr(assets, "_locate_bundled_extension", lambda _id: None)
+    monkeypatch.setattr(specify_cli, "locate_bundled_extension", lambda _id: None)
     monkeypatch.setattr(
         ExtensionCatalog,
         "get_extension_info",
@@ -257,11 +256,11 @@ def _write_manifest(path: Path, root_key: str, version: str) -> Path:
 def test_bundled_extension_pin_mismatch_refuses(tmp_path: Path, monkeypatch):
     """A bundled extension whose version != the manifest pin must be refused
     (the bundled path previously skipped the pin the catalog path enforces)."""
-    import specify_cli._assets as assets
+    import specify_cli
     from specify_cli.extensions import ExtensionManager
 
     bundled = _write_manifest(tmp_path / "ext", "extension", "1.0.0")
-    monkeypatch.setattr(assets, "_locate_bundled_extension", lambda cid: bundled)
+    monkeypatch.setattr(specify_cli, "locate_bundled_extension", lambda cid: bundled)
     called: list = []
     monkeypatch.setattr(
         ExtensionManager, "install_from_directory",
@@ -275,11 +274,11 @@ def test_bundled_extension_pin_mismatch_refuses(tmp_path: Path, monkeypatch):
 
 
 def test_bundled_extension_pin_match_installs(tmp_path: Path, monkeypatch):
-    import specify_cli._assets as assets
+    import specify_cli
     from specify_cli.extensions import ExtensionManager
 
     bundled = _write_manifest(tmp_path / "ext", "extension", "1.0.0")
-    monkeypatch.setattr(assets, "_locate_bundled_extension", lambda cid: bundled)
+    monkeypatch.setattr(specify_cli, "locate_bundled_extension", lambda cid: bundled)
     called: list = []
 
     def _fake_install(self, *a, **k):
@@ -328,12 +327,12 @@ def test_bundled_extension_install_scaffolds_config(tmp_path: Path, monkeypatch)
     """A bundle-installed extension must have its provides.config templates
     scaffolded, exactly like `specify extension add` does (issue: bundle
     install skipped ExtensionManager.scaffold_config)."""
-    import specify_cli._assets as assets
+    import specify_cli
 
     project = tmp_path / "project"
     ext_source = tmp_path / "ext-source"
     _write_extension_with_config(ext_source)
-    monkeypatch.setattr(assets, "_locate_bundled_extension", lambda cid: ext_source)
+    monkeypatch.setattr(specify_cli, "locate_bundled_extension", lambda cid: ext_source)
 
     manager = primitive_manager("extensions", project, allow_network=False)
     manager.install(ComponentRef(kind="extensions", id="my-ext"))
@@ -350,7 +349,7 @@ def test_catalog_extension_install_scaffolds_config(tmp_path: Path, monkeypatch)
     extension resolved from the catalog rather than one shipped with Spec Kit."""
     import zipfile
 
-    import specify_cli._assets as assets
+    import specify_cli
     from specify_cli.extensions import ExtensionCatalog
 
     project = tmp_path / "project"
@@ -364,7 +363,7 @@ def test_catalog_extension_install_scaffolds_config(tmp_path: Path, monkeypatch)
                 zf.write(f, f.relative_to(ext_source))
 
     # No bundled asset located: forces the catalog/ZIP branch (install_from_zip).
-    monkeypatch.setattr(assets, "_locate_bundled_extension", lambda cid: None)
+    monkeypatch.setattr(specify_cli, "locate_bundled_extension", lambda cid: None)
     monkeypatch.setattr(
         ExtensionCatalog,
         "get_extension_info",
@@ -383,11 +382,11 @@ def test_catalog_extension_install_scaffolds_config(tmp_path: Path, monkeypatch)
 
 
 def test_bundled_preset_pin_mismatch_refuses(tmp_path: Path, monkeypatch):
-    import specify_cli._assets as assets
+    import specify_cli
     from specify_cli.presets import PresetManager
 
     bundled = _write_manifest(tmp_path / "preset", "preset", "1.0.0")
-    monkeypatch.setattr(assets, "_locate_bundled_preset", lambda cid: bundled)
+    monkeypatch.setattr(specify_cli, "_locate_bundled_preset", lambda cid: bundled)
     called: list = []
     monkeypatch.setattr(
         PresetManager, "install_from_directory",
@@ -401,11 +400,11 @@ def test_bundled_preset_pin_mismatch_refuses(tmp_path: Path, monkeypatch):
 
 
 def test_bundled_preset_pin_match_installs(tmp_path: Path, monkeypatch):
-    import specify_cli._assets as assets
+    import specify_cli
     from specify_cli.presets import PresetManager
 
     bundled = _write_manifest(tmp_path / "preset", "preset", "1.0.0")
-    monkeypatch.setattr(assets, "_locate_bundled_preset", lambda cid: bundled)
+    monkeypatch.setattr(specify_cli, "_locate_bundled_preset", lambda cid: bundled)
     called: list = []
     monkeypatch.setattr(
         PresetManager, "install_from_directory",
@@ -422,11 +421,11 @@ def test_bundled_preset_pin_match_installs(tmp_path: Path, monkeypatch):
 def test_extension_refresh_calls_install_with_force(tmp_path: Path, monkeypatch):
     """_ExtensionKindManager.refresh() must pass force=True to install_from_directory
     so an already-installed extension is overwritten instead of raising an error."""
-    import specify_cli._assets as assets
+    import specify_cli
     from specify_cli.extensions import ExtensionManager
 
     bundled = _write_manifest(tmp_path / "ext", "extension", "1.0.0")
-    monkeypatch.setattr(assets, "_locate_bundled_extension", lambda cid: bundled)
+    monkeypatch.setattr(specify_cli, "locate_bundled_extension", lambda cid: bundled)
     force_values: list = []
 
     def _fake_install(self, *a, **k):
@@ -443,11 +442,11 @@ def test_extension_refresh_calls_install_with_force(tmp_path: Path, monkeypatch)
 def test_preset_refresh_calls_install_with_force(tmp_path: Path, monkeypatch):
     """_PresetKindManager.refresh() must pass force=True to install_from_directory
     so an already-installed preset is overwritten instead of raising an error."""
-    import specify_cli._assets as assets
+    import specify_cli
     from specify_cli.presets import PresetManager
 
     bundled = _write_manifest(tmp_path / "preset", "preset", "1.0.0")
-    monkeypatch.setattr(assets, "_locate_bundled_preset", lambda cid: bundled)
+    monkeypatch.setattr(specify_cli, "_locate_bundled_preset", lambda cid: bundled)
     force_values: list = []
     monkeypatch.setattr(
         PresetManager, "install_from_directory",
@@ -462,11 +461,11 @@ def test_preset_refresh_calls_install_with_force(tmp_path: Path, monkeypatch):
 def test_default_installer_refresh_dispatches_to_kind_manager(tmp_path: Path, monkeypatch):
     """DefaultPrimitiveInstaller.refresh() must call the kind manager's refresh(),
     which is the hook _refresh_component() will find — fixing the --force leak."""
-    import specify_cli._assets as assets
+    import specify_cli
     from specify_cli.extensions import ExtensionManager
 
     bundled = _write_manifest(tmp_path / "ext", "extension", "1.0.0")
-    monkeypatch.setattr(assets, "_locate_bundled_extension", lambda cid: bundled)
+    monkeypatch.setattr(specify_cli, "locate_bundled_extension", lambda cid: bundled)
     force_values: list = []
 
     def _fake_install(self, *a, **k):
@@ -485,11 +484,11 @@ def test_refresh_succeeds_and_passes_force_true(tmp_path: Path, monkeypatch):
     must succeed and pass force=True to install_from_directory."""
     from specify_cli.bundles.installer import install_bundle
     from specify_cli.bundles.manifest import BundleManifest
-    import specify_cli._assets as assets
+    import specify_cli
     from specify_cli.extensions import ExtensionManager
 
     bundled = _write_manifest(tmp_path / "ext", "extension", "1.0.0")
-    monkeypatch.setattr(assets, "_locate_bundled_extension", lambda cid: bundled)
+    monkeypatch.setattr(specify_cli, "locate_bundled_extension", lambda cid: bundled)
     # Simulate refresh succeeding (force=True removes the duplicate-install guard)
     force_seen: list = []
     def _fake_install_from_directory(self, *a, **k):

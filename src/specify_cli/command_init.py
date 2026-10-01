@@ -108,7 +108,7 @@ def _install_extension_during_init(project_path: Path, ext_spec: str, speckit_ve
     """
     from urllib.parse import urlparse
 
-    from ._assets import _locate_bundled_extension
+    from . import locate_bundled_extension
     from .extensions import ExtensionCatalog, ExtensionError, ExtensionManager
     from .extensions._commands import (
         _resolve_catalog_extension,
@@ -139,7 +139,7 @@ def _install_extension_during_init(project_path: Path, ext_spec: str, speckit_ve
         return f"{manifest.name} v{manifest.version} installed"
 
     # --- Bundled extension name or catalog ID ---
-    bundled_path = _locate_bundled_extension(ext_spec)
+    bundled_path = locate_bundled_extension(ext_spec)
     if bundled_path is not None:
         if manager.registry.is_installed(ext_spec):
             return "already installed"
@@ -156,7 +156,7 @@ def _install_extension_during_init(project_path: Path, ext_spec: str, speckit_ve
 
     resolved_id = ext_info["id"]
     if resolved_id != ext_spec:
-        bundled_path = _locate_bundled_extension(resolved_id)
+        bundled_path = locate_bundled_extension(resolved_id)
         if bundled_path is not None:
             if manager.registry.is_installed(resolved_id):
                 return "already installed"

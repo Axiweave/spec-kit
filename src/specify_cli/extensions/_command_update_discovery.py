@@ -27,9 +27,10 @@ class UpdateCandidate:
 
 def _bundled_update_source(ext_id: str):
     """Locate the local bundled copy of an extension and its parsed version."""
+    from .. import locate_bundled_extension
     from . import ExtensionManifest, ValidationError
 
-    bundled_dir = _commands._locate_bundled_extension(ext_id)
+    bundled_dir = locate_bundled_extension(ext_id)
     if bundled_dir is None:
         return None, None
     try:

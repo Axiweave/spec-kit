@@ -31,7 +31,7 @@ import yaml
 from packaging import version as pkg_version
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 
-from .._assets import _locate_core_pack, _repo_root
+from .. import _locate_core_pack, _repo_root
 from .._download_security import (
     archive_format_from_name,
     archive_suffix,

@@ -51,9 +51,9 @@ def bundled_extension_version(extension_id: str) -> str:
     extension version bumps (#4345) instead of hardcoding a literal that
     drifts out of sync and trips the exact-pin enforcement.
     """
-    from specify_cli._assets import _locate_bundled_extension
+    from specify_cli import locate_bundled_extension
 
-    bundled_dir = _locate_bundled_extension(extension_id)
+    bundled_dir = locate_bundled_extension(extension_id)
     assert bundled_dir is not None, f"bundled extension '{extension_id}' not found"
     manifest = yaml.safe_load(
         (bundled_dir / "extension.yml").read_text(encoding="utf-8")

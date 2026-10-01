@@ -406,7 +406,7 @@ class TestExtensionUpdateCLI:
                  "_install_allowed": True,
              }), \
              patch(
-                 "specify_cli._locate_bundled_extension", return_value=v2_dir
+                 "specify_cli.locate_bundled_extension", return_value=v2_dir
              ), \
              patch.object(
                  ExtensionCatalog,
@@ -447,7 +447,7 @@ class TestExtensionUpdateCLI:
                  "_install_allowed": True,
              }), \
              patch(
-                 "specify_cli._locate_bundled_extension", return_value=v1_dir
+                 "specify_cli.locate_bundled_extension", return_value=v1_dir
              ):
             result = runner.invoke(
                 app, ["extension", "update", "test-ext"], catch_exceptions=True
@@ -487,7 +487,7 @@ class TestExtensionUpdateCLI:
                  "_install_allowed": True,
              }), \
              patch(
-                 "specify_cli._locate_bundled_extension", return_value=v2_dir
+                 "specify_cli.locate_bundled_extension", return_value=v2_dir
              ), \
              patch.object(
                  ExtensionCatalog,
@@ -530,7 +530,7 @@ class TestExtensionUpdateCLI:
                  "_install_allowed": True,
              }), \
              patch(
-                 "specify_cli._locate_bundled_extension", return_value=v3_dir
+                 "specify_cli.locate_bundled_extension", return_value=v3_dir
              ):
             result = runner.invoke(
                 app, ["extension", "update", "test-ext"], input="y\n", catch_exceptions=True
@@ -565,7 +565,7 @@ class TestExtensionUpdateCLI:
                  "_install_allowed": True,
              }), \
              patch(
-                 "specify_cli._locate_bundled_extension", return_value=None
+                 "specify_cli.locate_bundled_extension", return_value=None
              ):
             result = runner.invoke(
                 app, ["extension", "update", "test-ext"], catch_exceptions=True

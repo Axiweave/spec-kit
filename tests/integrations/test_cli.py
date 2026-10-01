@@ -1800,7 +1800,7 @@ class TestExtensionFlag:
         """The init catalog branch keeps the catalog provenance at install time."""
         from types import SimpleNamespace
 
-        import specify_cli._assets as assets
+        import specify_cli
         import specify_cli.command_init as init_module
         from specify_cli.extensions import ExtensionCatalog, ExtensionManager
 
@@ -1810,7 +1810,7 @@ class TestExtensionFlag:
         archive.write_bytes(b"archive")
         captured = {}
 
-        monkeypatch.setattr(assets, "_locate_bundled_extension", lambda _id: None)
+        monkeypatch.setattr(specify_cli, "locate_bundled_extension", lambda _id: None)
         monkeypatch.setattr(
             ExtensionCatalog,
             "get_extension_info",
@@ -1889,10 +1889,10 @@ class TestExtensionFlag:
 
     def test_local_path_extension_installed(self, tmp_path):
         """--extension /abs/path installs from a local absolute directory path."""
-        from specify_cli import _locate_bundled_extension
+        from specify_cli import locate_bundled_extension
 
         # Use the bundled git extension directory as our "local" extension source
-        bundled_git = _locate_bundled_extension("git")
+        bundled_git = locate_bundled_extension("git")
         assert bundled_git is not None, "bundled git extension not found; cannot run test"
 
         # Pass the absolute path directly (starts with "/")
@@ -2033,10 +2033,10 @@ class TestExtensionFlag:
 
         from unittest.mock import patch
 
-        from specify_cli import _locate_bundled_extension
+        from specify_cli import locate_bundled_extension
         import specify_cli.command_init as init_mod
 
-        bundled_git = _locate_bundled_extension("git")
+        bundled_git = locate_bundled_extension("git")
         assert bundled_git is not None, "bundled git extension not found"
         zip_bytes = self._zip_bytes_from_dir(bundled_git)
 
@@ -2109,9 +2109,9 @@ class TestExtensionFlag:
 
         from unittest.mock import patch
 
-        from specify_cli import _locate_bundled_extension
+        from specify_cli import locate_bundled_extension
 
-        bundled_git = _locate_bundled_extension("git")
+        bundled_git = locate_bundled_extension("git")
         assert bundled_git is not None, "bundled git extension not found"
         zip_bytes = self._zip_bytes_from_dir(bundled_git)
 
@@ -2172,9 +2172,9 @@ class TestExtensionFlag:
 
         from unittest.mock import patch
 
-        from specify_cli import _locate_bundled_extension
+        from specify_cli import locate_bundled_extension
 
-        bundled_git = _locate_bundled_extension("git")
+        bundled_git = locate_bundled_extension("git")
         assert bundled_git is not None, "bundled git extension not found"
         zip_bytes = self._zip_bytes_from_dir(bundled_git)
 

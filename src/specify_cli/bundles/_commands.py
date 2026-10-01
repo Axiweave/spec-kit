@@ -54,7 +54,7 @@ def _build_stack(project_root: Path, *, offline: bool):
 
 
 def _speckit_version() -> str:
-    from .._assets import get_speckit_version
+    from .. import get_speckit_version
 
     return get_speckit_version()
 

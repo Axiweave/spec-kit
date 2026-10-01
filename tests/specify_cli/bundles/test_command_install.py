@@ -365,7 +365,7 @@ def test_local_refresh_catalog_extension_requires_network(
         "specify_cli.bundles.command_install._bundle_overlaps", lambda *a, **kw: []
     )
     monkeypatch.setattr(
-        "specify_cli._assets._locate_bundled_extension", lambda cid: None
+        "specify_cli.locate_bundled_extension", lambda cid: None
     )
     version = "1.0.0"
     downloads = []

@@ -32,7 +32,7 @@ def _repo_root() -> Path:
     return Path(__file__).parent.parent.parent
 
 
-def _locate_bundled_extension(extension_id: str) -> Path | None:
+def locate_bundled_extension(extension_id: str) -> Path | None:
     """Return the path to a bundled extension, or None.
 
     Checks the wheel's core_pack first, then falls back to the

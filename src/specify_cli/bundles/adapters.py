@@ -19,7 +19,7 @@ from pathlib import Path
 from urllib.parse import ParseResult, urlparse
 from urllib.request import url2pathname
 
-from .._assets import _locate_core_pack, _repo_root
+from .. import _locate_core_pack, _repo_root
 from .._download_security import MAX_JSON_CATALOG_BYTES, read_response_limited
 from . import BundlerError
 from .yamlio import loads_json
