@@ -281,6 +281,7 @@ class _PresetSkillMethods:
                             desc,
                             f"override:{cmd_name}",
                         )
+                        registrar.apply_invocation_policy(fm, fm_data)
                         registrar.apply_argument_hint(
                             fm, fm_data, integration
                         )
@@ -769,6 +770,8 @@ class _PresetSkillMethods:
                 for key in ("scripts", "agent_scripts", "argument-hint"):
                     if key not in frontmatter and key in core_frontmatter:
                         frontmatter[key] = core_frontmatter[key]
+                if not isinstance(frontmatter.get("disable-model-invocation"), bool):
+                    registrar.apply_invocation_policy(core_frontmatter, frontmatter)
 
             original_desc = frontmatter.get("description", "")
             enhanced_desc = original_desc or SKILL_DESCRIPTIONS.get(
@@ -801,6 +804,7 @@ class _PresetSkillMethods:
                     enhanced_desc,
                     f"preset:{manifest.id}",
                 )
+                registrar.apply_invocation_policy(frontmatter, frontmatter_data)
                 registrar.apply_argument_hint(frontmatter, frontmatter_data, integration)
                 frontmatter_text = dump_frontmatter(frontmatter_data)
                 skill_content = (
@@ -1462,6 +1466,7 @@ class _PresetSkillMethods:
                     enhanced_desc,
                     f"templates/commands/{short_name}.md",
                 )
+                registrar.apply_invocation_policy(frontmatter, frontmatter_data)
                 registrar.apply_argument_hint(frontmatter, frontmatter_data, integration)
                 frontmatter_text = dump_frontmatter(frontmatter_data)
                 skill_title = self._skill_title_from_command(short_name)
@@ -1521,6 +1526,7 @@ class _PresetSkillMethods:
                     extension_restore["source"],
                     author=extension_restore.get("author", "github-spec-kit"),
                 )
+                registrar.apply_invocation_policy(frontmatter, frontmatter_data)
                 registrar.apply_argument_hint(frontmatter, frontmatter_data, integration)
                 frontmatter_text = dump_frontmatter(frontmatter_data)
                 skill_content = (

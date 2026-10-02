@@ -2748,6 +2748,227 @@ class TestPresetSkills(PresetArtifactTestHelpers):
             )
 
 
+class TestPresetInvocationPolicy(PresetArtifactTestHelpers):
+    """Explicit source policies survive preset precedence and restoration."""
+
+    def _write_policy_command(self, path, policy, body, strategy=None):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        frontmatter = {"description": body}
+        if policy is not None:
+            frontmatter["disable-model-invocation"] = policy
+        if strategy is not None:
+            frontmatter["strategy"] = strategy
+        path.write_text(
+            f"---\n{yaml.safe_dump(frontmatter)}---\n\n{body}\n",
+            encoding="utf-8",
+        )
+
+    def _policy_preset(self, temp_dir, preset_id, command_name, policy, strategy="replace"):
+        preset_dir = self._create_command_preset(
+            temp_dir, preset_id, command_name, preset_id, preset_id
+        )
+        body = f"{preset_id}\n{{CORE_TEMPLATE}}" if strategy == "wrap" else preset_id
+        self._write_policy_command(
+            preset_dir / "commands" / f"{command_name}.md", policy, body, strategy
+        )
+        manifest_file = preset_dir / "preset.yml"
+        manifest = yaml.safe_load(manifest_file.read_text(encoding="utf-8"))
+        manifest["provides"]["templates"][0]["strategy"] = strategy
+        manifest_file.write_text(yaml.safe_dump(manifest), encoding="utf-8")
+        return preset_dir
+
+    def _read_skill(self, skill_file):
+        content = skill_file.read_text(encoding="utf-8")
+        return yaml.safe_load(content.split("---", 2)[1])
+
+    @pytest.mark.parametrize("policy", [True, False])
+    def test_replace_preserves_explicit_invocation_policy(self, project_dir, temp_dir, policy):
+        self._write_init_options(project_dir, ai="copilot")
+        preset = self._policy_preset(temp_dir, "policy-replace", "speckit.specify", policy)
+        manager = PresetManager(project_dir)
+        manager.install_from_directory(preset, "1.0.0")
+
+        frontmatter = self._read_skill(
+            project_dir / ".github/skills/speckit-specify/SKILL.md"
+        )
+        assert frontmatter["metadata"]["source"] == "preset:policy-replace"
+        assert frontmatter["disable-model-invocation"] is policy
+
+    @pytest.mark.parametrize(
+        ("core_policy", "override_policy", "expected"),
+        [
+            (True, None, True),
+            (False, None, False),
+            (True, False, False),
+            (False, True, True),
+            (True, "false", True),
+            (False, 1, False),
+        ],
+    )
+    def test_wrap_invocation_policy_precedence(
+        self, project_dir, temp_dir, core_policy, override_policy, expected
+    ):
+        self._write_init_options(project_dir, ai="claude")
+        self._write_policy_command(
+            project_dir / ".specify/templates/commands/specify.md",
+            core_policy,
+            "Core policy body",
+        )
+        preset = self._policy_preset(
+            temp_dir, "policy-wrap", "speckit.specify", override_policy, "wrap"
+        )
+        manager = PresetManager(project_dir)
+        manager.install_from_directory(preset, "1.0.0")
+
+        frontmatter = self._read_skill(
+            project_dir / ".claude/skills/speckit-specify/SKILL.md"
+        )
+        assert frontmatter["metadata"]["source"] == "preset:policy-wrap"
+        assert frontmatter["disable-model-invocation"] is expected
+
+    @pytest.mark.parametrize("policy", [True, False])
+    def test_higher_priority_removal_restores_project_override_policy(
+        self, project_dir, temp_dir, policy
+    ):
+        self._write_init_options(project_dir, ai="copilot")
+        manager = PresetManager(project_dir)
+        lower = self._policy_preset(temp_dir, "policy-lower", "speckit.specify", not policy)
+        higher = self._policy_preset(temp_dir, "policy-higher", "speckit.specify", not policy)
+        manager.install_from_directory(lower, "1.0.0", priority=10)
+        manager.install_from_directory(higher, "1.0.0", priority=1)
+        self._write_policy_command(
+            project_dir / ".specify/templates/overrides/speckit.specify.md",
+            policy,
+            "Project override policy body",
+        )
+
+        assert manager.remove("policy-higher") is True
+        frontmatter = self._read_skill(
+            project_dir / ".github/skills/speckit-specify/SKILL.md"
+        )
+        assert frontmatter["metadata"]["source"] == "override:speckit.specify"
+        assert frontmatter["disable-model-invocation"] is policy
+        assert manager.registry.get("policy-lower") is not None
+
+    @pytest.mark.parametrize("policy", [True, False])
+    def test_removal_restores_core_invocation_policy(self, project_dir, temp_dir, policy):
+        self._write_init_options(project_dir, ai="copilot")
+        self._write_policy_command(
+            project_dir / ".specify/templates/commands/specify.md", policy, "Core policy body"
+        )
+        preset = self._policy_preset(temp_dir, "policy-core", "speckit.specify", not policy)
+        manager = PresetManager(project_dir)
+        manager.install_from_directory(preset, "1.0.0")
+        skill_dir = project_dir / ".github/skills/speckit-specify"
+        companion = skill_dir / "reference.txt"
+        companion.write_bytes(b"Private reference bytes\n")
+        unrelated = project_dir / ".github/skills/private/SKILL.md"
+        self._write_policy_command(unrelated, not policy, "Private skill body")
+        unrelated_bytes = unrelated.read_bytes()
+
+        assert manager.remove("policy-core") is True
+        frontmatter = self._read_skill(skill_dir / "SKILL.md")
+        assert frontmatter["metadata"]["source"] == "templates/commands/specify.md"
+        assert frontmatter["disable-model-invocation"] is policy
+        assert companion.read_bytes() == b"Private reference bytes\n"
+        assert unrelated.read_bytes() == unrelated_bytes
+
+    @pytest.mark.parametrize("policy", [True, False])
+    def test_removal_restores_extension_invocation_policy(self, project_dir, temp_dir, policy):
+        self._write_init_options(project_dir, ai="copilot")
+        extension_dir = project_dir / ".specify/extensions/policyext"
+        self._write_policy_command(
+            extension_dir / "commands/check.md", policy, "Extension policy body"
+        )
+        (extension_dir / "extension.yml").write_text(
+            yaml.safe_dump({
+                "schema_version": "1.0",
+                "extension": {
+                    "id": "policyext", "name": "Policy Extension",
+                    "version": "1.0.0", "description": "Policy restoration fixture",
+                },
+                "requires": {"speckit_version": ">=0.1.0"},
+                "provides": {"commands": [{
+                    "name": "speckit.policyext.check",
+                    "file": "commands/check.md",
+                    "description": "Check extension policy",
+                }]},
+            }),
+            encoding="utf-8",
+        )
+        preset = self._policy_preset(
+            temp_dir, "policy-extension", "speckit.policyext.check", not policy
+        )
+        manager = PresetManager(project_dir)
+        manager.install_from_directory(preset, "1.0.0")
+
+        assert manager.remove("policy-extension") is True
+        frontmatter = self._read_skill(
+            project_dir / ".github/skills/speckit-policyext-check/SKILL.md"
+        )
+        assert frontmatter["metadata"]["source"] == "extension:policyext"
+        assert frontmatter["disable-model-invocation"] is policy
+
+    def test_policy_removal_preserves_edited_installed_skill(self, project_dir, temp_dir):
+        self._write_init_options(project_dir, ai="copilot")
+        manager = PresetManager(project_dir)
+        lower = self._policy_preset(temp_dir, "edited-lower", "speckit.specify", False)
+        higher = self._policy_preset(temp_dir, "edited-higher", "speckit.specify", True)
+        manager.install_from_directory(lower, "1.0.0", priority=10)
+        manager.install_from_directory(higher, "1.0.0", priority=1)
+        skill_file = project_dir / ".github/skills/speckit-specify/SKILL.md"
+        self._write_policy_command(skill_file, False, "User-owned edited skill")
+        edited_bytes = skill_file.read_bytes()
+
+        assert manager.remove("edited-higher") is True
+        assert skill_file.read_bytes() == edited_bytes
+
+    @pytest.mark.parametrize("policy", [True, False])
+    def test_coinstalled_native_renderers_preserve_invocation_policy(
+        self, project_dir, temp_dir, policy
+    ):
+        # No active-agent record: legacy installation renders each detected native agent.
+        for skills_dir in (".claude/skills", ".agents/skills"):
+            (project_dir / skills_dir).mkdir(parents=True)
+        preset = self._policy_preset(temp_dir, "policy-coinstalled", "speckit.specify", policy)
+        manager = PresetManager(project_dir)
+        manager.install_from_directory(preset, "1.0.0")
+
+        for skills_dir in (".claude/skills", ".agents/skills"):
+            frontmatter = self._read_skill(
+                project_dir / skills_dir / "speckit-specify/SKILL.md"
+            )
+            assert frontmatter["metadata"]["source"].startswith("policy-coinstalled:")
+            assert frontmatter["disable-model-invocation"] is policy
+
+    @pytest.mark.parametrize(
+        ("core_policy", "override_policy", "expected"),
+        [(True, None, True), (False, None, False), (True, False, False), (False, True, True)],
+    )
+    def test_coinstalled_wrap_renderers_preserve_invocation_policy(
+        self, project_dir, temp_dir, core_policy, override_policy, expected
+    ):
+        for skills_dir in (".claude/skills", ".agents/skills"):
+            (project_dir / skills_dir).mkdir(parents=True)
+        self._write_policy_command(
+            project_dir / ".specify/templates/commands/specify.md",
+            core_policy,
+            "Co-installed core policy body",
+        )
+        preset = self._policy_preset(
+            temp_dir, "policy-coinstalled-wrap", "speckit.specify", override_policy, "wrap"
+        )
+        manager = PresetManager(project_dir)
+        manager.install_from_directory(preset, "1.0.0")
+
+        for skills_dir in (".claude/skills", ".agents/skills"):
+            frontmatter = self._read_skill(
+                project_dir / skills_dir / "speckit-specify/SKILL.md"
+            )
+            assert frontmatter["metadata"]["source"].startswith("policy-coinstalled-wrap:")
+            assert frontmatter["disable-model-invocation"] is expected
+
+
 class TestWrapStrategy:
     """Skill registration with inherited wrap metadata."""
 

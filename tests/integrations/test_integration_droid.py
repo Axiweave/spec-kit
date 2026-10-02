@@ -203,22 +203,6 @@ class TestDroidFrontmatter:
                 f"{f} missing user-invocable: true"
             )
 
-    def test_skills_carry_disable_model_invocation_false(self, tmp_path):
-        i = get_integration("droid")
-        m = IntegrationManifest("droid", tmp_path)
-        i.setup(tmp_path, m, script_type="sh")
-
-        skill_files = [
-            f
-            for f in (tmp_path / ".factory" / "skills").rglob("SKILL.md")
-        ]
-        assert skill_files, "expected at least one SKILL.md"
-        for f in skill_files:
-            content = f.read_text(encoding="utf-8")
-            assert "disable-model-invocation: false" in content, (
-                f"{f} missing disable-model-invocation: false"
-            )
-
     def test_inject_frontmatter_flag_adds_key_when_absent(self):
         """Fresh content (key absent) gets the flag injected on its own line."""
         content = "---\nname: x\ndescription: y\n---\n\nBody.\n"

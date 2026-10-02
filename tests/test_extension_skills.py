@@ -423,6 +423,73 @@ class TestExtensionSkillRegistration:
         assert "speckit-test-ext-hello" in skill_dirs
         assert "speckit-test-ext-world" in skill_dirs
 
+
+    @pytest.mark.parametrize("ai", ["claude", "alquimia", "droid", "vibe"])
+    @pytest.mark.parametrize("policy", [True, False])
+    def test_invocation_policy_survives_extension_skill_lifecycle(
+        self, project_dir, extension_dir, ai, policy
+    ):
+        """Preserve source policy and unrelated skills through installation and removal."""
+        from specify_cli.agents import CommandRegistrar
+
+        _create_init_options(project_dir, ai=ai, ai_skills=True)
+        skills_dir = _create_skills_dir(project_dir, ai=ai)
+        source_file = extension_dir / "commands" / "hello.md"
+        source_file.write_text(
+            "---\n"
+            "description: Review extension artifacts\n"
+            f"disable-model-invocation: {str(policy).lower()}\n"
+            "---\n\nReview the supplied artifacts.\n",
+            encoding="utf-8",
+        )
+        unrelated_file = skills_dir / "personal-review" / "SKILL.md"
+        unrelated_file.parent.mkdir()
+        unrelated_content = "# Personal review\nKeep this user content.\n"
+        unrelated_file.write_text(unrelated_content, encoding="utf-8")
+
+        manager = ExtensionManager(project_dir)
+        manifest = manager.install_from_directory(
+            extension_dir, "0.1.0", register_commands=False
+        )
+        skill_file = skills_dir / "speckit-test-ext-hello" / "SKILL.md"
+        frontmatter, _ = CommandRegistrar.parse_frontmatter(
+            skill_file.read_text(encoding="utf-8")
+        )
+        assert frontmatter["disable-model-invocation"] is policy
+
+        assert manager.remove(manifest.id) is True
+        assert not skill_file.exists()
+        assert unrelated_file.read_text(encoding="utf-8") == unrelated_content
+
+    @pytest.mark.parametrize("policy", [True, False])
+    def test_non_active_native_extension_registration_preserves_invocation_policy(
+        self, project_dir, extension_dir, policy
+    ):
+        """A co-installed native agent keeps policy through registration and removal."""
+        from specify_cli.agents import CommandRegistrar
+
+        _create_init_options(project_dir, ai="claude", ai_skills=True)
+        _create_skills_dir(project_dir, ai="claude")
+        native_skills_dir = _create_skills_dir(project_dir, ai="kimi")
+        (extension_dir / "commands" / "hello.md").write_text(
+            "---\n"
+            "description: Review extension artifacts\n"
+            f"disable-model-invocation: {str(policy).lower()}\n"
+            "---\n\nReview the supplied artifacts.\n",
+            encoding="utf-8",
+        )
+        manager = ExtensionManager(project_dir)
+        manifest = manager.install_from_directory(extension_dir, "0.1.0")
+        manager.register_enabled_extensions_for_agent("kimi")
+        skill_file = native_skills_dir / "speckit-test-ext-hello" / "SKILL.md"
+        frontmatter, _ = CommandRegistrar.parse_frontmatter(
+            skill_file.read_text(encoding="utf-8")
+        )
+        assert frontmatter["disable-model-invocation"] is policy
+
+        assert manager.remove(manifest.id) is True
+        assert not skill_file.exists()
+
     def test_skill_md_content_correct(self, skills_project, extension_dir):
         """SKILL.md should have correct agentskills.io structure."""
         project_dir, skills_dir = skills_project

@@ -133,6 +133,8 @@ class GenericIntegration(MarkdownIntegration):
         emitted here follow the same `agentskills.io
         <https://agentskills.io/specification>`_ layout.
         """
+        from ...agents import CommandRegistrar
+
         raw = src_file.read_text(encoding="utf-8")
         command_name = src_file.stem
         skill_name = f"speckit-{command_name.replace('.', '-')}"
@@ -169,11 +171,14 @@ class GenericIntegration(MarkdownIntegration):
                 )
 
         description = frontmatter.get("description") or f"Spec Kit: {command_name} workflow"
+        policy: dict[str, Any] = {}
+        CommandRegistrar.apply_invocation_policy(frontmatter, policy)
         skill_content = (
             f"---\n"
             f"name: {yaml_quote(skill_name)}\n"
             f"description: {yaml_quote(description)}\n"
             f"compatibility: {yaml_quote('Requires spec-kit project structure with .specify/ directory')}\n"
+            f"{yaml.safe_dump(policy) if policy else ''}"
             f"metadata:\n"
             f"  author: {yaml_quote('github-spec-kit')}\n"
             f"  source: {yaml_quote('templates/commands/' + src_file.name)}\n"

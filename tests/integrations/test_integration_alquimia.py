@@ -188,7 +188,6 @@ class TestAlquimiaAIIntegration:
         parsed = yaml.safe_load(parts[1])
         assert parsed["name"] == "speckit-plan"
         assert parsed["user-invocable"] is True
-        assert parsed["disable-model-invocation"] is False
         assert parsed["metadata"]["source"] == "templates/commands/plan.md"
 
     def test_render_skill_unicode(self):
@@ -344,7 +343,6 @@ class TestAlquimiaAIIntegration:
         assert skill_file.exists()
         skill_content = skill_file.read_text(encoding="utf-8")
         assert "user-invocable: true" in skill_content
-        assert "disable-model-invocation: false" in skill_content
 
         init_options = json.loads(
             (project / ".specify" / "init-options.json").read_text(encoding="utf-8")
@@ -432,7 +430,6 @@ class TestAlquimiaAIIntegration:
         assert "preset:alquimia-skill-command" in content
         assert "name: speckit-research" in content
         assert "user-invocable: true" in content
-        assert "disable-model-invocation: false" in content
 
         metadata = manager.registry.get("alquimia-skill-command")
         assert "speckit-research" in metadata.get("registered_skills", {}).get(
@@ -677,46 +674,8 @@ class TestAlquimiaArgumentHints:
         assert parsed["description"] == frontmatter["description"]
 
 
-class TestAlquimiaDisableModelInvocation:
-    """Verify disable-model-invocation is false for Alquimia skills."""
-
-    def test_setup_sets_disable_model_invocation_false(self, tmp_path):
-        """Generated SKILL.md files must have disable-model-invocation: false."""
-        i = get_integration("alquimia")
-        m = IntegrationManifest("alquimia", tmp_path)
-        created = i.setup(tmp_path, m, script_type="sh")
-        skill_files = [f for f in created if f.name == "SKILL.md"]
-        assert len(skill_files) > 0
-        for f in skill_files:
-            content = f.read_text(encoding="utf-8")
-            parts = content.split("---", 2)
-            parsed = yaml.safe_load(parts[1])
-            assert parsed["disable-model-invocation"] is False, (
-                f"{f.parent.name}: expected disable-model-invocation: false"
-            )
-
-    def test_disable_model_invocation_not_true(self, tmp_path):
-        """No Alquimia skill should have disable-model-invocation: true."""
-        i = get_integration("alquimia")
-        m = IntegrationManifest("alquimia", tmp_path)
-        created = i.setup(tmp_path, m, script_type="sh")
-        for f in created:
-            if f.name != "SKILL.md":
-                continue
-            content = f.read_text(encoding="utf-8")
-            assert "disable-model-invocation: true" not in content, (
-                f"{f.parent.name}: must not have disable-model-invocation: true"
-            )
-
-    def test_non_alquimia_agents_lack_disable_model_invocation(self, tmp_path):
-        """Non-Alquimia skill agents should not get disable-model-invocation."""
-        from specify_cli.agents import CommandRegistrar
-
-        fm = CommandRegistrar.build_skill_frontmatter(
-            "codex", "speckit-plan", "desc", "templates/commands/plan.md"
-        )
-        assert "disable-model-invocation" not in fm
-        assert "user-invocable" not in fm
+class TestAlquimiaFrontmatterDefaults:
+    """Verify agent-specific defaults and non-hook content preservation."""
 
     def test_skills_default_post_process_preserves_content_without_hooks(
         self, tmp_path

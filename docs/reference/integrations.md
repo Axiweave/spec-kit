@@ -68,6 +68,11 @@ Use the form exposed by your agent. Copilot's default skills are installed under
 `--integration-options="--commands"`. In that layout, Copilot CLI can select an
 agent through `/agents` or address it directly in a prompt.
 
+Native skill generation preserves explicit Boolean `true` and `false` values from the selected command source.
+Integration defaults do not overwrite an explicit Boolean.
+If the source omits the field, the integration keeps its existing default behavior.
+This policy applies to core and extension generation, Generic `--skills`, Hermes core skills, preset overrides, and restored skills.
+
 ## External workspaces and global OMP commands
 
 In external mode, the workspace owns integration manifests, shared scripts, templates, and event dispatchers.

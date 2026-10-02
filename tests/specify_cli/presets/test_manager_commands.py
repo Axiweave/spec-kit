@@ -2639,6 +2639,36 @@ class TestPresetSkills(PresetArtifactTestHelpers):
 class TestWrapStrategy:
     """Tests for strategy: wrap preset command substitution."""
 
+    @pytest.mark.parametrize(
+        ("core_policy", "override_policy", "expected"),
+        [(True, None, True), (False, None, False), (True, False, False), (False, True, True)],
+    )
+    def test_direct_native_wrap_preserves_explicit_invocation_policy(
+        self, project_dir, core_policy, override_policy, expected
+    ):
+        """A wrap inherits the base Boolean unless its own Boolean overrides it."""
+        import yaml
+        from specify_cli.agents import CommandRegistrar
+
+        core_dir = project_dir / ".specify/templates/commands"
+        core_dir.mkdir(parents=True, exist_ok=True)
+        (core_dir / "merge.md").write_text(
+            f"---\ndescription: Core merge\ndisable-model-invocation: {str(core_policy).lower()}\n---\nCore body.\n"
+        )
+        (project_dir / ".claude/skills").mkdir(parents=True, exist_ok=True)
+        source = project_dir / "wrap-source"
+        source.mkdir()
+        policy = "" if override_policy is None else f"disable-model-invocation: {str(override_policy).lower()}\n"
+        (source / "merge.md").write_text(
+            f"---\ndescription: Wrapped merge\nstrategy: wrap\n{policy}---\n{{CORE_TEMPLATE}}\n"
+        )
+        CommandRegistrar().register_commands(
+            "claude", [{"name": "speckit.merge", "file": "merge.md"}], "fixture", source, project_dir
+        )
+        installed = project_dir / ".claude/skills/speckit-merge/SKILL.md"
+        frontmatter = yaml.safe_load(installed.read_text().split("---", 2)[1])
+        assert frontmatter.get("disable-model-invocation") is expected
+
     def test_substitute_core_template_replaces_placeholder(self, project_dir):
         """Core template body replaces {CORE_TEMPLATE} in preset command body."""
         from specify_cli.presets import _substitute_core_template

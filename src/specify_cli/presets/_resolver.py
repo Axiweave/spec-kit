@@ -946,6 +946,13 @@ class PresetResolver:
                 for key in ("scripts", "agent_scripts", "argument-hint"):
                     if key not in top_fm and key in base_fm:
                         top_fm[key] = base_fm[key]
+                if (
+                    layers[0]["strategy"] == "wrap"
+                    and not isinstance(top_fm.get("disable-model-invocation"), bool)
+                ):
+                    from ..agents import CommandRegistrar
+
+                    CommandRegistrar.apply_invocation_policy(base_fm, top_fm)
 
             # Strip strategy key — it's an internal composition directive,
             # not meant for rendered agent command files

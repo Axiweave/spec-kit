@@ -1877,6 +1877,7 @@ class ExtensionManager:
             # for why the value is added to the dict before serialization rather
             # than via the string-based inject_argument_hint helper.
             registrar.apply_argument_hint(frontmatter, frontmatter_data, integration)
+            registrar.apply_invocation_policy(frontmatter, frontmatter_data)
             frontmatter_text = dump_frontmatter(frontmatter_data)
 
             # Derive a human-friendly title from the command name

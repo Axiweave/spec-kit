@@ -536,6 +536,7 @@ class CommandRegistrar:
             f"{source_id}:{source_file}",
             author=author,
         )
+        self.apply_invocation_policy(frontmatter, skill_frontmatter)
         return self.render_frontmatter(skill_frontmatter) + "\n" + body
 
     @staticmethod
@@ -560,6 +561,15 @@ class CommandRegistrar:
             },
         }
         return skill_frontmatter
+
+    @staticmethod
+    def apply_invocation_policy(
+        source_frontmatter: dict[str, Any], skill_frontmatter: dict[str, Any]
+    ) -> None:
+        """Preserve an explicit Boolean invocation policy."""
+        value = source_frontmatter.get("disable-model-invocation")
+        if isinstance(value, bool):
+            skill_frontmatter["disable-model-invocation"] = value
 
     @staticmethod
     def apply_argument_hint(
@@ -888,6 +898,8 @@ class CommandRegistrar:
                 for key in ("scripts", "agent_scripts"):
                     if key not in frontmatter and key in core_frontmatter:
                         frontmatter[key] = core_frontmatter[key]
+                if not isinstance(frontmatter.get("disable-model-invocation"), bool):
+                    self.apply_invocation_policy(core_frontmatter, frontmatter)
                 frontmatter.pop("strategy", None)
 
             if extension_id:

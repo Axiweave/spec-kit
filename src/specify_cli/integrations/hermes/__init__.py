@@ -100,6 +100,8 @@ class HermesIntegration(SkillsIntegration):
         so extension commands (e.g. git) can detect Hermes as an active
         integration.
         """
+        from ...agents import CommandRegistrar
+
         templates = self.list_command_templates()
         if not templates:
             return []
@@ -191,6 +193,8 @@ class HermesIntegration(SkillsIntegration):
             description = frontmatter.get("description", "")
             if not description:
                 description = f"Spec Kit: {command_name} workflow"
+            policy: dict[str, Any] = {}
+            CommandRegistrar.apply_invocation_policy(frontmatter, policy)
 
             # Build SKILL.md with manually formatted frontmatter. yaml_quote
             # escapes newlines and control characters that a plain quoted
@@ -201,6 +205,7 @@ class HermesIntegration(SkillsIntegration):
                 f"description: {yaml_quote(description)}\n"
                 f"compatibility: "
                 f"{yaml_quote('Requires spec-kit project structure with .specify/ directory')}\n"
+                f"{yaml.safe_dump(policy) if policy else ''}"
                 f"metadata:\n"
                 f"  author: {yaml_quote('github-spec-kit')}\n"
                 f"  source: {yaml_quote('templates/commands/' + src_file.name)}\n"

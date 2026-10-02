@@ -10,11 +10,58 @@ adapted for the ``speckit-<name>/SKILL.md`` skills layout.
 
 import os
 
+import pytest
+
 import yaml
 
 from specify_cli.integrations import INTEGRATION_REGISTRY, get_integration
 from specify_cli.integrations.base import SkillsIntegration
 from specify_cli.integrations.manifest import IntegrationManifest
+
+
+@pytest.mark.parametrize("source_policy", [True, False])
+def test_native_override_policy_takes_precedence_over_adapter_default(tmp_path, source_policy):
+    """An explicit override policy survives the native adapter's default."""
+    from specify_cli.agents import CommandRegistrar
+
+    rendered = CommandRegistrar().render_skill_command(
+        "claude",
+        "speckit-review",
+        {"description": "Review artifacts.", "disable-model-invocation": source_policy},
+        "Review the selected artifacts.",
+        "fixture",
+        "review.md",
+        tmp_path,
+    )
+    installed = get_integration("claude").post_process_skill_content(rendered)
+    frontmatter = yaml.safe_load(installed.split("---", 2)[1])
+    assert frontmatter["disable-model-invocation"] is source_policy
+
+
+@pytest.mark.parametrize("integration_key", ["claude", "generic", "hermes"])
+def test_installed_policy_changes_follow_explicit_source_not_native_defaults(
+    tmp_path, monkeypatch, integration_key
+):
+    """Explicit source decisions control native invocation after regeneration."""
+    from pathlib import Path
+
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    monkeypatch.setattr(Path, "home", lambda: home)
+    template = tmp_path / "review.md"
+    integration = get_integration(integration_key)
+    monkeypatch.setattr(integration, "list_command_templates", lambda: [template])
+    options = {"commands_dir": ".fixture/skills", "skills": True} if integration_key == "generic" else {}
+    manifest = IntegrationManifest(integration_key, tmp_path)
+    for policy in (True, False):
+        template.write_text(
+            f"---\ndescription: Review artifacts.\ndisable-model-invocation: {str(policy).lower()}\n---\nReview artifacts.\n",
+            encoding="utf-8",
+        )
+        created = integration.setup(tmp_path, manifest, parsed_options=options)
+        installed = next(path for path in created if path.name == "SKILL.md")
+        frontmatter = yaml.safe_load(installed.read_text(encoding="utf-8").split("---", 2)[1])
+        assert frontmatter["disable-model-invocation"] is policy
 
 
 class SkillsIntegrationTests:
