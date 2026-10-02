@@ -93,6 +93,8 @@ write-and-record helpers). Do not track a pre-existing user file merely because
 you merged settings into it: unchanged tracked files are deleted on uninstall.
 `teardown()` preserves modified tracked files by default; `--force` can remove
 them. Keep agent-specific settings and events consistent with that lifecycle.
+Hermes stores global skill ownership under `~/.hermes/skills/.specify/integrations/hermes.manifest.json`.
+The global manifest uses the skills directory as its confined root.
 
 The integration does **not** own agent context files such as `AGENTS.md` or
 `CLAUDE.md`. The opt-in `extensions/agent-context/` owns their defaults,

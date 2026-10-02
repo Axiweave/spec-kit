@@ -12,6 +12,8 @@ non-destructive to a developer's real Hermes installation.
 
 from pathlib import Path
 
+import pytest
+
 from specify_cli.integrations import get_integration
 from specify_cli.integrations.manifest import IntegrationManifest
 
@@ -23,6 +25,14 @@ def _fake_home(tmp_path: Path) -> Path:
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
     return home
+
+
+def _symlink(link: Path, target: Path) -> None:
+    """Create a symlink when the platform permits it."""
+    try:
+        link.symlink_to(target, target_is_directory=target.is_dir())
+    except OSError as exc:
+        pytest.skip(f"Symlinks are unavailable: {exc}")
 
 
 class TestHermesIntegration(SkillsIntegrationTests):
@@ -89,21 +99,19 @@ class TestHermesIntegration(SkillsIntegrationTests):
         )
 
     def test_all_files_tracked_in_manifest(self, tmp_path, monkeypatch):
-        """Override: Hermes does not track skills in the project manifest
-        since they live globally.  Only project-local files (scripts,
-        templates, context) are tracked."""
+        """Persisted global ownership works with a fresh project manifest."""
         home = _fake_home(tmp_path)
         monkeypatch.setattr(Path, "home", lambda: home)
+        integration = get_integration(self.KEY)
+        created = integration.setup(tmp_path, IntegrationManifest(self.KEY, tmp_path))
 
-        i = get_integration(self.KEY)
-        m = IntegrationManifest(self.KEY, tmp_path)
-        created = i.setup(tmp_path, m)
-        for f in created:
-            # Global files (in ~/.hermes/) are not tracked in manifest
-            if str(f).startswith(str(home)):
-                continue
-            rel = f.resolve().relative_to(tmp_path.resolve()).as_posix()
-            assert rel in m.files, f"{rel} not tracked in manifest"
+        removed, skipped = integration.teardown(
+            tmp_path, IntegrationManifest(self.KEY, tmp_path)
+        )
+
+        assert set(created) <= set(removed)
+        assert skipped == []
+        assert all(not path.exists() for path in created)
 
     def test_install_uninstall_roundtrip(self, tmp_path, monkeypatch):
         """Override: Hermes uninstall removes global skills + local marker."""
@@ -128,69 +136,243 @@ class TestHermesIntegration(SkillsIntegrationTests):
         assert not (tmp_path / ".hermes" / "skills").exists()
 
     def test_modified_file_survives_uninstall(self, tmp_path, monkeypatch):
-        """Override: Hermes global skills are ALWAYS removed on uninstall
-        (they live outside the project root and aren't hash-tracked in the
-        manifest), so a modified global skill is still removed — matching
-        the standard behaviour where all integration files are cleaned up."""
+        """User edits survive reinstall, upgrade, and default uninstall."""
         home = _fake_home(tmp_path)
         monkeypatch.setattr(Path, "home", lambda: home)
+        integration = get_integration(self.KEY)
+        template = tmp_path / "review.md"
+        template.write_text("---\ndescription: Review\n---\nOriginal workflow.\n", encoding="utf-8")
+        monkeypatch.setattr(integration, "list_command_templates", lambda: [template])
+        manifest = IntegrationManifest(self.KEY, tmp_path)
+        [skill] = integration.setup(tmp_path, manifest)
+        skill.write_bytes(b"User workflow.\r\n")
 
-        i = get_integration(self.KEY)
-        m = IntegrationManifest(self.KEY, tmp_path)
-        created = i.install(tmp_path, m)
-        m.save()
-        # Pick a global skill file
-        skill_files = [f for f in created if "SKILL.md" in str(f)]
-        assert len(skill_files) > 0
-        modified_file = skill_files[0]
-        modified_file.write_text("user modified this", encoding="utf-8")
-        removed, skipped = i.uninstall(tmp_path, m)
-        assert not modified_file.exists(), (
-            "Modified global skill should be removed on teardown (standard behaviour)"
-        )
+        integration.setup(tmp_path, IntegrationManifest(self.KEY, tmp_path))
+        template.write_text("---\ndescription: Review\n---\nUpgraded workflow.\n", encoding="utf-8")
+        integration.setup(tmp_path, IntegrationManifest(self.KEY, tmp_path))
+        removed, skipped = integration.teardown(tmp_path, manifest)
 
-    def test_modified_global_skill_removed_on_teardown(self, tmp_path, monkeypatch):
-        """Override: Hermes global skills are removed on uninstall regardless
-        of the force flag, matching standard integration behaviour."""
+        assert skill.read_bytes() == b"User workflow.\r\n"
+        assert skill in skipped
+        assert skill not in removed
+
+    def test_force_removes_only_owned_skills(self, tmp_path, monkeypatch):
+        """Force removes edited owned files but preserves other skill content."""
         home = _fake_home(tmp_path)
         monkeypatch.setattr(Path, "home", lambda: home)
+        integration = get_integration(self.KEY)
+        manifest = IntegrationManifest(self.KEY, tmp_path)
+        created = integration.setup(tmp_path, manifest)
+        skill = created[0]
+        skill.write_bytes(b"User edit.\n")
+        companion = skill.parent / "notes.txt"
+        companion.write_bytes(b"Private notes.\n")
+        foreign = integration.global_skills_dir() / "speckit-private" / "SKILL.md"
+        foreign.parent.mkdir()
+        foreign.write_bytes(b"Private skill.\n")
 
-        i = get_integration(self.KEY)
-        m = IntegrationManifest(self.KEY, tmp_path)
-        created = i.install(tmp_path, m)
-        m.save()
-        # Pick a global skill file
-        skill_files = [f for f in created if "SKILL.md" in str(f)]
-        assert len(skill_files) > 0
-        modified_file = skill_files[0]
-        modified_file.write_text("user modified this", encoding="utf-8")
-        # Global skills are removed on teardown regardless of force flag
-        removed, skipped = i.teardown(tmp_path, m, force=False)
-        assert not modified_file.exists(), (
-            "Modified global skill should be removed on teardown (standard behaviour)"
-        )
+        removed, skipped = integration.teardown(tmp_path, manifest, force=True)
 
-    def test_pre_existing_skills_not_removed(self, tmp_path, monkeypatch):
-        """Pre-existing non-speckit global skills should survive Hermes uninstall."""
+        assert skill in removed
+        assert not skill.exists()
+        assert skipped == []
+        assert companion.read_bytes() == b"Private notes.\n"
+        assert foreign.read_bytes() == b"Private skill.\n"
+
+    @pytest.mark.parametrize("name", ["speckit-plan", "speckit-private", "other-tool"])
+    @pytest.mark.parametrize("force", [False, True])
+    def test_pre_existing_skills_not_removed(self, tmp_path, monkeypatch, name, force):
+        """Unowned skills survive reinstall and uninstall, even with a core name."""
         home = _fake_home(tmp_path)
         monkeypatch.setattr(Path, "home", lambda: home)
+        integration = get_integration(self.KEY)
+        foreign = integration.global_skills_dir() / name / "SKILL.md"
+        foreign.parent.mkdir(parents=True)
+        foreign.write_bytes(b"Private workflow.\r\n")
+        manifest = IntegrationManifest(self.KEY, tmp_path)
 
-        i = get_integration(self.KEY)
-        # Create a foreign skill in the global dir first
-        global_skills_dir = i.global_skills_dir()
-        foreign_dir = global_skills_dir / "other-tool"
-        foreign_dir.mkdir(parents=True, exist_ok=True)
-        (foreign_dir / "SKILL.md").write_text("# Foreign skill\n")
+        integration.setup(tmp_path, manifest)
+        integration.setup(tmp_path, IntegrationManifest(self.KEY, tmp_path))
+        removed, skipped = integration.teardown(tmp_path, manifest, force=force)
 
-        m = IntegrationManifest(self.KEY, tmp_path)
-        i.setup(tmp_path, m)
+        assert foreign.read_bytes() == b"Private workflow.\r\n"
+        assert foreign not in removed
+        assert foreign not in skipped
 
-        # Run teardown to verify foreign skill survives uninstall
-        i.teardown(tmp_path, m)
+    @pytest.mark.parametrize("with_notes", [False, True])
+    def test_unowned_core_skill_directory_not_claimed(self, tmp_path, monkeypatch, with_notes):
+        """An unowned core skill directory stays unowned, even when it is empty."""
+        home = _fake_home(tmp_path)
+        monkeypatch.setattr(Path, "home", lambda: home)
+        integration = get_integration(self.KEY)
+        template = tmp_path / "review.md"
+        template.write_text("---\ndescription: Review\n---\nWorkflow.\n", encoding="utf-8")
+        monkeypatch.setattr(integration, "list_command_templates", lambda: [template])
+        directory = integration.global_skills_dir() / "speckit-review"
+        directory.mkdir(parents=True)
+        if with_notes:
+            (directory / "notes.txt").write_bytes(b"Private notes.\n")
+        manifest = IntegrationManifest(self.KEY, tmp_path)
 
-        assert (foreign_dir / "SKILL.md").exists(), (
-            "Foreign skill was removed by teardown"
+        integration.setup(tmp_path, manifest)
+        integration.teardown(tmp_path, manifest, force=True)
+
+        assert directory.is_dir()
+        assert not (directory / "SKILL.md").exists()
+        if with_notes:
+            assert (directory / "notes.txt").read_bytes() == b"Private notes.\n"
+
+    def test_unchanged_owned_skill_upgrades_across_projects(self, tmp_path, monkeypatch):
+        """Shared ownership updates unchanged skills without needless rewrites."""
+        import yaml
+
+        home = _fake_home(tmp_path)
+        monkeypatch.setattr(Path, "home", lambda: home)
+        integration = get_integration(self.KEY)
+        template = tmp_path / "review.md"
+        template.write_text(
+            "---\ndescription: Review\ndisable-model-invocation: true\n---\nOriginal workflow.\n",
+            encoding="utf-8",
         )
+        monkeypatch.setattr(integration, "list_command_templates", lambda: [template])
+        first = tmp_path / "first"
+        first.mkdir()
+        [skill] = integration.setup(first, IntegrationManifest(self.KEY, first))
+        previous_mtime = skill.stat().st_mtime_ns
+        second = tmp_path / "second"
+        second.mkdir()
+        manifest = IntegrationManifest(self.KEY, second)
+        integration.setup(second, manifest)
+        assert skill.stat().st_mtime_ns == previous_mtime
+
+        template.write_text(
+            "---\ndescription: Review\ndisable-model-invocation: false\n---\nUpdated workflow.\n",
+            encoding="utf-8",
+        )
+        integration.setup(second, manifest)
+        content = skill.read_text(encoding="utf-8")
+        assert "Updated workflow." in content
+        assert "Original workflow." not in content
+        assert yaml.safe_load(content.split("---", 2)[1])["disable-model-invocation"] is False
+
+        removed, skipped = integration.teardown(second, manifest)
+        assert removed == [skill]
+        assert skipped == []
+        assert not skill.exists()
+
+    @pytest.mark.parametrize("action", ["setup", "teardown"])
+    def test_marker_symlink_refuses_writes_and_cleanup(self, tmp_path, monkeypatch, action):
+        """The project marker cannot redirect setup or teardown outside the project."""
+        home = _fake_home(tmp_path)
+        monkeypatch.setattr(Path, "home", lambda: home)
+        integration = get_integration(self.KEY)
+        external = tmp_path / "external"
+        external.mkdir()
+        note = external / "notes.txt"
+        note.write_bytes(b"External notes.\n")
+        _symlink(tmp_path / ".hermes", external)
+
+        with pytest.raises(ValueError, match="symlink"):
+            getattr(integration, action)(tmp_path, IntegrationManifest(self.KEY, tmp_path))
+
+        assert note.read_bytes() == b"External notes.\n"
+        assert not integration.global_skills_dir().exists()
+        assert (tmp_path / ".hermes").is_symlink()
+
+    @pytest.mark.parametrize("link_kind", ["directory", "file"])
+    def test_setup_refuses_descendant_symlinks_before_writes(
+        self, tmp_path, monkeypatch, link_kind
+    ):
+        """A symlinked destination cannot write external bytes or earlier skills."""
+        home = _fake_home(tmp_path)
+        monkeypatch.setattr(Path, "home", lambda: home)
+        integration = get_integration(self.KEY)
+        safe = tmp_path / "safe.md"
+        unsafe = tmp_path / "unsafe.md"
+        for template in (safe, unsafe):
+            template.write_text("---\ndescription: Review\n---\nWorkflow.\n", encoding="utf-8")
+        monkeypatch.setattr(integration, "list_command_templates", lambda: [safe, unsafe])
+        external = tmp_path / "external"
+        external.mkdir()
+        target = external / "SKILL.md"
+        target.write_bytes(b"External workflow.\n")
+        skill_dir = integration.global_skills_dir() / "speckit-unsafe"
+        skill_dir.parent.mkdir(parents=True)
+        if link_kind == "directory":
+            _symlink(skill_dir, external)
+        else:
+            skill_dir.mkdir()
+            _symlink(skill_dir / "SKILL.md", target)
+
+        with pytest.raises(ValueError, match="symlink"):
+            integration.setup(tmp_path, IntegrationManifest(self.KEY, tmp_path))
+
+        assert target.read_bytes() == b"External workflow.\n"
+        assert not (skill_dir.parent / "speckit-safe").exists()
+        assert not (tmp_path / ".hermes").exists()
+
+    @pytest.mark.parametrize("force", [False, True])
+    def test_teardown_refuses_symlinked_parent_before_cleanup(self, tmp_path, monkeypatch, force):
+        """A tampered skill directory cannot cause external or partial cleanup."""
+        home = _fake_home(tmp_path)
+        monkeypatch.setattr(Path, "home", lambda: home)
+        integration = get_integration(self.KEY)
+        manifest = IntegrationManifest(self.KEY, tmp_path)
+        created = integration.setup(tmp_path, manifest)
+        skill = created[-1]
+        external = tmp_path / "external"
+        external.mkdir()
+        target = external / "SKILL.md"
+        target.write_bytes(b"External workflow.\n")
+        skill.unlink()
+        skill.parent.rmdir()
+        _symlink(skill.parent, external)
+
+        with pytest.raises(ValueError, match="symlink"):
+            integration.teardown(tmp_path, manifest, force=force)
+
+        assert target.read_bytes() == b"External workflow.\n"
+        assert skill.parent.is_symlink()
+        assert created[0].is_file()
+        assert (tmp_path / ".hermes" / "skills").is_dir()
+
+    @pytest.mark.parametrize("force", [False, True])
+    def test_teardown_never_follows_owned_file_symlink(self, tmp_path, monkeypatch, force):
+        """Force can unlink an owned file symlink, but cannot change its target."""
+        home = _fake_home(tmp_path)
+        monkeypatch.setattr(Path, "home", lambda: home)
+        integration = get_integration(self.KEY)
+        manifest = IntegrationManifest(self.KEY, tmp_path)
+        created = integration.setup(tmp_path, manifest)
+        skill = created[0]
+        target = tmp_path / "external.md"
+        target.write_bytes(b"External workflow.\n")
+        skill.unlink()
+        _symlink(skill, target)
+
+        removed, skipped = integration.teardown(tmp_path, manifest, force=force)
+
+        assert target.read_bytes() == b"External workflow.\n"
+        if force:
+            assert skill in removed
+            assert not skill.is_symlink()
+        else:
+            assert skill in skipped
+            assert skill.is_symlink()
+
+    def test_teardown_preserves_unowned_project_marker_content(self, tmp_path, monkeypatch):
+        """The project marker directory is shared with user content."""
+        home = _fake_home(tmp_path)
+        monkeypatch.setattr(Path, "home", lambda: home)
+        integration = get_integration(self.KEY)
+        manifest = IntegrationManifest(self.KEY, tmp_path)
+        integration.setup(tmp_path, manifest)
+        note = tmp_path / ".hermes" / "skills" / "notes.txt"
+        note.write_bytes(b"Project notes.\n")
+
+        integration.teardown(tmp_path, manifest)
+
+        assert note.read_bytes() == b"Project notes.\n"
 
     def test_hook_sections_explain_dotted_command_conversion(self, tmp_path, monkeypatch):
         """Override: Hermes skills live in global ~/.hermes/skills/."""

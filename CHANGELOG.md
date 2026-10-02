@@ -7,6 +7,7 @@
 ### Added
 
 - Preserve explicit command invocation Booleans across native skills, Generic, Hermes, presets, and extensions. Keep the merge workflow user-only by default.
+- Preserve edited and unowned Hermes global skills during install, upgrade, and uninstall through the existing ownership manifest.
 - Add `specify project migrate-naming` for reviewed conversion between sequential and timestamp feature names. Preserve feature identity and owned references. Bind approval to source-state digests. Refuse unsafe changes and retain private backups when restoration fails. Leave Git history and opaque caller values unchanged.
 - Handle migration lock write, close, and removal failures with structured results and exact recovery operations. Report skipped no-op features and opaque workflow locations. Preserve epoch modification times, BOM bytes, and CRLF bytes in managed context files.
 - Report completed migration details when only lock cleanup remains. Preserve rejected and rolled-back transaction outcomes in recovery guidance. Correct the documented JSON approval flow.

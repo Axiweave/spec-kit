@@ -14,7 +14,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from shutil import rmtree
 from typing import Any
 
 import yaml
@@ -31,9 +30,9 @@ class HermesIntegration(SkillsIntegration):
     the global directory — no project-local copies are created since
     Hermes discovers them globally.  A project-local marker directory
     (``.hermes/skills/`` empty) is created so extension commands (e.g.
-    git) can detect Hermes as an active integration.  Uninstall removes
-    both the marker and all global ``speckit-*`` skills, matching the
-    standard integration teardown behaviour.
+    git) can detect Hermes as an active integration. Uninstall removes
+    the marker and unchanged owned global skill files. It preserves
+    edited files and unowned content.
     """
 
     key = "hermes"
@@ -63,6 +62,17 @@ class HermesIntegration(SkillsIntegration):
             if directory.is_symlink():
                 raise ValueError(f"Hermes skill directory must not be a symlink: {directory}")
         return root
+
+    def _global_manifest(self) -> IntegrationManifest:
+        """Load independent ownership for the shared skill directory."""
+        root = self.global_skills_dir()
+        manifest = IntegrationManifest(self.key, root)
+        if manifest.metadata_root != root:
+            raise ValueError(f"Hermes global skills cannot use an external workspace: {root}")
+        path = manifest.file_path(Path(".specify/integrations") / manifest.manifest_path.name)
+        if path.exists():
+            return IntegrationManifest.load(self.key, root)
+        return manifest
 
     def post_process_skill_content(self, content: str) -> str:
         """Resolve shared skill assets from the invoking project's workspace."""
@@ -121,12 +131,29 @@ class HermesIntegration(SkillsIntegration):
             else "$ARGUMENTS"
         )
 
-        global_skills_dir = self.global_skills_dir()
-        global_skills_dir.mkdir(parents=True, exist_ok=True)
+        global_manifest = self._global_manifest()
+        skill_paths = [
+            Path(f"speckit-{source.stem.replace('.', '-')}") / "SKILL.md"
+            for source in templates
+        ]
+        # Validate every destination before the first write.
+        for relative in skill_paths:
+            global_manifest.file_path(relative)
+        marker = manifest.file_path(".hermes/skills")
+        modified = set(global_manifest.check_modified())
+        owned = global_manifest.files
 
         created: list[Path] = []
 
-        for src_file in templates:
+        for src_file, relative in zip(templates, skill_paths):
+            skill_file = global_manifest.file_path(relative)
+            if relative.as_posix() not in owned and skill_file.parent.exists():
+                continue
+            if skill_file.exists() and (
+                relative.as_posix() in modified
+                or global_manifest.is_recovered(relative)
+            ):
+                continue
             raw = src_file.read_text(encoding="utf-8")
 
             # Derive the skill name from the template stem
@@ -215,19 +242,18 @@ class HermesIntegration(SkillsIntegration):
 
             skill_content = self.post_process_skill_content(skill_content)
 
-            # Write directly to global ~/.hermes/skills/speckit-<name>/SKILL.md
-            skill_dir = global_skills_dir / skill_name
-            skill_dir.mkdir(parents=True, exist_ok=True)
-            skill_file = skill_dir / "SKILL.md"
             normalized = skill_content.replace("\r\n", "\n")
-            skill_file.write_bytes(normalized.encode("utf-8"))
+            if not skill_file.exists() or skill_file.read_bytes() != normalized.encode("utf-8"):
+                global_manifest.record_file(relative, normalized)
             created.append(skill_file)
 
+        if global_manifest.files != owned:
+            global_manifest.save()
 
         # Create project-local marker directory so extension commands
         # (e.g. git) can detect Hermes as an active integration.
         # Hermes itself ignores this directory — skills live globally.
-        (project_root / ".hermes" / "skills").mkdir(parents=True, exist_ok=True)
+        marker.mkdir(parents=True, exist_ok=True)
 
         return created
 
@@ -240,41 +266,26 @@ class HermesIntegration(SkillsIntegration):
         *,
         force: bool = False,
     ) -> tuple[list[Path], list[Path]]:
-        """Uninstall integration files including global Hermes skills.
+        """Remove unchanged owned skills and the empty project marker.
 
-        Removes the project-local marker directory (if empty), delegates to
-        ``manifest.uninstall()`` for project-local tracked files, and
-        removes all ``speckit-*`` skills under ``~/.hermes/skills/``.
-
-        Global skills are always removed on teardown — this matches the
-        standard integration behaviour where all files created by the
-        integration are removed on ``specify integration uninstall``.
+        Force permits removal of edited owned files and final symlinks.
+        It never permits cleanup through a symlinked parent.
         """
+        global_manifest = self._global_manifest()
+        for relative in global_manifest.files:
+            global_manifest.file_path(relative, allow_symlink=True)
+        local_skills_dir = manifest.file_path(".hermes/skills")
 
-        # Delegate to manifest for project-local tracked files (scripts,
-        # templates, context entries tracked in the manifest).
         removed, skipped = manifest.uninstall(project_root, force=force)
+        global_removed, global_skipped = global_manifest.uninstall(force=force)
+        removed.extend(global_removed)
+        skipped.extend(global_skipped)
 
-        # Remove project-local marker directory if empty
-        local_skills_dir = project_root / ".hermes" / "skills"
         if local_skills_dir.is_dir() and not any(local_skills_dir.iterdir()):
             local_skills_dir.rmdir()
-            hermes_dir = project_root / ".hermes"
-            if hermes_dir.is_dir() and not any(hermes_dir.iterdir()):
+            hermes_dir = local_skills_dir.parent
+            if not any(hermes_dir.iterdir()):
                 hermes_dir.rmdir()
-
-        # Remove all global Hermes skills for speckit — these are always
-        # removed on uninstall regardless of the force flag, matching the
-        # standard behaviour where all integration files are cleaned up.
-        global_skills_dir = self.global_skills_dir()
-        if global_skills_dir.is_dir():
-            for skill_dir in sorted(global_skills_dir.iterdir()):
-                if skill_dir.is_dir() and skill_dir.name.startswith("speckit-"):
-                    try:
-                        rmtree(skill_dir)
-                        removed.append(skill_dir)
-                    except OSError:
-                        skipped.append(skill_dir)
 
         return removed, skipped
 

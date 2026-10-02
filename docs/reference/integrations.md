@@ -68,6 +68,11 @@ Use the form exposed by your agent. Copilot's default skills are installed under
 `--integration-options="--commands"`. In that layout, Copilot CLI can select an
 agent through `/agents` or address it directly in a prompt.
 
+Hermes tracks global skill ownership in `~/.hermes/skills/.specify/integrations/hermes.manifest.json`.
+Install and upgrade preserve edited skills and unowned skill directories.
+Default uninstall removes only unchanged owned files.
+Symlinked parent directories refuse writes and cleanup.
+
 Native skill generation preserves explicit Boolean `true` and `false` values from the selected command source.
 Integration defaults do not overwrite an explicit Boolean.
 If the source omits the field, the integration keeps its existing default behavior.
