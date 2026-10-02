@@ -56,27 +56,49 @@ chat. CLI installation and setup commands are separate terminal operations.
 The steps are the same across integrations, but their spelling depends on the
 agent and its installed mode:
 
-| Integration or mode | SDD example | Extension example |
-| --- | --- | --- |
-| GitHub Copilot, default skills mode | `/speckit-specify` | `/speckit-bug-assess` |
-| Dotted slash-command notation used in the references | `/speckit.specify` | `/speckit.bug.assess` |
-| Codex, Command Code, ZCode skills | `$speckit-specify` | `$speckit-bug-assess` |
-| Kimi skills | `/skill:speckit-specify` | `/skill:speckit-bug-assess` |
+| Integration or mode | SDD example | Merge example | Extension example |
+| --- | --- | --- | --- |
+| GitHub Copilot, default skills mode | `/speckit-specify` | `/speckit-merge` | `/speckit-bug-assess` |
+| Dotted slash commands, including OMP project/global commands | `/speckit.specify` | `/speckit.merge` | `/speckit.bug.assess` |
+| Codex, Command Code, ZCode skills | `$speckit-specify` | `$speckit-merge` | `$speckit-bug-assess` |
+| Kimi skills | `/skill:speckit-specify` | `/skill:speckit-merge` | `/skill:speckit-bug-assess` |
 
 Use the form exposed by your agent. Copilot's default skills are installed under
 `.github/skills/`; its opt-in commands layout is selected with
 `--integration-options="--commands"`. In that layout, Copilot CLI can select an
 agent through `/agents` or address it directly in a prompt.
 
+### Merge workflow and native skill policy
+
+`templates/commands/merge.md` is the single merge workflow source.
+OMP commands and native skills render that source through their existing integration paths.
+They do not install a second merge template or a separate skill body.
+Generic with `--integration-options="--commands-dir <path> --skills"` renders it as `speckit-merge/SKILL.md`.
+Use the invocation form that your chosen agent exposes.
+Hermes installs the core skill at `~/.hermes/skills/speckit-merge/SKILL.md`, not as a project-local skill copy.
 Hermes tracks global skill ownership in `~/.hermes/skills/.specify/integrations/hermes.manifest.json`.
 Install and upgrade preserve edited skills and unowned skill directories.
 Default uninstall removes only unchanged owned files.
 Symlinked parent directories refuse writes and cleanup.
 
+The core merge template sets the Boolean `disable-model-invocation: true` for user-only invocation.
 Native skill generation preserves explicit Boolean `true` and `false` values from the selected command source.
 Integration defaults do not overwrite an explicit Boolean.
 If the source omits the field, the integration keeps its existing default behavior.
 This policy applies to core and extension generation, Generic `--skills`, Hermes core skills, preset overrides, and restored skills.
+
+### Merge overrides and source precedence
+
+Command resolution checks project overrides, enabled presets, enabled extensions, and core templates, in that order.
+Within the preset or extension layer, a lower priority number wins.
+A preset `replace` override supplies its own command body and explicit Boolean policy.
+A preset `wrap` override composes the lower-priority command body through `{CORE_TEMPLATE}`.
+It inherits the base command's explicit Boolean unless the override supplies its own Boolean.
+When the base is the core merge template, a wrap without a Boolean inherits `disable-model-invocation: true`.
+An explicit override Boolean `false` takes precedence over that inherited `true`.
+After preset removal, reconciliation restores the command body and policy selected by the current priority stack.
+Preset disablement and priority changes affect resolution but do not immediately replace previously generated native command or skill files.
+Project-override restoration and native skill generation for co-installed agents preserve the same explicit Boolean policy.
 
 ## External workspaces and global OMP commands
 
@@ -108,6 +130,9 @@ The default profile uses `PI_CODING_AGENT_DIR/commands` when set, or `~/.omp/age
 Each global launcher resolves `specify project command <name> --json` from the invoking repository.
 It contains no project path or project-owned template.
 Project presets and extensions supply the current content, including shared command names with different content in different projects.
+For merge, the project command and global launcher both expose `/speckit.merge`.
+The global launcher resolves `specify project command speckit.merge --json` instead of carrying a separate merge workflow.
+The invoking project's source precedence and preset composition determine the returned workflow.
 
 The global manifest tracks each command directory separately.
 Install, upgrade, and uninstall preserve edited and unrelated files, even with `--force`.

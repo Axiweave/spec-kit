@@ -4,6 +4,7 @@ prepare_naming_migration() reads the project and writes nothing.
 apply_naming_migration() checks a preview again under an exclusive workspace lock,
 renames the features, edits the owned references, and saves the preference last.
 A handled failure restores every completed step. Backups stay outside the project.
+Pending merge lock or recovery entries under the effective specs root prevent migration.
 """
 from __future__ import annotations
 
@@ -274,7 +275,14 @@ def _survey(workspace: Path) -> _Survey:
                 refuse("nested-feature", rel, "A feature directory cannot contain another feature.")
         names = found.names.setdefault(rel, set()) if feature is None else None
         for child in children:
-            child_rel, info = f"{rel}/{child.name}", child.stat(follow_symlinks=False)
+            child_rel = f"{rel}/{child.name}"
+            if rel == "specs" and (
+                child.name == ".merge-specs.lock" or child.name.startswith(".merge-specs-recovery-")
+            ):
+                found.entries.append([child_rel, "pending-merge"])
+                refuse("pending-merge", child_rel, "A merge resource remains. Resolve it before naming migration.")
+                continue
+            info = child.stat(follow_symlinks=False)
             kind, mode = stat.S_IFMT(info.st_mode), stat.S_IMODE(info.st_mode)
             if names is not None:
                 names.add(child.name.casefold())
@@ -315,7 +323,7 @@ def _survey(workspace: Path) -> _Survey:
     return found
 
 
-def _classify(name: str) -> tuple[str, object, str]:
+def classify_feature_name(name: str) -> tuple[str, object, str]:
     """Read a directory name as (scheme, order key, suffix). Raise ValueError for an unusable prefix."""
     match = _TIMESTAMP.match(name)
     if match:
@@ -338,7 +346,7 @@ def _allocate(found: _Survey, target: str, clock: datetime, conflicts: list) -> 
     numbers, moments, sources, skipped = set(), set(), [], []
     for rel, name in found.dirs:
         try:
-            scheme, key, suffix = _classify(name)
+            scheme, key, suffix = classify_feature_name(name)
         except ValueError as exc:
             if rel in features:  # another directory cannot hold a prefix that no allocation can reach
                 conflicts.append(_conflict("invalid-prefix", rel, str(exc)))

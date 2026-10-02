@@ -414,6 +414,94 @@ def test_invalid_prefixes_block_application(naming, local, name):
     assert tree(local) == before
 
 
+@pytest.mark.parametrize(
+    "name, expected",
+    [
+        ("001-alpha", ("sequential", 1, "alpha")),
+        ("000-zero", ("sequential", 0, "zero")),
+        (f"000{MAX_NUMBER}-edge", ("sequential", MAX_NUMBER, "edge")),
+        ("20240229-235959-leap", ("timestamp", datetime(2024, 2, 29, 23, 59, 59), "leap")),
+        ("99991231-235959-last", ("timestamp", datetime.max.replace(microsecond=0), "last")),
+        ("12-short", ("custom", None, "12-short")),
+        ("1234", ("custom", None, "1234")),
+        ("notes", ("custom", None, "notes")),
+    ],
+)
+def test_public_classifier_preserves_prefix_boundaries(naming, name, expected):
+    assert naming.classify_feature_name(name) == expected
+
+
+@pytest.mark.parametrize("name", [f"{MAX_NUMBER + 1}-overflow", "20230229-120000-invalid", "20260101-240000-invalid"])
+def test_public_classifier_rejects_unusable_prefixes(naming, name):
+    with pytest.raises(ValueError):
+        naming.classify_feature_name(name)
+
+
+@pytest.mark.parametrize("location", ["local", "external"])
+@pytest.mark.parametrize("reserved", [".merge-specs.lock", ".merge-specs-recovery-", ".merge-specs-recovery-leftover"])
+@pytest.mark.parametrize("kind", ["file", "directory", "symlink", "pipe"])
+def test_pending_merge_resources_block_naming_without_writes(naming, request, isolated, location, reserved, kind):
+    project = request.getfixturevalue(location)
+    repo, workspace = (project, project) if location == "local" else project[:2]
+    feature(workspace, "specs/001-a", {"payload.bin": b"\x00\xff"})
+    put(workspace, ".specify/init-options.json", '{"feature_numbering": "sequential"}\n')
+    pending = workspace / "specs" / reserved
+    if kind == "file":
+        pending.write_bytes(b"")
+    elif kind == "directory":
+        pending.mkdir()
+    elif kind == "symlink":
+        try:
+            pending.symlink_to(workspace / "missing-target")
+        except OSError:
+            pytest.skip("symlinks are unavailable")
+    else:
+        if not hasattr(os, "mkfifo"):
+            pytest.skip("named pipes are unavailable")
+        os.mkfifo(pending)
+
+    def snapshot():
+        result = {}
+        for path in sorted(isolated.rglob("*")):
+            info = path.lstat()
+            data = path.read_bytes() if stat.S_ISREG(info.st_mode) else None
+            result[path.relative_to(isolated).as_posix()] = (info.st_mode, info.st_mtime_ns, data)
+        return result
+
+    before = snapshot()
+    preview = prepare(naming, repo, "timestamp")
+    assert snapshot() == before
+    assert any(
+        conflict["code"] == "pending-merge" and rel(conflict["path"], workspace) == f"specs/{reserved}"
+        for conflict in preview.conflicts
+    )
+    result = naming.apply_naming_migration(preview)
+    assert result.status == "rejected"
+    assert snapshot() == before
+
+
+@pytest.mark.parametrize("reserved", [".merge-specs.lock", ".merge-specs-recovery-leftover"])
+def test_pending_merge_resource_after_preview_refuses_naming(naming, local, reserved):
+    feature(local, "specs/001-a")
+    put(local, ".specify/init-options.json", '{"feature_numbering": "sequential"}\n')
+    preview = prepare(naming, local, "timestamp")
+    (local / "specs" / reserved).mkdir()
+    before = tree(local)
+    result = naming.apply_naming_migration(preview)
+    assert result.status == "rejected"
+    assert any(conflict["code"] == "pending-merge" for conflict in result.conflicts)
+    assert tree(local) == before
+
+
+def test_feature_merge_marker_does_not_block_naming(naming, local):
+    marker = b'{"origins": [], "destination_state_digest": "retained"}\n'
+    feature(local, "specs/001-a", {".merge-specs.json": marker})
+    preview = prepare(naming, local, "timestamp")
+    assert not preview.conflicts
+    assert naming.apply_naming_migration(preview).status == "applied"
+    assert (local / "specs/20260506-070809-a/.merge-specs.json").read_bytes() == marker
+
+
 # --- Preview, preference, and no-op behavior --------------------------------------------------
 
 

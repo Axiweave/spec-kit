@@ -6,8 +6,13 @@
 
 ### Added
 
+- Add `/speckit.merge` for reviewed artifact transfer and read-only reconciliation. Use `specify project merge-specs` for immutable previews and approved compact replay. Preserve opaque content and current delivery state. Report consistency findings, incomplete planning, and exact recovery actions without certifying implementation.
 - Preserve explicit command invocation Booleans across native skills, Generic, Hermes, presets, and extensions. Keep the merge workflow user-only by default.
 - Preserve edited and unowned Hermes global skills during install, upgrade, and uninstall through the existing ownership manifest.
+- Require explicit choices for conflicting source contributions and preserve custom source-root marker bytes. Scope reference replacements to reviewed source artifacts. Report only owned directory recovery actions.
+- Continue read-only reconciliation when applied data has pending cleanup. Keep review incomplete and readiness blocked. Use UUID4 recovery names and preserve public CLI error handling.
+- Report `inspect-directory` when a writer replaces a created directory. Preserve foreign recovery directories and locks with explicit inspection actions. Close lock descriptors on initialization failure and retain truthful cleanup outcomes. Document the separate proposal fields for source-root custom marker preservation.
+- Preserve rollback payload ownership and report unverified created directories as pending recovery. Retain saved originals and journals after interruption. Ground reconciliation governance in destination principles without unrelated template reads.
 - Add `specify project migrate-naming` for reviewed conversion between sequential and timestamp feature names. Preserve feature identity and owned references. Bind approval to source-state digests. Refuse unsafe changes and retain private backups when restoration fails. Leave Git history and opaque caller values unchanged.
 - Handle migration lock write, close, and removal failures with structured results and exact recovery operations. Report skipped no-op features and opaque workflow locations. Preserve epoch modification times, BOM bytes, and CRLF bytes in managed context files.
 - Report completed migration details when only lock cleanup remains. Preserve rejected and rolled-back transaction outcomes in recovery guidance. Correct the documented JSON approval flow.
