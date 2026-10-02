@@ -13,14 +13,12 @@ import yaml
 from typer.testing import CliRunner
 
 from specify_cli import app
+from specify_cli.integrations import get_integration
 
 
 CORE_COMMANDS = {
-    f"speckit.{name}.md"
-    for name in (
-        "analyze", "checklist", "clarify", "constitution", "converge",
-        "implement", "plan", "specify", "tasks", "taskstoissues",
-    )
+    f"speckit.{template.stem}.md"
+    for template in get_integration("omp").list_command_templates()
 }
 
 

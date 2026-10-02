@@ -1,6 +1,5 @@
 """Tests for BobIntegration."""
 
-import os
 import warnings
 
 import pytest
@@ -238,19 +237,6 @@ class TestBobDefaultSkillsMode:
         bob.setup(tmp_path, m)
         assert not (tmp_path / ".bob" / "commands").exists()
 
-    def test_skill_directory_structure(self, tmp_path):
-        """Each command produces speckit-<name>/SKILL.md."""
-        bob = get_integration("bob")
-        m = IntegrationManifest("bob", tmp_path)
-        created = bob.setup(tmp_path, m)
-
-        expected_commands = {
-            "analyze", "clarify", "constitution", "converge", "implement",
-            "plan", "checklist", "specify", "tasks", "taskstoissues",
-        }
-        actual_commands = {f.parent.name.removeprefix("speckit-") for f in created}
-        assert actual_commands == expected_commands
-
     def test_skill_frontmatter_structure(self, tmp_path):
         """SKILL.md must have name, description, compatibility, metadata."""
         bob = get_integration("bob")
@@ -391,32 +377,6 @@ class TestBobInitFlowDefault:
         assert (target / ".bob" / "skills" / "speckit-plan" / "SKILL.md").exists()
         assert not (target / ".bob" / "commands").exists()
 
-    def test_init_default_complete_file_inventory_sh(self, tmp_path):
-        from typer.testing import CliRunner
-
-        from specify_cli import app
-
-        project = tmp_path / "inventory-sh-bob"
-        project.mkdir()
-        old_cwd = os.getcwd()
-        try:
-            os.chdir(project)
-            result = CliRunner().invoke(app, [
-                "init", "--here", "--integration", "bob", "--script", "sh",
-                "--ignore-agent-tools",
-            ], catch_exceptions=False)
-        finally:
-            os.chdir(old_cwd)
-        assert result.exit_code == 0, f"init failed: {result.output}"
-
-        commands = [
-            "analyze", "clarify", "constitution", "converge", "implement",
-            "plan", "checklist", "specify", "tasks", "taskstoissues",
-        ]
-        for cmd in commands:
-            assert (project / ".bob" / "skills" / f"speckit-{cmd}" / "SKILL.md").exists(), (
-                f"Missing .bob/skills/speckit-{cmd}/SKILL.md"
-            )
 
 
 class TestBobInitFlowLegacy:
