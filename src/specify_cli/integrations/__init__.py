@@ -21,6 +21,7 @@ from packaging import version as pkg_version
 
 from .._download_security import MAX_JSON_METADATA_BYTES, read_response_limited
 from ..catalogs import CatalogEntry, CatalogStackBase
+from ..workspace import workspace_root_for
 
 if TYPE_CHECKING:
     from .base import IntegrationBase
@@ -214,7 +215,7 @@ class IntegrationCatalog(CatalogStackBase):
     VALIDATION_ERROR_TYPE = IntegrationValidationError
 
     def __init__(self, project_root: Path) -> None:
-        self.project_root = project_root
+        self.project_root = project_root = workspace_root_for(project_root)
         self.cache_dir = project_root / ".specify" / "integrations" / ".cache"
 
     def get_active_catalogs(self) -> List[IntegrationCatalogEntry]:

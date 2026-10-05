@@ -17,7 +17,7 @@ from .integration_state import (
     try_read_integration_json_with_raw,
 )
 from .integrations import INTEGRATION_REGISTRY
-from .integrations.manifest import IntegrationManifest
+from .integrations.manifest import IntegrationManifest, _manifest_path_label
 
 _MANIFEST_READ_ERRORS = (ValueError, OSError)
 _MANIFEST_KEY_RE = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -243,9 +243,12 @@ def _manifest_file_status(
     valid: list[str] = []
 
     for rel, expected_hash in manifest.files.items():
+        # ``.specify`` entries live in the workspace, others in the repository.
+        root = manifest._entry_root(Path(rel))
+        contained = project_root_resolved if root == manifest.project_root else root
         path = _safe_manifest_file(
-            manifest.project_root,
-            project_root_resolved,
+            root,
+            contained,
             rel,
             project_root_is_resolved=project_root_is_resolved,
         )
@@ -271,7 +274,7 @@ def _manifest_file_status(
         if is_symlink:
             symlink_status = _tracked_symlink_manifest_status(
                 path,
-                project_root_resolved,
+                contained,
                 project_root_is_resolved=project_root_is_resolved,
             )
             if symlink_status == "invalid":
@@ -308,8 +311,7 @@ def _default_not_installed_from_raw_state(raw_state: dict[str, Any]) -> str | No
 
 
 def _manifest_summary(
-    manifest_path: Path,
-    project_root: Path,
+    manifest_label: str,
     *,
     readable: bool,
     tracked_files: int = 0,
@@ -318,7 +320,7 @@ def _manifest_summary(
     invalid_files: list[str] | None = None,
 ) -> dict[str, Any]:
     return {
-        "manifest": manifest_path.relative_to(project_root).as_posix(),
+        "manifest": manifest_label,
         "readable": readable,
         "tracked_files": tracked_files,
         "missing_files": missing_files or [],
@@ -510,7 +512,10 @@ def build_integration_status_report(project_root: Path) -> dict[str, Any]:
             continue
 
         attempted_manifest_keys.append(key)
-        manifest_path = project_root / ".specify" / "integrations" / f"{key}.manifest.json"
+        manifest_path = IntegrationManifest(
+            key, project_root_resolved, resolve_project_root=False
+        ).manifest_path
+        manifest_label = _manifest_path_label(project_root_resolved, manifest_path)
         try:
             manifest = IntegrationManifest.load(
                 key,
@@ -524,29 +529,21 @@ def build_integration_status_report(project_root: Path) -> dict[str, Any]:
                     "manifest-missing",
                     f"Manifest for {owner} is missing.",
                     integration=key,
-                    path=manifest_path.relative_to(project_root).as_posix(),
+                    path=manifest_label,
                     suggestion=_manifest_suggestion(key, default_key),
                 )
             )
-            manifest_summaries[key] = _manifest_summary(
-                manifest_path,
-                project_root,
-                readable=False,
-            )
+            manifest_summaries[key] = _manifest_summary(manifest_label, readable=False)
             continue
         except _MANIFEST_READ_ERRORS as exc:
-            manifest_summaries[key] = _manifest_summary(
-                manifest_path,
-                project_root,
-                readable=False,
-            )
+            manifest_summaries[key] = _manifest_summary(manifest_label, readable=False)
             findings.append(
                 _finding(
                     "error",
                     "manifest-unreadable",
                     f"Manifest for {owner} is unreadable: {exc}",
                     integration=key,
-                    path=manifest_path.relative_to(project_root).as_posix(),
+                    path=manifest_label,
                     suggestion=_manifest_suggestion(key, default_key),
                 )
             )
@@ -558,8 +555,7 @@ def build_integration_status_report(project_root: Path) -> dict[str, Any]:
             project_root_is_resolved=project_root_is_resolved,
         )
         manifest_summaries[key] = _manifest_summary(
-            manifest_path,
-            project_root,
+            manifest_label,
             readable=True,
             tracked_files=len(manifest.files),
             missing_files=missing,
@@ -576,7 +572,7 @@ def build_integration_status_report(project_root: Path) -> dict[str, Any]:
                     "manifest-paths-invalid",
                     f"{len(invalid)} unsafe manifest path(s) are recorded for {owner}.",
                     integration=key,
-                    path=manifest_path.relative_to(project_root).as_posix(),
+                    path=manifest_label,
                     suggestion=_manifest_suggestion(key, default_key),
                 )
             )
