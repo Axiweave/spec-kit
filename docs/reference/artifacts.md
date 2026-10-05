@@ -141,9 +141,9 @@ For command, template, and script artifacts, `stack` is ordered by resolution pr
 | `strategy`     | `replace`, `wrap`, `prepend`, `append`, or `additive`                              |
 | `active`       | Whether the layer is active; for named artifacts this is `true` only at index `0` |
 | `hidden`       | `true` when a lower-index `replace` layer cuts this layer out of the composition |
-| `manifestPath` | Project-relative path to the declaring manifest, or `null` when none applies      |
+| `manifestPath` | Project-relative path to the declaring manifest, or `null` when none applies. In an external-storage project, `.specify/` paths are relative to the workspace |
 | `lookupId`     | Deterministic `{layer}:{sourceId}:{kind}:{name}` identifier, or `null` for built-in layers |
-| `sourcePath`   | Project-relative POSIX path to the concrete file backing the layer, or `null` for built-in/synthetic layers |
+| `sourcePath`   | Project-relative POSIX path to the concrete file backing the layer, or `null` for built-in/synthetic layers. In an external-storage project, `.specify/` paths are relative to the workspace and agent output paths are relative to the repository |
 
 `active` and `hidden` are independent labels, not opposites. For command, template, and script artifacts, `active` identifies the highest-precedence layer selected by the existing Spec Kit layer-resolution order; it does not validate that the layer content can be read or composed. This preserves the diagnostic behavior of `specify preset resolve`, which reports the discovered layer chain even when content composition later produces a warning. Composing strategies (`wrap`, `prepend`, `append`) keep lower layers in the composed output, so an inactive layer is not necessarily hidden: only layers below the first `replace` layer are marked `hidden`. Built-in rows have no provenance: `layer`, `sourceId`, and `lookupId` are `null` — but `id` is always populated, even on built-in rows. `id` is the round-trip key: `specify artifact info` accepts it as input (for example, `specify artifact info command:speckit.specify --json`), and it resolves the same artifact whether the caller passes the bare name or the `id`.
 

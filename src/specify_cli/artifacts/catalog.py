@@ -14,11 +14,13 @@ from __future__ import annotations
 import re
 import shlex
 from collections.abc import Iterable
+from functools import cached_property
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Literal
 
 import yaml
 
+from ..workspace import workspace_root_for
 from ._identifiers import (
     IdentifierComponentError,
     derive_hook_lookup_id,
@@ -42,7 +44,7 @@ from .models import (
 from .resolution import (
     _build_stack,
     _layer_provenance,
-    _repo_relative_existing_file,
+    _relative_existing_file,
 )
 
 _TEMPLATE_SUFFIX = ".md"
@@ -208,8 +210,8 @@ def _validate_project(project_root: Path) -> None:
         raise NotASpecKitProjectError()
 
 
-def _validate_extension_registry(project_root: Path) -> None:
-    extensions_dir = project_root / ".specify" / "extensions"
+def _validate_extension_registry(workspace_root: Path) -> None:
+    extensions_dir = workspace_root / ".specify" / "extensions"
     if not extensions_dir.exists():
         return
 
@@ -279,6 +281,11 @@ class ArtifactCatalog:
 
     def __init__(self, project_root: Path) -> None:
         self.project_root = project_root
+
+    @cached_property
+    def workspace_root(self) -> Path:
+        """Root of ``.specify``-owned files (presets, extensions, manifests)."""
+        return workspace_root_for(self.project_root)
 
     # ------------------------------------------------------------------ list
     def list_artifacts(self) -> list[Artifact | HookArtifact]:
@@ -410,7 +417,7 @@ class ArtifactCatalog:
     def get_contribution_info(self, lookup_id: str) -> dict[str, Any]:
         """Resolve a stack ``lookupId`` to its validated manifest entry."""
         _validate_project(self.project_root)
-        _validate_extension_registry(self.project_root)
+        _validate_extension_registry(self.workspace_root)
         try:
             layer, source_id, kind, name = parse_lookup_id(lookup_id)
         except IdentifierComponentError as exc:
@@ -503,8 +510,8 @@ class ArtifactCatalog:
                         matching = entry
                 if matching is None:
                     return None
-                relative_manifest = _repo_relative_existing_file(
-                    self.project_root, manifest.path
+                relative_manifest = _relative_existing_file(
+                    self.workspace_root, manifest.path
                 )
                 if relative_manifest is None:
                     raise ArtifactResolutionError()
@@ -532,8 +539,8 @@ class ArtifactCatalog:
         pack_dir: Path,
         manifest_path: Path,
     ) -> tuple[dict[str, Any], str, str | None]:
-        relative_manifest = _repo_relative_existing_file(
-            self.project_root, manifest_path
+        relative_manifest = _relative_existing_file(
+            self.workspace_root, manifest_path
         )
         if relative_manifest is None:
             raise ArtifactResolutionError()
@@ -547,8 +554,8 @@ class ArtifactCatalog:
             except (OSError, ValueError):
                 pass
             else:
-                source_path = _repo_relative_existing_file(
-                    self.project_root, candidate
+                source_path = _relative_existing_file(
+                    self.workspace_root, candidate
                 )
         return (
             dict(entry),
@@ -597,7 +604,7 @@ class ArtifactCatalog:
 
         if resolver is None:
             _validate_project(self.project_root)
-            _validate_extension_registry(self.project_root)
+            _validate_extension_registry(self.workspace_root)
             resolver = PresetResolver(self.project_root)
 
         grouped: dict[tuple[str, str], list[tuple[int, dict[str, Any]]]] = {}
@@ -626,8 +633,8 @@ class ArtifactCatalog:
                 if manifest is None:
                     continue
 
-                manifest_path = _repo_relative_existing_file(
-                    self.project_root, manifest.path
+                manifest_path = _relative_existing_file(
+                    self.workspace_root, manifest.path
                 )
                 if manifest_path is None:
                     raise ArtifactResolutionError()
@@ -760,7 +767,7 @@ class ArtifactCatalog:
         dict[Path, Any | None],
     ]:
         _validate_project(self.project_root)
-        _validate_extension_registry(self.project_root)
+        _validate_extension_registry(self.workspace_root)
 
         from ..presets import (  # lazy: avoids circular import
             PresetError,

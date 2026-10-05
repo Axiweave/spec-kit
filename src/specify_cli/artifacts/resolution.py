@@ -151,7 +151,7 @@ def _layer_provenance(
 
 
 def _derive_manifest_path(
-    provenance: _LayerProvenance, project_root: Path
+    provenance: _LayerProvenance, workspace_root: Path
 ) -> str | None:
     """Return the declaring manifest path for an artifact layer."""
     if provenance.manifest_entry is None or provenance.pack_dir is None:
@@ -159,21 +159,21 @@ def _derive_manifest_path(
     manifest_name = (
         "preset.yml" if provenance.layer == "preset" else "extension.yml"
     )
-    manifest_path = provenance.pack_dir / manifest_name
-    if not manifest_path.is_file():
-        return None
-    try:
-        return manifest_path.relative_to(project_root).as_posix()
-    except ValueError:
-        return None
+    return _relative_existing_file(
+        workspace_root, provenance.pack_dir / manifest_name
+    )
 
 
-def _repo_relative_existing_file(project_root: Path, path: Path) -> str | None:
-    """Return *path* relative to the project root when it is an existing file."""
+def _relative_existing_file(root: Path, path: Path) -> str | None:
+    """Return *path* relative to *root* when it is an existing file.
+
+    Agent output files are reported relative to the repository root;
+    ``.specify``-owned files (packs, manifests) relative to the workspace root.
+    """
     if not path.is_file():
         return None
     try:
-        return path.relative_to(project_root).as_posix()
+        return path.relative_to(root).as_posix()
     except ValueError:
         return None
 
@@ -223,7 +223,7 @@ def _materialized_command_source_path(
                 registrar._resolve_agent_dir(agent_name, agent_config, project_root)
                 / f"{output_name}{agent_config['extension']}"
             )
-            rel = _repo_relative_existing_file(project_root, command_path)
+            rel = _relative_existing_file(project_root, command_path)
             if rel is not None:
                 return rel
 
@@ -278,7 +278,7 @@ def _materialized_command_source_path(
                 if expected_skill_names is not None and skill_name not in expected_skill_names:
                     continue
                 skill_path = skills_dir / skill_name / "SKILL.md"
-                rel = _repo_relative_existing_file(project_root, skill_path)
+                rel = _relative_existing_file(project_root, skill_path)
                 if rel is not None:
                     return rel
 
@@ -289,12 +289,13 @@ def _derive_source_path(
     provenance: _LayerProvenance,
     layer: dict[str, Any],
     project_root: Path,
+    workspace_root: Path,
     kind: ArtifactKind,
     name: str,
     *,
     active: bool,
 ) -> str | None:
-    """Return the repo-relative concrete file backing a preset/extension layer.
+    """Return the relative concrete file backing a preset/extension layer.
 
     The tracked materialized agent output is shared by every stack row that
     contributed the same command name, so it only reflects the winning
@@ -306,7 +307,7 @@ def _derive_source_path(
             return None
         from ..presets import PresetRegistry
 
-        metadata = PresetRegistry(project_root / ".specify" / "presets").get(
+        metadata = PresetRegistry(workspace_root / ".specify" / "presets").get(
             provenance.disk_id
         )
         if kind == "command" and active:
@@ -320,7 +321,7 @@ def _derive_source_path(
             return None
         from ..extensions import ExtensionRegistry
 
-        metadata = ExtensionRegistry(project_root / ".specify" / "extensions").get(
+        metadata = ExtensionRegistry(workspace_root / ".specify" / "extensions").get(
             provenance.disk_id
         )
         if kind == "command" and active:
@@ -338,7 +339,7 @@ def _derive_source_path(
     # PresetResolver.collect_all_layers() row's concrete ``path`` key.
     path = layer.get("path")
     if isinstance(path, Path):
-        return _repo_relative_existing_file(project_root, path)
+        return _relative_existing_file(workspace_root, path)
     return None
 
 
@@ -394,6 +395,8 @@ def _build_stack(
     if not raw:
         return []
     manifest_cache = manifest_cache if manifest_cache is not None else {}
+    # Pack and manifest paths live under the resolver's (workspace) root.
+    workspace_root = resolver.project_root
 
     first_replace_idx = next(
         (i for i, layer in enumerate(raw) if layer["strategy"] == "replace"),
@@ -416,7 +419,7 @@ def _build_stack(
         )
         lookup_id = provenance.lookup_id(kind, name)
         source_path = _derive_source_path(
-            provenance, layer, project_root, kind, name, active=active
+            provenance, layer, project_root, workspace_root, kind, name, active=active
         )
 
         if provenance.layer == PROJECT_OVERRIDE_LAYER:
@@ -438,7 +441,7 @@ def _build_stack(
             continue
 
         if provenance.layer == "extension":
-            manifest_path = _derive_manifest_path(provenance, project_root)
+            manifest_path = _derive_manifest_path(provenance, workspace_root)
             rows.append(
                 StackLayer(
                     id=public_id,
@@ -475,11 +478,9 @@ def _build_stack(
             continue
 
         pack_id = provenance.disk_id or ""
-        pack_dir = provenance.pack_dir or (
-            project_root / ".specify" / "presets" / pack_id
-        )
+        pack_dir = provenance.pack_dir or (resolver.presets_dir / pack_id)
         display = _preset_display_name(pack_dir, pack_id) if pack_id else pack_id
-        manifest_path = _derive_manifest_path(provenance, project_root)
+        manifest_path = _derive_manifest_path(provenance, workspace_root)
         rows.append(
             StackLayer(
                 id=public_id,
