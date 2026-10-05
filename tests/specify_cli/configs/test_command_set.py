@@ -1,39 +1,14 @@
-"""The personal config CLI works without a project and preserves unrelated data."""
+"""`specify config set` works without a project and preserves unrelated data."""
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
 from specify_cli import app
-
-
-@pytest.fixture(autouse=True)
-def config_file(tmp_path, monkeypatch):
-    for key in list(os.environ):
-        if key.startswith(("SPECIFY_", "SPECKIT_", "PI_", "OMP_")):
-            monkeypatch.delenv(key)
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("USERPROFILE", str(home))
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
-    monkeypatch.setenv("APPDATA", str(tmp_path / "roaming"))
-    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
-    cwd = tmp_path / "not-a-project"
-    cwd.mkdir()
-    monkeypatch.chdir(cwd)
-    base = tmp_path / ("roaming" if os.name == "nt" else "config")
-    return base / "specify/config.json"
-
-
-def save(path, data):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data), encoding="utf-8")
+from tests.specify_cli.configs.conftest import save
 
 
 @pytest.mark.parametrize("key,value", [
@@ -80,19 +55,8 @@ def test_config_round_trip_outside_project_preserves_other_settings(config_file,
     assert list(Path.cwd().iterdir()) == []
 
 
-@pytest.mark.parametrize("key", ["storage_root", "feature_numbering", "feature_selection", "integration", "script"])
-def test_get_missing_default_is_empty_and_read_only(config_file, key):
-    result = CliRunner().invoke(app, ["config", "get", key])
-    assert result.exit_code == 0, result.output
-    assert result.stdout.strip() == ""
-    assert not config_file.parent.exists()
-    assert list(Path.cwd().iterdir()) == []
-
-
 @pytest.mark.parametrize("args,key", [
-    (["get", "unknown"], "unknown"),
     (["set", "unknown", "value"], "unknown"),
-    (["clear", "unknown"], "unknown"),
     (["set", "feature_numbering", "random"], "feature_numbering"),
     (["set", "feature_selection", "random"], "feature_selection"),
     (["set", "integration", "not-a-registered-integration"], "integration"),
@@ -108,7 +72,7 @@ def test_invalid_arguments_report_key_without_changing_config(config_file, args,
     assert list(Path.cwd().iterdir()) == []
 
 
-@pytest.mark.parametrize("args", [["get", "script"], ["set", "script", "py"], ["clear", "script"]])
+@pytest.mark.parametrize("args", [["set", "script", "py"]])
 @pytest.mark.parametrize("content", [b'{"script":', b"[]", b"\xff"])
 def test_malformed_config_fails_without_replacing_bytes(config_file, args, content):
     config_file.parent.mkdir(parents=True)
@@ -119,7 +83,7 @@ def test_malformed_config_fails_without_replacing_bytes(config_file, args, conte
     assert list(Path.cwd().iterdir()) == []
 
 
-@pytest.mark.parametrize("args", [["get", "script"], ["set", "script", "py"], ["clear", "script"]])
+@pytest.mark.parametrize("args", [["set", "script", "py"]])
 def test_unreadable_config_fails_without_changing_saved_data(config_file, monkeypatch, args):
     save(config_file, {"script": "sh", "future": "keep"})
     before = config_file.read_bytes()
@@ -140,7 +104,6 @@ def test_unreadable_config_fails_without_changing_saved_data(config_file, monkey
 @pytest.mark.parametrize("value", ["invalid", None, False, ["sh"]])
 @pytest.mark.parametrize("args,expected", [
     (["set", "script", "py"], {"script": "py", "future": "keep"}),
-    (["clear", "script"], {"future": "keep"}),
 ])
 def test_selected_invalid_field_can_be_repaired_without_losing_unknown_fields(config_file, value, args, expected):
     save(config_file, {"script": value, "future": "keep"})
@@ -149,7 +112,7 @@ def test_selected_invalid_field_can_be_repaired_without_losing_unknown_fields(co
     assert json.loads(config_file.read_text()) == expected
 
 
-@pytest.mark.parametrize("args", [["set", "script", "py"], ["clear", "script"]])
+@pytest.mark.parametrize("args", [["set", "script", "py"]])
 def test_config_command_refuses_symlink_escape(config_file, tmp_path, args):
     outside = tmp_path / "outside.json"
     outside.write_text('{"script":"sh","future":"keep"}', encoding="utf-8")
