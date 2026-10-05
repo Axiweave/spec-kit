@@ -17,15 +17,16 @@ def _redirect_home(monkeypatch: pytest.MonkeyPatch, home) -> None:
     monkeypatch.setenv("XDG_DATA_HOME", str(home / ".local" / "share"))
 
 
-@pytest.fixture(scope="session", autouse=True)
-def _isolate_integration_home_session(tmp_path_factory):
+@pytest.fixture(scope="package", autouse=True)
+def _isolate_integration_home_package(tmp_path_factory):
     """Isolate the user home for setup that runs outside a test function.
 
     The per-test fixture below re-points HOME for each test, but function-scoped
-    fixtures do not apply to module-/session-scoped fixtures. Some of those (e.g.
+    fixtures do not apply to module-/package-scoped fixtures. Some of those (e.g.
     the ``status_*_template`` fixtures in ``test_integration_subcommand.py``) run
     ``specify init`` during setup, before any per-test isolation takes effect.
-    A standalone ``MonkeyPatch`` gives them an isolated home too.
+    A standalone ``MonkeyPatch`` gives them an isolated home too. Package scope
+    restores the real home before tests outside this package run.
     """
     monkeypatch = pytest.MonkeyPatch()
     _redirect_home(monkeypatch, tmp_path_factory.mktemp("session-home"))
