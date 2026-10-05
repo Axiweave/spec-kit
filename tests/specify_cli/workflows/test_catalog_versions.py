@@ -359,7 +359,9 @@ def test_exact_add_rejects_inconsistent_archive(
     from specify_cli.authentication import http
     from specify_cli.workflows import _commands as workflow_cli
 
-    monkeypatch.setattr(workflow_cli.console, "width", 68)
+    # Patch the backing field: undoing the `width` property would pin the
+    # computed width and leak a fixed width into later tests.
+    monkeypatch.setattr(workflow_cli.console, "_width", 68)
     entry = _entry()
     if entry_change == "bad-digest":
         entry["releases"]["1.0.0"]["sha256"] = "0" * 64
