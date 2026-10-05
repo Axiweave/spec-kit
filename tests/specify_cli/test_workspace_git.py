@@ -345,6 +345,8 @@ def test_later_private_outputs_stay_out_of_default_status(tmp_path: Path):
                  ".specify/extensions/.reinstall-staging-one/private.md",
                  ".specify/presets/.reinstall-staging-two/private.md",
                  ".specify/workflows/steps/.my-step.failed-x/step.yml",
+                 ".specify/workflows/.my-wf.removing-x/workflow.yml",
+                 ".specify/workflows/my-wf/.workflow.yml.x.tmp", ".specify/workflows/my-wf/.workflow.yml.x.bak",
                  ".specify/extensions/tool/tool-config.local.yml", "specs/.cache/custom.md"):
         path = root / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -352,6 +354,18 @@ def test_later_private_outputs_stay_out_of_default_status(tmp_path: Path):
     assert subprocess.check_output(["git", "-C", str(root), "status", "--porcelain", "--untracked-files=all"]) == (
         b"?? specs/.cache/custom.md\n"
     )
+
+
+def test_held_workflow_install_lock_stays_out_of_workspace_status(tmp_path: Path):
+    from specify_cli.workflows._commands import _workflow_install_transaction
+
+    root = tmp_path / "workspace"
+    (root / ".specify").mkdir(parents=True)
+    initialize_workspace_git(root)
+    with _workflow_install_transaction(root):
+        assert (root / ".specify/.workflow-install.lock").exists()
+        status = subprocess.check_output(["git", "-C", str(root), "status", "--porcelain", "--untracked-files=all"])
+    assert status == b""
 
 
 @pytest.mark.parametrize("phase", ["init", "add", "commit"])
