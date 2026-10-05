@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import fnmatch
 import hashlib
 import json
 import os
@@ -32,6 +31,7 @@ def _git(
     allowed_codes: tuple[int, ...] = (0,),
 ) -> str:
     environment = {key: value for key, value in os.environ.items() if key not in _GIT_PATH_VARIABLES}
+    environment["LC_ALL"] = "C"  # Untranslated messages let preflight recognize "not a git repository".
     try:
         result = subprocess.run(
             ["git", *args], cwd=directory, env=environment,
@@ -75,12 +75,23 @@ def preflight_workspace_git(destination: Path) -> None:
                 "Choose a separate empty destination or use --no-workspace-git."
             )
     existing = next(parent for parent in (destination, *destination.parents) if parent.exists())
-    if _git(existing, "rev-parse", "--absolute-git-dir", allowed_codes=(0, 128)):
+    try:
+        inside = _git(existing, "rev-parse", "--absolute-git-dir")
+    except ValueError as exc:
+        if "not a git repository" not in str(exc):
+            raise ValueError(
+                f"Git refused to inspect the workspace destination, which may belong to a Git repository "
+                f"(for example, a bare repository blocked by safe.bareRepository): {existing}. "
+                "Choose a destination outside any repository or use --no-workspace-git."
+            ) from exc
+        inside = ""
+    if inside:
         raise ValueError(f"Workspace destination belongs to a Git repository: {existing}. Choose a separate destination.")
     for identity in ("GIT_AUTHOR_IDENT", "GIT_COMMITTER_IDENT"):
         _git(existing, "var", identity)
 
 
+# Anchored workspace-relative rules, emitted as `/<rule>` in .gitignore. `*` never crosses `/`.
 _PRIVATE_PATTERNS = (
     ".specify/feature.json", ".specify/auth.json",
     ".specify/extensions/*/local-config.yml",
@@ -95,17 +106,26 @@ _PRIVATE_PATTERNS = (
     ".specify/workflows/.*.installing-*/*", ".specify/workflows/.*.backup-*/*",
     ".specify/workflows/.*.failed-*/*",
     ".specify/workflows/steps/speckit_step_tmp_*/*",
-    "*.tmp", "*/__pycache__/*", "*.pyc",
+    ".specify/workflows/.workflow-registry.json.*.tmp",
+    ".specify/scripts/python/__pycache__/*",
+    ".specify/extensions/*/scripts/python/__pycache__/*",
 )
+_PRIVATE_RULES = tuple(
+    re.compile("".join("[^/]*" if char == "*" else re.escape(char) for char in pattern))
+    for pattern in _PRIVATE_PATTERNS
+)
+_ENV_TEMPLATES = {".env.example", ".env.sample", ".env.template"}
 
 
 def _private(name: str) -> bool:
-    leaf = name.rsplit("/", 1)[-1]
-    if (leaf == ".env" or leaf.startswith(".env.")) and leaf not in {
-        ".env.example", ".env.sample", ".env.template",
-    }:
-        return True
-    return any(fnmatch.fnmatchcase(name, pattern) for pattern in _PRIVATE_PATTERNS)
+    """Apply the emitted ignore rules with Git semantics: an ignored directory hides its contents."""
+    parts = name.split("/")
+    for index, leaf in enumerate(parts, 1):
+        if (leaf == ".env" or leaf.startswith(".env.")) and leaf not in _ENV_TEMPLATES:
+            return True
+        if any(rule.fullmatch("/".join(parts[:index])) for rule in _PRIVATE_RULES):
+            return True
+    return False
 
 
 def _files(root: Path) -> list[str]:
@@ -203,10 +223,7 @@ def initialize_workspace_git(workspace: Path) -> str:
     ignore_existed = ignore.exists()
     original = ignore.read_bytes() if ignore_existed else b""
     newline = "\r\n" if b"\r\n" in original else "\n"
-    rules = [
-        ("/" if "/" in pattern else "**/") + pattern
-        for pattern in _PRIVATE_PATTERNS
-    ]
+    rules = ["/" + pattern for pattern in _PRIVATE_PATTERNS]
     rules += ["**/.env", "**/.env.*", "!**/.env.example", "!**/.env.sample", "!**/.env.template"]
     rules += [_escape_ignore(name) for name in sorted(generated)]
     additions = newline.join(rule for rule in rules if rule.encode() not in original.splitlines())

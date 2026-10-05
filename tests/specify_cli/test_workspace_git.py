@@ -297,6 +297,36 @@ def test_nested_bare_repository_is_rejected(tmp_path: Path):
     assert not (tmp_path / "bare/workspace").exists()
 
 
+def test_bare_repository_refused_by_safe_bare_repository_setting_is_rejected(tmp_path: Path, monkeypatch):
+    subprocess.run(["git", "init", "--bare", str(tmp_path / "bare")], check=True, capture_output=True)
+    config = tmp_path / "gitconfig"
+    config.write_text("[safe]\n\tbareRepository = explicit\n")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(config))
+    with pytest.raises(ValueError, match="repository"):
+        preflight_workspace_git(tmp_path / "bare/workspace")
+    assert not (tmp_path / "bare/workspace").exists()
+
+
+def test_custom_feature_files_are_committed_and_generated_transients_ignored(tmp_path: Path):
+    """Conservation: any user file under specs/ is durable; only documented producer outputs stay out."""
+    root = tmp_path / "workspace"
+    custom = ["specs/001-x/spec.md", "specs/001-x/draft.tmp", "specs/001-x/notes.pyc",
+              "specs/001-x/__pycache__/y.txt", "specs/001-x/a/b/__pycache__/x.txt"]
+    generated = [".specify/scripts/python/__pycache__/common.cpython-312.pyc",
+                 ".specify/extensions/git/scripts/python/__pycache__/git_common.cpython-312.pyc",
+                 ".specify/workflows/.workflow-registry.json.abc123.tmp"]
+    for name in custom + generated:
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("content")
+    initialize_workspace_git(root)
+    tracked = subprocess.run(
+        ["git", "-C", str(root), "ls-tree", "-rz", "--name-only", "HEAD"], check=True, capture_output=True,
+    ).stdout.decode().strip("\0").split("\0")
+    assert set(tracked) == {*custom, ".gitignore"}
+    assert subprocess.check_output(["git", "-C", str(root), "status", "--porcelain", "--untracked-files=all"]) == b""
+
+
 def test_symlink_destination_is_rejected_before_writes(tmp_path: Path):
     target = tmp_path / "target"
     target.mkdir()
@@ -311,7 +341,7 @@ def test_later_private_outputs_stay_out_of_default_status(tmp_path: Path):
     root = tmp_path / "workspace"
     root.mkdir()
     initialize_workspace_git(root)
-    for name in (".specify/workflows/runs/one/state.json", ".specify/custom/atomic.tmp",
+    for name in (".specify/workflows/runs/one/state.json", ".specify/workflows/.workflow-registry.json.x.tmp",
                  ".specify/extensions/.reinstall-staging-one/private.md",
                  ".specify/presets/.reinstall-staging-two/private.md",
                  ".specify/extensions/tool/tool-config.local.yml", "specs/.cache/custom.md"):
