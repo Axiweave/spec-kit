@@ -989,6 +989,30 @@ def test_pending_resources_prevent_transfer_and_remain_untouched(merge, isolated
     assert state(isolated) == before
 
 
+@pytest.mark.parametrize("resource", [".merge-specs.lock", ".merge-specs-recovery-abcd/journal.json"])
+def test_branch_pending_resources_prevent_transfer_like_filesystem_sets(merge, isolated, resource):
+    repository = recorded_source(isolated)
+    put(repository, f"specs/{resource}", b"\xffpending")
+    git(repository, "add", "specs")
+    git(repository, "commit", "-m", "Record fixture merge resource")
+    destination = isolated / "destination"
+    put(destination, "002-retained/spec.md", "# Destination\n")
+    pending = resource.split("/")[0]
+    inspection = merge.inspect_spec_sets({**raw(repository, destination), "source_kind": "branch", "source_branch": "main"})
+    assert inspection.source.pending_resources == (pending,)
+    assert [feature.path for feature in inspection.source.features] == ["001-feature"]
+    assert not any(path.startswith(pending) for path in inspection.source.files)
+    assert inspection.to_json()["review"] == "incomplete_review"
+    before = state(isolated)
+    preview = preview_for(
+        merge, repository, destination, [{"source_feature": "001-feature", "relation": "independent"}],
+        source_kind="branch", source_branch="main", destination_numbering="sequential",
+    )
+    assert {"role": "source", "path": pending} in next(row for row in preview.conflicts if row["kind"] == "pending_resources")["resources"]
+    assert merge.apply_spec_merge(preview).transfer == "refused"
+    assert state(isolated) == before
+
+
 def test_exclusive_fixed_lock_refuses_another_attempt_without_removing_its_lock(merge, isolated, monkeypatch):
     source, destination = isolated / "source", isolated / "destination"
     put(source, "001-feature/spec.md", "# Source\n")

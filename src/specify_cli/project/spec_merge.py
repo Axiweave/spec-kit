@@ -199,7 +199,10 @@ def _path(value: str | Path, purpose: str) -> Path:
     path = Path(value).expanduser()
     if ".." in path.parts:
         raise ValueError(f"Traversal is unsafe in the {purpose} path: {value}")
-    path = path.resolve()
+    try:
+        path = path.resolve()
+    except RuntimeError as exc:  # Python < 3.13 raises RuntimeError for symlink loops.
+        raise ValueError(f"The {purpose} path contains a symlink loop. Select a path that resolves: {value}") from exc
     if sys.platform == "darwin" and path.is_dir():
         import fcntl
 
@@ -265,6 +268,11 @@ def _object(value: FileSnapshot) -> dict:
     return result
 
 
+def _pending_name(name: str) -> bool:
+    """Return whether a top-level set entry belongs to the temporary merge resource namespace."""
+    return name == ".merge-specs.lock" or name.startswith(".merge-specs-recovery-")
+
+
 def _inventory(root: Path):
     files, directories, names, markers = {}, {}, {}, {}
     reservations = {"sequential": set(), "timestamp": set()}
@@ -284,7 +292,7 @@ def _inventory(root: Path):
         names[relative] = tuple(sorted({child.name.casefold() for child in children}))
         for child in children:
             rel = child.name if relative == "." else f"{relative}/{child.name}"
-            if relative == "." and (child.name == ".merge-specs.lock" or child.name.startswith(".merge-specs-recovery-")):
+            if relative == "." and _pending_name(child.name):
                 pending.append(rel)
                 entries.append((child.name, "pending_resource"))
                 continue
@@ -399,7 +407,7 @@ def _branch_set(selection: Mapping) -> SpecSet:
     normalized = _git(repository, "rev-parse", "--symbolic-full-name", "--verify", "--end-of-options", ref).decode().strip()
     normalized = normalized or commit
     entries = _git(repository, "ls-tree", "-r", "-z", "--full-tree", commit, "--", "specs")
-    objects = []
+    objects, pending = [], set()
     for entry in entries.split(b"\0"):
         if not entry:
             continue
@@ -412,9 +420,12 @@ def _branch_set(selection: Mapping) -> SpecSet:
         relative = os.fsdecode(path[len(b"specs/"):])
         if not relative or any(part in ("", ".", "..") for part in relative.split("/")) or "\\" in relative:
             raise ValueError(f"Unsafe branch artifact path: {relative}")
+        if _pending_name(relative.split("/", 1)[0]):
+            pending.add(relative.split("/", 1)[0])
+            continue
         objects.append((relative, int(mode, 8) & 0o777, object_id))
     files, markers = {}, {}
-    memberships = {".": {}}
+    memberships = {".": dict.fromkeys(pending, "pending_resource")}
     if objects:
         raw = _git(repository, "cat-file", "--batch", input=b"".join(object_id + b"\n" for _, _, object_id in objects))
         position = 0
@@ -452,14 +463,14 @@ def _branch_set(selection: Mapping) -> SpecSet:
             if scheme in reservations:
                 reservations[scheme].add(order)
     features = _feature_inventory(files, directories, markers, availability)
-    if not objects:
+    if not objects and not pending:
         availability.append(Availability("specs", "missing", "source"))
     return SpecSet(
         "branch", repository, None, None, None, None, None, None, (),
         MappingProxyType(dict(sorted(files.items()))), MappingProxyType(directories), features,
         MappingProxyType({path: tuple(sorted(name.casefold() for name in children)) for path, children in memberships.items()}),
         MappingProxyType({key: tuple(sorted(values)) for key, values in reservations.items()}),
-        tuple(availability), MappingProxyType(markers), (), None,
+        tuple(availability), MappingProxyType(markers), tuple(sorted(pending)), None,
         branch_ref=normalized, artifact_prefix="specs", commit=commit,
         tracking=MappingProxyType({path: "tracked" for path in files}),
         tracking_context=MappingProxyType({"repository": str(repository), "commit": commit}),
@@ -678,7 +689,7 @@ def _relative(value, purpose: str) -> str:
         raise ValueError(f"A {purpose} name exceeds the filesystem limit: {value}")
     if any(part.casefold() in {".git", ".specify"} for part in parts):
         raise ValueError(f"Project metadata is not an approved {purpose} path: {value}")
-    if parts[0] == ".merge-specs.lock" or parts[0].startswith(".merge-specs-recovery-"):
+    if _pending_name(parts[0]):
         raise ValueError(f"The {purpose} path uses the temporary resource namespace: {value}")
     return value
 

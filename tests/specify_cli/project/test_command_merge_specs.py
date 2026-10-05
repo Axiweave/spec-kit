@@ -286,6 +286,27 @@ def test_conflicting_modes_selector_overrides_and_enum_values_refuse(cli, world,
     assert state(Path(world["destination"])) == before
 
 
+def test_symlink_loop_selection_refuses_without_traceback(cli, world, monkeypatch, tmp_path):
+    loop = tmp_path / "loop"
+    loop.symlink_to(loop)
+    original_resolve = Path.resolve
+
+    def resolve(self, strict=False):
+        # Python 3.11/3.12 raise RuntimeError for loops; 3.13 does not.
+        if self.name == "loop":
+            raise RuntimeError(f"Symlink loop from {self!r}")
+        return original_resolve(self, strict)
+
+    monkeypatch.setattr(Path, "resolve", resolve)
+    before = state(Path(world["destination"]))
+    result = cli(*selectors({**world, "source": str(loop)}), "--json")
+    assert result.exit_code == 1
+    assert "loop" in document(result)["error"]
+    assert result.stderr
+    assert state(Path(world["destination"])) == before
+
+
+
 def test_human_preview_shows_full_artifact_difference_without_private_context(cli, world):
     decisions = proposal(cli, world, revision=True)
     result = cli("--proposal", "-", input=json.dumps(decisions))

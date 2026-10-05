@@ -243,7 +243,7 @@ def register(app: typer.Typer) -> None:
         if mode == "application":
             failed = failed or document.get("transfer") not in ("completed", "not_needed", "not_requested", "cancelled")
             failed = failed or bool(document.get("cleanup_required")) or bool(document.get("remaining_operations"))
-            failed = failed or document.get("data_outcome") in ("restored", "recovery_required")
+            failed = failed or document.get("data_outcome") == "recovery_required"
         if failed:
             _say("The merge did not complete. Inspect the result for conflicts or remaining recovery and cleanup actions.", err=True)
             raise typer.Exit(1)
