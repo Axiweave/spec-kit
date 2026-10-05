@@ -56,8 +56,8 @@ to use another supported agent.
 Already have code? Follow the
 [existing-project guide](https://github.github.io/spec-kit/guides/existing-projects.html).
 For pinned releases, other installers, CI, or troubleshooting, see
-[Installation](https://github.github.io/spec-kit/installation.html).
-To update an existing installation, see [Upgrade](https://github.github.io/spec-kit/upgrade.html).
+[Installation](./docs/installation.md).
+To update an existing installation, see [Upgrade](./docs/upgrade.md).
 
 Now **launch your coding agent in the project directory** and choose a process
 below. Invoke each `/speckit-*` **skill in your agent's chat**, one at a time,

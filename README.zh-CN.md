@@ -57,8 +57,8 @@ CLI 只需安装一次，项目只需初始化一次；以下三种流程共用�
 [集成标识](https://github.github.io/spec-kit/reference/integrations.html)。
 
 已有代码？请参阅[现有项目指南](https://github.github.io/spec-kit/guides/existing-projects.html)。
-锁定版本、其他安装方式、CI 与故障排查见[安装指南](https://github.github.io/spec-kit/installation.html)；
-更新已安装的 CLI 和项目文件见[升级指南](https://github.github.io/spec-kit/upgrade.html)。
+锁定版本、其他安装方式、CI 与故障排查见[安装指南](./docs/installation.md)；
+更新已安装的 CLI 和项目文件见[升级指南](./docs/upgrade.md)。
 
 现在，在**项目目录中启动编码助手**，选择以下一种流程。
 在**助手的聊天界面中逐个调用 `/speckit-*` 技能**，检查结果后再继续。

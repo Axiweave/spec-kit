@@ -31,7 +31,15 @@ from packaging.version import InvalidVersion, Version
 from ._download_security import MAX_JSON_METADATA_BYTES, read_response_limited
 from ._console import console
 
-GITHUB_API_LATEST = "https://api.github.com/repos/github/spec-kit/releases/latest"
+_GITHUB_REPO = "Axiweave/spec-kit"
+_GITHUB_REPO_URL = f"https://github.com/{_GITHUB_REPO}"
+_GITHUB_API_REPO = f"https://api.github.com/repos/{_GITHUB_REPO}"
+_GITHUB_SOURCE_URL = f"git+{_GITHUB_REPO_URL}.git"
+GITHUB_API_LATEST = f"{_GITHUB_API_REPO}/releases/latest"
+_RESOLUTION_FAILURE_NO_RELEASE = (
+    f"{_GITHUB_REPO} publishes no releases; install its default branch with: "
+    f"uv tool install specify-cli --force --from {_GITHUB_SOURCE_URL}"
+)
 _RESOLUTION_FAILURE_OFFLINE = "offline or timeout"
 _RESOLUTION_FAILURE_RATE_LIMITED = (
     "rate limited (configure ~/.specify/auth.json with a GitHub token)"
@@ -138,6 +146,8 @@ def _fetch_latest_release_tag() -> tuple[str | None, str | None]:
         # every other status is surfaced verbatim as "HTTP {code}".
         if e.code in (403, 429):
             return None, _RESOLUTION_FAILURE_RATE_LIMITED
+        if e.code == 404:
+            return None, _RESOLUTION_FAILURE_NO_RELEASE
         return None, f"{_RESOLUTION_FAILURE_HTTP_PREFIX}{e.code}"
     except (urllib.error.URLError, OSError):
         return None, _RESOLUTION_FAILURE_OFFLINE
@@ -195,6 +205,7 @@ _RESOLUTION_FAILURE_CATEGORIES: frozenset[str] = frozenset(
     {
         _RESOLUTION_FAILURE_OFFLINE,
         _RESOLUTION_FAILURE_RATE_LIMITED,
+        _RESOLUTION_FAILURE_NO_RELEASE,
     }
 )
 
@@ -600,7 +611,6 @@ def _detect_install_method(
     return method
 
 
-_GITHUB_SOURCE_URL = "git+https://github.com/github/spec-kit.git"
 _MANUAL_TAG_PLACEHOLDER = "vX.Y.Z"
 
 
@@ -987,27 +997,45 @@ def _emit_guidance(method: _InstallMethod, target_tag: str | None) -> None:
     )
 
 
+def _fork_tag_missing(tag: str) -> bool:
+    """Return True only when GitHub confirms `tag` does not exist in the fork."""
+    from .authentication.http import open_url
+
+    ref_url = f"{_GITHUB_API_REPO}/git/ref/tags/{urllib.parse.quote(tag, safe='')}"
+    try:
+        with open_url(
+            ref_url,
+            timeout=5,
+            extra_headers={"Accept": "application/vnd.github+json"},
+        ):
+            return False
+    except urllib.error.HTTPError as e:
+        return e.code == 404
+    except (urllib.error.URLError, OSError):
+        return False
+
+
 def _rollback_hint(plan: _UpgradePlan) -> str:
     """Build a manual rollback suggestion from the pre-upgrade version."""
     if plan.pre_upgrade_snapshot == "unknown":
         return (
             "Could not determine the previous version; "
-            "reinstall manually from: https://github.com/github/spec-kit/releases"
+            f"reinstall manually from: {_GITHUB_REPO_URL}/releases"
         )
     rollback_tag = _stable_release_tag_for_version(plan.pre_upgrade_snapshot)
     if rollback_tag is None:
         return (
             "Previous version was not an exact stable release tag; "
-            "reinstall manually from: https://github.com/github/spec-kit/releases"
+            f"reinstall manually from: {_GITHUB_REPO_URL}/releases"
         )
     if plan.method == _InstallMethod.PIPX:
         return (
             f"To pin back to the previous version: pipx install --force "
-            f"git+https://github.com/github/spec-kit.git@{rollback_tag}"
+            f"{_GITHUB_SOURCE_URL}@{rollback_tag}"
         )
     return (
         f"To pin back to the previous version: uv tool install specify-cli --force "
-        f"--from git+https://github.com/github/spec-kit.git@{rollback_tag}"
+        f"--from {_GITHUB_SOURCE_URL}@{rollback_tag}"
     )
 
 
@@ -1107,6 +1135,12 @@ def _emit_failure(
             f"Upgrade failed. Installer exit code: {installer_exit}.",
             soft_wrap=True,
         )
+        if plan.target_tag and _fork_tag_missing(plan.target_tag):
+            console.print(
+                f"Tag {plan.target_tag} does not exist in {_GITHUB_REPO_URL}; "
+                f"see {_GITHUB_REPO_URL}/tags for available tags.",
+                soft_wrap=True,
+            )
         console.print(
             f"Try again or run the command manually: {argv_str}",
             soft_wrap=True,

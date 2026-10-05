@@ -8,10 +8,10 @@
 
 | What to Upgrade | Command | When to Use |
 |----------------|---------|-------------|
-| **CLI Tool (recommended)** | `specify self upgrade` | Latest stable release, in place. Auto-detects whether you installed via `uv tool` or `pipx`. |
-| **CLI Tool — pin a version** | `specify self upgrade --tag vX.Y.Z[suffix]` | Upgrade to a specific release tag instead of the latest stable. Suffixes are limited to dev, alpha/beta/rc, and/or build metadata forms. |
-| **CLI Tool — manual fallback** | `uv tool install specify-cli --force --from git+https://github.com/github/spec-kit.git@vX.Y.Z` | When `specify self upgrade` isn't available (older installs) or when you want explicit control. |
-| **CLI Tool — manual fallback (pipx)** | `pipx install --force git+https://github.com/github/spec-kit.git@vX.Y.Z` | Same as above, for pipx installs. |
+| **CLI Tool (recommended)** | `specify self upgrade` | Latest stable release of this fork, in place. Auto-detects whether you installed via `uv tool` or `pipx`. If the fork publishes no release, it stops and prints the default-branch install command. |
+| **CLI Tool — pin a version** | `specify self upgrade --tag vX.Y.Z[suffix]` | Upgrade to a specific fork tag instead of the latest stable. Suffixes are limited to dev, alpha/beta/rc, and/or build metadata forms. |
+| **CLI Tool — manual fallback** | `uv tool install specify-cli --force --from git+https://github.com/Axiweave/spec-kit.git` | When `specify self upgrade` isn't available (older installs) or when you want explicit control. Append `@vX.Y.Z` to pin a fork tag. |
+| **CLI Tool — manual fallback (pipx)** | `pipx install --force git+https://github.com/Axiweave/spec-kit.git` | Same as above, for pipx installs. |
 | **Project Files** | Run `specify integration upgrade <key>`, then `specify extension update` | Refresh installed integration files and extensions in your project |
 | **Both** | Run CLI upgrade, then project update | Recommended for major version updates |
 
@@ -39,7 +39,7 @@ specify self upgrade
 specify self upgrade --tag vX.Y.Z[suffix]
 ```
 
-Bare `specify self upgrade` executes immediately, matching the no-prompt behavior of commands like `pip install -U` and `npm update`. The CLI classifies your runtime into one of: `uv tool`, `pipx`, `uvx (ephemeral)`, source checkout, or unsupported. Only `uv tool` and `pipx` are upgraded automatically; for `uv tool` installs, it runs `uv tool install specify-cli --force --from <git ref>` under the hood so pinned release tags work. The other paths print path-specific guidance and exit 0 without touching anything.
+Bare `specify self upgrade` executes immediately, matching the no-prompt behavior of commands like `pip install -U` and `npm update`. It resolves the latest release and pinned tags from the [Axiweave/spec-kit](https://github.com/Axiweave/spec-kit) fork, never from upstream. If the fork has no published release, it stops with exit 1 and prints the default-branch install command. If a pinned `--tag` does not exist in the fork, the installer fails and the CLI reports the missing tag. The CLI classifies your runtime into one of: `uv tool`, `pipx`, `uvx (ephemeral)`, source checkout, or unsupported. Only `uv tool` and `pipx` are upgraded automatically; for `uv tool` installs, it runs `uv tool install specify-cli --force --from <git ref>` under the hood so pinned release tags work. The other paths print path-specific guidance and exit 0 without touching anything.
 
 Pinned tags must start with `vMAJOR.MINOR.PATCH`. Optional suffixes are limited to dev, alpha/beta/rc, and/or build metadata forms such as `v1.0.0-rc1`, `v0.8.0.dev0`, `v0.8.0+build.42`, or the combination `v1.0.0-rc1+build.42`; branch names, hash refs, `latest`, and bare versions without `v` are rejected.
 
@@ -49,28 +49,28 @@ If your installed CLI is older than the release that introduced `specify self up
 
 ### If you installed with `uv tool install`
 
-Upgrade to a specific release (check [Releases](https://github.com/github/spec-kit/releases) for the latest tag):
+Upgrade to the fork's default branch, or append `@vX.Y.Z` with a tag from [Tags](https://github.com/Axiweave/spec-kit/tags) to pin a release:
 
 ```bash
-uv tool install specify-cli --force --from git+https://github.com/github/spec-kit.git@vX.Y.Z
+uv tool install specify-cli --force --from git+https://github.com/Axiweave/spec-kit.git
 ```
 
 ### If you use one-shot `uvx` commands
 
-Specify the desired release tag:
+Run the fork's default branch, or append `@vX.Y.Z` to pin a tag:
 
 ```bash
-uvx --from git+https://github.com/github/spec-kit.git@vX.Y.Z specify init --here --integration copilot
+uvx --from git+https://github.com/Axiweave/spec-kit.git specify init --here --integration copilot
 ```
 
 `uvx` runs a temporary copy of Spec Kit for that single command. It does not update a persistent `specify` installed with `uv tool install`, `pipx`, or another tool manager. If a newer feature works through `uvx` but your local `specify` still reports an older version, upgrade the persistent CLI with the command that matches your install method.
 
 ### If you installed with `pipx`
 
-Upgrade to a specific release:
+Upgrade to the fork's default branch, or append `@vX.Y.Z` to pin a tag:
 
 ```bash
-pipx install --force git+https://github.com/github/spec-kit.git@vX.Y.Z
+pipx install --force git+https://github.com/Axiweave/spec-kit.git
 ```
 
 ### Verify the upgrade
@@ -482,7 +482,7 @@ If not found, reinstall:
 
 ```bash
 uv tool uninstall specify-cli
-uv tool install specify-cli --from git+https://github.com/github/spec-kit.git
+uv tool install specify-cli --from git+https://github.com/Axiweave/spec-kit.git
 ```
 
 ### "Do I need to run specify every time I open my project?"

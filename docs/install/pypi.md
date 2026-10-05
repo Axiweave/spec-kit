@@ -1,6 +1,9 @@
 # Installing from PyPI
 
-Spec Kit is published to PyPI as [`specify-cli`](https://pypi.org/project/specify-cli/), maintained by the Spec Kit maintainers. Installing from PyPI is the second supported install route alongside installing from the [GitHub source](../installation.md#install-from-source--persistent-installation-recommended). Use whichever fits your workflow — both provide the same `specify` CLI.
+Spec Kit is published to PyPI as [`specify-cli`](https://pypi.org/project/specify-cli/), maintained by the upstream Spec Kit maintainers. Installing from PyPI gives the upstream CLI, not this fork.
+
+> [!IMPORTANT]
+> The `specify-cli` package on PyPI is the upstream Spec Kit release. It does not include this fork's changes. To use this fork, install it from [source](../installation.md#install-from-source--persistent-installation-recommended).
 
 > [!NOTE]
 > The PyPI release version tracks the GitHub release tags (for example, PyPI `0.12.11` corresponds to the `v0.12.11` tag). `specify version` is only a local version/runtime sanity check — it reports the installed version but not where the `specify` executable came from, so it cannot distinguish a PyPI install from a Git install. To confirm the install source, inspect the source metadata your package manager records: `pipx list --json` reports the exact install specification for each tool, and for uv/pip installs you can check the package's [PEP 610](https://peps.python.org/pep-0610/) `direct_url.json` inside its `*.dist-info` directory (a Git or URL install records the repository/archive URL there, while a plain PyPI index install does not create that file). Note that `pip show specify-cli` only prints package metadata and will not see uv/pipx-managed environments from the host interpreter.

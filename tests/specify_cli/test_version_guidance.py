@@ -121,10 +121,10 @@ class TestUnsupported:
         assert "Could not identify your install method automatically" in out
         assert (
             "uv tool install specify-cli --force --from "
-            "git+https://github.com/github/spec-kit.git@vX.Y.Z"
+            "git+https://github.com/Axiweave/spec-kit.git@vX.Y.Z"
         ) in out
         assert (
-            "pipx install --force git+https://github.com/github/spec-kit.git@vX.Y.Z"
+            "pipx install --force git+https://github.com/Axiweave/spec-kit.git@vX.Y.Z"
             in out
         )
         assert mock_run.call_count == 0
@@ -147,10 +147,10 @@ class TestUnsupported:
         assert "Could not identify your install method automatically" in out
         assert (
             "uv tool install specify-cli --force --from "
-            "git+https://github.com/github/spec-kit.git@vX.Y.Z"
+            "git+https://github.com/Axiweave/spec-kit.git@vX.Y.Z"
         ) in out
         assert (
-            "pipx install --force git+https://github.com/github/spec-kit.git@vX.Y.Z"
+            "pipx install --force git+https://github.com/Axiweave/spec-kit.git@vX.Y.Z"
             in out
         )
 

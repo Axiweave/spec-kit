@@ -336,13 +336,13 @@ class TestArgvAssemblyUvTool:
             "specify-cli",
             "--force",
             "--from",
-            "git+https://github.com/github/spec-kit.git@v0.7.6",
+            "git+https://github.com/Axiweave/spec-kit.git@v0.7.6",
         ]
 
     def test_dev_suffix_tag_embedded_literally(self):
         with patch("specify_cli._version.shutil.which", return_value="uv"):
             argv = _assemble_installer_argv(_InstallMethod.UV_TOOL, "v0.8.0.dev0")
-        assert "git+https://github.com/github/spec-kit.git@v0.8.0.dev0" in argv
+        assert "git+https://github.com/Axiweave/spec-kit.git@v0.8.0.dev0" in argv
         assert (
             "upgrade" not in argv
         )  # never `uv tool upgrade` — does not accept --tag pinning
@@ -826,7 +826,7 @@ class TestArgvAssemblyPipx:
             "pipx",
             "install",
             "--force",
-            "git+https://github.com/github/spec-kit.git@v0.7.6",
+            "git+https://github.com/Axiweave/spec-kit.git@v0.7.6",
         ]
         assert "upgrade" not in argv  # pipx upgrade does not accept arbitrary refs
         assert "--spec" not in argv  # pipx 1.5+ dropped the --spec flag

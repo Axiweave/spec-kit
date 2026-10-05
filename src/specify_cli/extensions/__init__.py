@@ -45,6 +45,7 @@ from .._download_security import (
 from .._init_options import is_ai_skills_enabled
 from .._invocation_style import is_dollar_skills_agent, is_slash_skills_agent
 from .._utils import dump_frontmatter, relative_extension_path_violation, version_satisfies
+from .._version import _GITHUB_SOURCE_URL
 from ..catalogs import CatalogEntry as BaseCatalogEntry
 from ..catalogs import CatalogStackBase
 from ..shared_infra import verify_archive_sha256
@@ -77,7 +78,7 @@ VALID_EFFECTS = frozenset({"read-only", "read-write"})
 
 DEFAULT_HOOK_PRIORITY = 10
 
-REINSTALL_COMMAND = "uv tool install specify-cli --force --from git+https://github.com/github/spec-kit.git"
+REINSTALL_COMMAND = f"uv tool install specify-cli --force --from {_GITHUB_SOURCE_URL}"
 
 
 def _load_core_command_names() -> frozenset[str]:

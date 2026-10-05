@@ -4,15 +4,14 @@
 
 ## Install Specify CLI
 
-Pin a specific release tag for stability (check [Releases](https://github.com/github/spec-kit/releases) for the latest):
+Install the fork's default branch, or pin a tag from [Tags](https://github.com/Axiweave/spec-kit/tags) when one exists:
 
 ```bash
-# Install a specific stable release (recommended — replace vX.Y.Z with the
-# latest tag, keeping the leading v, e.g. v0.12.11 not 0.12.11)
-pipx install git+https://github.com/github/spec-kit.git@vX.Y.Z
+# Install the fork's default branch
+pipx install git+https://github.com/Axiweave/spec-kit.git
 
-# Or install latest from main (may include unreleased changes)
-pipx install git+https://github.com/github/spec-kit.git
+# Or pin a tag (replace vX.Y.Z, keeping the leading v)
+pipx install git+https://github.com/Axiweave/spec-kit.git@vX.Y.Z
 ```
 
 ## Verify
@@ -24,7 +23,7 @@ specify version
 ## Upgrade
 
 ```bash
-pipx install --force git+https://github.com/github/spec-kit.git@vX.Y.Z
+pipx install --force git+https://github.com/Axiweave/spec-kit.git
 ```
 
 ## Uninstall

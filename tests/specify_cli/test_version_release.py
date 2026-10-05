@@ -34,7 +34,7 @@ _RATE_LIMITED_REASON = (
 
 def _http_error(code: int, message: str = "error") -> urllib.error.HTTPError:
     return urllib.error.HTTPError(
-        url="https://api.github.com/repos/github/spec-kit/releases/latest",
+        url="https://api.github.com/repos/Axiweave/spec-kit/releases/latest",
         code=code,
         msg=message,
         hdrs={},  # type: ignore[arg-type]
@@ -129,7 +129,7 @@ class TestFailureCategorization:
         assert tag is None
         assert reason == _RATE_LIMITED_REASON
 
-    @pytest.mark.parametrize("code", [404, 500, 502])
+    @pytest.mark.parametrize("code", [500, 502])
     def test_other_http_uses_code_string(self, code):
         with patch(
             "specify_cli.authentication.http.urllib.request.urlopen",

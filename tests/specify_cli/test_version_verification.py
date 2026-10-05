@@ -324,7 +324,7 @@ class TestResolutionFailures:
                 "Upgrade aborted: rate limited (configure ~/.specify/auth.json "
                 "with a GitHub token)",
             ),
-            (404, "Upgrade aborted: HTTP 404"),
+            (404, "Upgrade aborted: Axiweave/spec-kit publishes no releases"),
             (502, "Upgrade aborted: HTTP 502"),
         ],
     )
@@ -404,7 +404,7 @@ class TestUnknownCurrent:
         assert result.exit_code == 2
         out = strip_ansi(result.output)
         assert "Could not determine the previous version" in out
-        assert "https://github.com/github/spec-kit/releases" in out
+        assert "https://github.com/Axiweave/spec-kit/releases" in out
 
 
 class TestTokenScrubbing:

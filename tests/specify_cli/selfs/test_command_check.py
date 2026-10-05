@@ -24,7 +24,7 @@ _RATE_LIMITED_REASON = (
 
 def _http_error(code: int, message: str = "error") -> urllib.error.HTTPError:
     return urllib.error.HTTPError(
-        url="https://api.github.com/repos/github/spec-kit/releases/latest",
+        url="https://api.github.com/repos/Axiweave/spec-kit/releases/latest",
         code=code,
         msg=message,
         hdrs={},  # type: ignore[arg-type]
@@ -51,7 +51,7 @@ class TestUserStory1:
         assert "Update available" in output
         assert "0.7.4" in output
         assert "0.9.0" in output
-        assert "git+https://github.com/github/spec-kit.git@v0.9.0" in output
+        assert "git+https://github.com/Axiweave/spec-kit.git@v0.9.0" in output
 
     def test_up_to_date_prints_current_only(self):
         with patch("specify_cli._version._get_installed_version", return_value="0.9.0"), patch(
@@ -87,9 +87,9 @@ class TestUserStory1:
         assert "Current version could not be determined" in output
         assert "Latest release: v0.7.4" in output
         assert "0.7.4" in output
-        assert "git+https://github.com/github/spec-kit.git@v0.7.4" in output
+        assert "git+https://github.com/Axiweave/spec-kit.git@v0.7.4" in output
         assert "specify self upgrade" in output
-        assert "pipx install --force git+https://github.com/github/spec-kit.git@v0.7.4" in output
+        assert "pipx install --force git+https://github.com/Axiweave/spec-kit.git@v0.7.4" in output
 
     def test_unknown_installed_uses_placeholder_when_latest_tag_is_invalid(self):
         with patch("specify_cli._version._get_installed_version", return_value="unknown"), patch(
@@ -101,7 +101,7 @@ class TestUserStory1:
         assert result.exit_code == 0
         assert "Latest release: vX.Y.Z" in output
         assert "Could not validate latest release tag from GitHub." in output
-        assert "git+https://github.com/github/spec-kit.git@vX.Y.Z" in output
+        assert "git+https://github.com/Axiweave/spec-kit.git@vX.Y.Z" in output
         assert "v0.9.0;echo unsafe" not in output
 
     def test_unparseable_tag_reports_validation_failure_without_raw_tag(self):
@@ -118,7 +118,7 @@ class TestUserStory1:
         assert "Latest release: vX.Y.Z" in output
         assert "0.7.4" in output
         assert "not-a-version" not in output
-        assert "git+https://github.com/github/spec-kit.git@vX.Y.Z" in output
+        assert "git+https://github.com/Axiweave/spec-kit.git@vX.Y.Z" in output
 
 
 class TestUserStory2:

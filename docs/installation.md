@@ -11,22 +11,22 @@
 ## Installation
 
 > [!IMPORTANT]
-> Spec Kit is distributed through two official channels, both published and maintained by the Spec Kit maintainers: the [github/spec-kit](https://github.com/github/spec-kit) GitHub repository (source installs) and the [`specify-cli`](https://pypi.org/project/specify-cli/) package on [PyPI](https://pypi.org/project/specify-cli/). Either route is supported for normal installs — use the commands shown below. After installing, run `specify version` as a local version/runtime sanity check. It confirms that the `specify` command is available and reports its version, but it does not prove whether the executable came from PyPI or GitHub. For offline or air-gapped environments, locally built wheels created from this repository are also valid.
+> Install this fork from the [Axiweave/spec-kit](https://github.com/Axiweave/spec-kit) GitHub repository (source installs). The [`specify-cli`](https://pypi.org/project/specify-cli/) package on [PyPI](https://pypi.org/project/specify-cli/) is the upstream Spec Kit release and does not include this fork's changes. After installing, run `specify version` as a local version/runtime sanity check. It confirms that the `specify` command is available and reports its version, but it does not prove whether the executable came from PyPI or GitHub. For offline or air-gapped environments, locally built wheels created from this repository are also valid.
 
 Spec Kit supports two install routes:
 
-1. **Install from source (GitHub)** — the recommended route, pinned to a release tag.
-2. **Install from PyPI** — install the published `specify-cli` package with your usual Python tooling.
+1. **Install from source (GitHub)** — the recommended route for this fork.
+2. **Install from PyPI** — install the upstream `specify-cli` package with your usual Python tooling. It does not include this fork's changes.
 
 ### Install from Source — Persistent Installation (Recommended)
 
-Install once and use everywhere. Replace `vX.Y.Z` with a release tag from [Releases](https://github.com/github/spec-kit/releases) — keep the leading `v` (for example, `v0.12.11`, not `0.12.11`):
+Install once and use everywhere. The command below installs the fork's default branch. To pin a release, append `@vX.Y.Z` with a tag from [Tags](https://github.com/Axiweave/spec-kit/tags) — keep the leading `v` (for example, `v0.12.11`, not `0.12.11`):
 
 > [!NOTE]
 > The command below requires **[uv](https://docs.astral.sh/uv/)**. If you see `command not found: uv`, [install uv first](./install/uv.md).
 
 ```bash
-uv tool install specify-cli --from git+https://github.com/github/spec-kit.git@vX.Y.Z
+uv tool install specify-cli --from git+https://github.com/Axiweave/spec-kit.git
 ```
 
 Then initialize a project:
