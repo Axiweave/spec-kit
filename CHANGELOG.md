@@ -4,6 +4,16 @@
 
 ## Unreleased
 
+### Fixed
+
+- Resolve `specify artifact list`, `info`, and `lookup` provenance from the external workspace. Installed extensions no longer break artifact listing in external projects.
+- Check `specify integration status` entries against the workspace or repository that owns them. Keep integration catalog configuration and cache in the workspace.
+- Commit user-authored workspace files that resemble temporary or bytecode files. Exclude only documented transient producers, and apply the same rules to the initial commit and `.gitignore`. Refuse workspace history under a bare repository that Git refuses to inspect.
+- Refuse a missing explicit feature directory in external projects in Bash and Python, as PowerShell does, and never save a missing selection. Accept in-workspace file symlinks in Bash, reject unsafe preset template paths in Bash, and align the Python workspace-root check with Bash and PowerShell.
+- Point `specify self upgrade`, `self check`, rollback hints, reinstall guidance, and install docs at the Axiweave fork. Report when the fork publishes no release instead of using upstream releases.
+- Report committed merge lock and recovery entries in branch sources as pending resources. Refuse symlink-loop paths without a traceback on Python 3.11 and 3.12.
+- Limit integration-test home isolation to the integration test package.
+
 ### Added
 
 - Add `/speckit.merge` for reviewed artifact transfer and read-only reconciliation. Use `specify project merge-specs` for immutable previews and approved compact replay. Preserve opaque content and current delivery state. Report consistency findings, incomplete planning, and exact recovery actions without certifying implementation.
