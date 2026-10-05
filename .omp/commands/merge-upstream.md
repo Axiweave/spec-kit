@@ -68,18 +68,23 @@ Subagents must skip builds, formatters, linters, and tests during concurrent edi
 
 3. Run `git ls-files -z -- '*.sh' | xargs -0 shellcheck --severity=error`.
 4. Run `uvx ruff check` on the Python files that the merge changed in fork-owned paths.
-5. Smoke-test an external project with isolated `HOME`, `XDG_CONFIG_HOME`, and `XDG_DATA_HOME`:
+5. Smoke-test an external project with this checkout's CLI in an isolated temporary directory:
 
    ```bash
-   git init
-   specify init --here --force --storage external --workspace "$T/ws" --integration claude \
+   S="$PWD/.venv/bin/specify"
+   T=$(mktemp -d)
+   export HOME="$T/h" XDG_CONFIG_HOME="$T/c" XDG_DATA_HOME="$T/d" GIT_CONFIG_GLOBAL="$T/gitconfig"
+   mkdir -p "$T/repo" && cd "$T/repo" && git init -q
+   "$S" init --here --force --storage external --workspace "$T/ws" --integration claude \
      --script sh --non-interactive --ignore-agent-tools --no-workspace-git
-   specify project info --json
-   specify integration status
-   specify artifact list --json
+   "$S" project info --json
+   "$S" integration status
+   "$S" artifact list --json
    ```
 
-6. Run `specify self check` and confirm it reports the Axiweave fork, not upstream.
+   Run the snippet in a subshell so the exported variables and `cd` do not leak. Remove `$T` afterward.
+6. From the checkout, run `.venv/bin/specify self check` and confirm it reports the Axiweave fork, not upstream.
+   This checks the merged checkout, not the `specify` launcher on `PATH`.
 
 Diagnose failed checks before repeating them. Do not suppress failures.
 If a required check remains blocked, leave the merge uncommitted and report the exact blocker.
