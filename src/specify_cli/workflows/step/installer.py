@@ -710,22 +710,29 @@ def _registry_record(
 def _roll_back_restore(step_dir: Path, backup_dir: Path | None, step_id: str) -> str:
     """Put the previous step directory back after a failed restore.
 
-    Returns an empty string on success, else a sentence for the caller's
-    error that names the leftover directory.
+    When the previous tree cannot move back, the new tree returns to
+    ``step_dir`` so the registered step stays loadable. Returns an empty
+    string on success, else a sentence for the caller's error that names
+    the leftover directories.
     """
-    failed_dir: Path | None = None
+    previous = f" and the previous files remain at '{backup_dir}'" if backup_dir else ""
     try:
         failed_dir = Path(
             tempfile.mkdtemp(prefix=f".{step_id}.failed-", dir=step_dir.parent)
         )
         failed_dir.rmdir()
         os.replace(step_dir, failed_dir)
-        if backup_dir is not None:
-            os.replace(backup_dir, step_dir)
     except OSError as exc:
-        if backup_dir is not None and backup_dir.exists():
-            return f" Rollback failed ({exc}); the previous files remain at '{backup_dir}'."
-        return f" Rollback failed: {exc}."
+        return f" Rollback failed ({exc}); the new files stay at '{step_dir}'{previous}."
+    if backup_dir is not None:
+        try:
+            os.replace(backup_dir, step_dir)
+        except OSError as exc:
+            try:
+                os.replace(failed_dir, step_dir)
+            except OSError:
+                return f" Rollback failed ({exc}); the new files remain at '{failed_dir}'{previous}."
+            return f" Rollback failed ({exc}); the new files stay at '{step_dir}'{previous}."
     try:
         shutil.rmtree(failed_dir)
     except OSError as exc:

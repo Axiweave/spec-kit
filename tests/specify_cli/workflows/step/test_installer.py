@@ -1218,3 +1218,52 @@ def test_failed_catalog_restore_puts_previous_step_back(
     assert {p.relative_to(target): p.read_bytes() for p in target.rglob("*") if p.is_file()} == before
     assert [p.name for p in _steps_dir(project_dir).iterdir() if p.name.startswith(".")] == []
     assert capsys.readouterr() == ("", "")
+
+
+def test_restore_rollback_keeps_a_live_step_when_backup_cannot_return(
+    tmp_path, project_dir, monkeypatch
+):
+    """If the previous tree cannot move back, a step tree still sits at the canonical path."""
+    from specify_cli.workflows.step.catalog import StepRegistry
+
+    target = _write_package(_steps_dir(project_dir) / "my-step", init_body="# edited\n")
+    _register(project_dir, "my-step")
+    before = {p.relative_to(target): p.read_bytes() for p in target.rglob("*") if p.is_file()}
+    new_pkg = _write_package(tmp_path / "pkg", init_body="# new\n")
+    monkeypatch.setattr(StepRegistry, "add", lambda *a, **k: (_ for _ in ()).throw(OSError("boom")))
+    real_replace = installer.os.replace
+
+    def replace(src, dst, *args, **kwargs):
+        if ".my-step.backup-" in Path(src).name:
+            raise OSError("backup stuck")
+        return real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(installer.os, "replace", replace)
+
+    with pytest.raises(installer.StepInstallError, match="backup stuck") as exc:
+        installer.install_step_package(
+            project_dir, "my-step", new_pkg, source="catalog", catalog_name="default"
+        )
+
+    assert {"step.yml", "__init__.py"} <= {p.name for p in target.iterdir()}
+    [backup] = _steps_dir(project_dir).glob(".my-step.backup-*")
+    assert str(backup) in str(exc.value)
+    assert {p.relative_to(backup): p.read_bytes() for p in backup.rglob("*") if p.is_file()} == before
+    assert list(_steps_dir(project_dir).glob(".my-step.failed-*")) == []
+
+
+def test_failed_restore_of_missing_step_leaves_it_missing(tmp_path, project_dir, monkeypatch):
+    """Clone restore: a registered step with no directory returns to that state when the registry write fails."""
+    from specify_cli.workflows.step.catalog import StepRegistry
+
+    _register(project_dir, "my-step")
+    _steps_dir(project_dir).mkdir(parents=True, exist_ok=True)
+    new_pkg = _write_package(tmp_path / "pkg", init_body="# new\n")
+    monkeypatch.setattr(StepRegistry, "add", lambda *a, **k: (_ for _ in ()).throw(OSError("boom")))
+
+    with pytest.raises(installer.StepInstallError, match="boom"):
+        installer.install_step_package(
+            project_dir, "my-step", new_pkg, source="catalog", catalog_name="default"
+        )
+
+    assert sorted(p.name for p in _steps_dir(project_dir).iterdir()) == ["step-registry.json"]
