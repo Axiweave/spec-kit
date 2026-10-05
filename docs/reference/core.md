@@ -521,11 +521,11 @@ Other integrations do not support `--global` or `--global-commands`.
 | ----------------- | ------------------------------------------------------------------------ |
 | `SPECKIT_INTEGRATION_DEFAULT` | Override the fallback integration used by `specify init` when `--integration` is omitted (interactive prompt default and non-interactive fallback). Set it to any registered integration key (e.g. `gemini`, `claude`). An unrecognized value is ignored with a warning and the built-in default (`copilot`) is used. An explicit `--integration <key>` always takes precedence. |
 | `SPECIFY_INIT_DIR` | Select the code repository explicitly, including from a monorepo root. Relative values resolve from cwd. The directory must contain `.specify/`. Invalid values fail without fallback. Without the override, core scripts and project CLI commands search upward from cwd. |
-| `SPECIFY_FEATURE_DIRECTORY` | Override saved feature selection. Relative paths resolve under the workspace. External selections must stay inside that workspace. Local mode retains absolute overrides. |
+| `SPECIFY_FEATURE_DIRECTORY` | Override saved feature selection. Relative paths join the workspace. External selections must stay inside that workspace. Local mode does not confine the value: a relative path such as `../shared-feature` or an absolute path can select a directory outside the project. |
 | `SPECIFY_FEATURE` | Override the reported feature label, independently of Git. This does not select a feature directory. Use `SPECIFY_FEATURE_DIRECTORY` or saved feature selection for that purpose. |
 | `SPECIFY_FEATURE_NO_PERSIST` | Set to `1` or `true` to prevent scripts from saving active-feature changes. Applies to local `.specify/feature.json` and external machine-local records. Use it for independent concurrent selections. |
 
-> **Three resolution axes.** `SPECIFY_INIT_DIR` selects the code repository. Its storage locator selects the workspace. Explicit or saved feature selection selects the feature. Local projects use the repository as their workspace.
+> **Three resolution axes.** `SPECIFY_INIT_DIR` selects the code repository. Its storage locator selects the workspace. Explicit or saved feature selection selects the feature. Local projects use the repository as their workspace. A local feature defaults to `specs/`, but an explicit selection may live outside the project.
 >
 > **Version control.** `specify init` scaffolds a managed `.specify/.gitignore` that excludes machine-local state — `feature.json` (the current-feature pointer, rewritten on every feature switch) and per-machine extension `extensions/*/local-config.yml` overrides — while leaving everything else under `.specify/` (constitution, templates, scripts, extension config) shareable so teams stay aligned. Like the rest of `.specify/`'s shared scripts and templates, the file is tracked in the shared-infrastructure manifest: your edits are preserved on re-init and `specify init --here --force` restores the managed content. It is intentionally left in place by `specify integration uninstall`, which only removes the uninstalled agent's own files.
 >
@@ -534,20 +534,28 @@ Other integrations do not support `--global` or `--global-commands`.
 ## Naming Features with the Helper Scripts
 
 When calling the bundled `create-new-feature` helper scripts directly, generated
-names retain only ASCII letters and digits. A description entirely in a non-Latin
-script, or made only of punctuation, can therefore produce an empty suffix such
-as `001-`. The scripts warn on stderr when this happens, including during a dry
-run; JSON output remains parseable.
+names retain Unicode letters and decimal digits in UTF-8, so a description such as
+`添加用户` produces `001-添加用户`. Descriptions made only of punctuation can still
+produce an empty suffix such as `001-`; the scripts warn on stderr when this
+happens, including during a dry run. JSON output remains parseable.
 
-Keep the original description and supply a readable ASCII short name:
+To choose a different name, keep the original description and supply a short name:
 
 ```bash
-bash .specify/scripts/bash/create-new-feature.sh --json --short-name user-auth "添加用户"
+bash .specify/scripts/bash/create-new-feature.sh --json --short-name 用户管理 "添加用户"
 ```
 
 The Python helper also accepts `--short-name`; the PowerShell helper uses
 `-ShortName`. A supplied short name is cleaned by the same rules, so it must
-contain at least one ASCII letter or digit.
+contain at least one letter or digit. For non-ASCII names, the Bash helper needs
+an installed UTF-8 locale and a Python 3 interpreter for Unicode classification.
+ASCII input, including tabs and newlines, is sanitized without either requirement.
+If `LC_ALL` is non-empty, Bash uses that locale rather than selecting another:
+Unicode names fail with an error if the selected locale is not usable for UTF-8
+names. With `LC_ALL` unset or empty, Bash selects an installed UTF-8 locale even
+when `LANG` or `LC_CTYPE` names a non-UTF-8 locale.
+ASCII capitals are lowercased; non-ASCII letter casing is preserved across the
+script variants.
 
 ## Check Installed Tools
 

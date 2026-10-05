@@ -687,6 +687,22 @@ def test_bash_policy_without_a_json_parser_refuses_without_writes(tmp_path, scri
 
 
 @pytest.mark.parametrize("policy", ["automatic", "context"])
+def test_bash_policy_reads_with_py_launcher_version_argument(tmp_path, script_env, policy):
+    """`_python3_command` prints `py` and `-3` on separate lines; both must reach the launcher."""
+    repo, workspace, _ = _make_project(tmp_path, False, policy)
+    common = workspace / ".specify/scripts/bash/common.sh"
+    result = subprocess.run(
+        ["/bin/bash", "-c",
+         'source "$1"; PY="$3"; jq() { return 1; }; _python3_command() { printf "%s\\n" py -3; }; '
+         'py() { [ "$1" = "-3" ] || return 1; shift; "$PY" "$@"; }; get_feature_selection_mode "$2"',
+         "policy", str(common), str(workspace), sys.executable],
+        cwd=repo, env=script_env, text=True, capture_output=True, timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == f"{policy}\n"
+
+
+@pytest.mark.parametrize("policy", ["automatic", "context"])
 @pytest.mark.parametrize("precreation_flag", [None, "1", "true"])
 def test_external_missing_feature_requires_explicit_precreation_flag(
     tmp_path, variant, script_env, policy, precreation_flag,

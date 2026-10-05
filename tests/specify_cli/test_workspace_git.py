@@ -344,6 +344,7 @@ def test_later_private_outputs_stay_out_of_default_status(tmp_path: Path):
     for name in (".specify/workflows/runs/one/state.json", ".specify/workflows/.workflow-registry.json.x.tmp",
                  ".specify/extensions/.reinstall-staging-one/private.md",
                  ".specify/presets/.reinstall-staging-two/private.md",
+                 ".specify/workflows/steps/.my-step.failed-x/step.yml",
                  ".specify/extensions/tool/tool-config.local.yml", "specs/.cache/custom.md"):
         path = root / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -534,3 +535,50 @@ def test_changed_worktree_root_refuses_before_staging(tmp_path, monkeypatch):
     assert (foreign / "notes.md").read_bytes() == b"Private foreign bytes\n"
     assert not (foreign / ".git").exists()
     assert not (root / ".git").exists()
+
+
+def test_in_flight_step_install_transients_stay_out_of_workspace_status(tmp_path, monkeypatch):
+    """Invariant: while a step install or restore holds its transients, Git sees only durable step files."""
+    from specify_cli.workflows.step import installer
+
+    root = tmp_path / "workspace"
+    (root / ".specify").mkdir(parents=True)
+    initialize_workspace_git(root)
+    steps = root / ".specify/workflows/steps"
+    package = tmp_path / "pkg"
+    package.mkdir()
+    (package / "step.yml").write_text("step:\n  type_key: my-step\n  name: My Step\n  version: 0.1.0\n")
+    (package / "__init__.py").write_text("# init\n")
+    snapshots: list[tuple[set[str], str]] = []
+    real_replace = os.replace
+
+    # The registry write is the last step inside the install lock: every transient exists here.
+    def replace(src, dst, *args, **kwargs):
+        if Path(dst).name == "step-registry.json":
+            present = {
+                kind for path in steps.glob(".*")
+                for kind in ("speckit-step-install-", "step-registry.json.", "my-step.backup-")
+                if path.name.startswith("." + kind)
+            }
+            if (root / ".specify/.step-install.lock").exists():
+                present.add("lock")
+            status = subprocess.check_output(
+                ["git", "-C", str(root), "status", "--porcelain", "--untracked-files=all"], text=True
+            )
+            snapshots.append((present, status))
+        return real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(os, "replace", replace)
+    for _ in ("install", "restore"):
+        installer.install_step_package(root, "my-step", package, source="catalog", catalog_name="default")
+
+    assert [present for present, _ in snapshots] == [
+        {"lock", "speckit-step-install-", "step-registry.json."},
+        {"lock", "speckit-step-install-", "step-registry.json.", "my-step.backup-"},
+    ]
+    for _, status in snapshots:
+        assert {line[3:] for line in status.splitlines()} <= {
+            ".specify/workflows/steps/step-registry.json",
+            ".specify/workflows/steps/my-step/step.yml",
+            ".specify/workflows/steps/my-step/__init__.py",
+        }, status
