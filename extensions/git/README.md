@@ -50,8 +50,8 @@ This extension provides Git operations as an optional, self-contained module. It
 Configuration is stored in `.specify/extensions/git/git-config.yml`:
 
 ```yaml
-# Branch numbering strategy: "sequential" or "timestamp"
-branch_numbering: sequential
+# Empty inherits the project's feature numbering. Set sequential or timestamp to override it.
+branch_numbering: ""
 
 # Optional branch name template. Leave empty for the default "{number}-{slug}".
 # Supported tokens: {author}, {app}, {number}, {slug}; {slug} must not appear
