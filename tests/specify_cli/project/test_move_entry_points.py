@@ -134,7 +134,7 @@ def test_native_command_keeps_content_and_finds_external_workspace(tmp_path, mon
 @pytest.mark.parametrize("failure", ["refresh", "linked_skills"])
 def test_hermes_failed_move_preserves_shared_skill_bytes(tmp_path, monkeypatch, failure):
     """Invariant: a refused or interrupted move preserves shared skill and project bytes."""
-    from specify_cli.project import _move_commands
+    from specify_cli.project import _command_move_managed
     from specify_cli.project.move import commit_move, prepare_move
 
     repository = tmp_path / "code"
@@ -154,13 +154,13 @@ def test_hermes_failed_move_preserves_shared_skill_bytes(tmp_path, monkeypatch, 
         skills.rename(target)
         skills.symlink_to(target, target_is_directory=True)
     else:
-        refresh = _move_commands.refresh_commands
+        refresh = _command_move_managed.refresh_commands
 
         def fail_after_refresh(root):
             refresh(root)
             raise OSError("Interrupted after native refresh")
 
-        monkeypatch.setattr(_move_commands, "refresh_commands", fail_after_refresh)
+        monkeypatch.setattr(_command_move_managed, "refresh_commands", fail_after_refresh)
 
     with pytest.raises(ValueError, match="symlink|Interrupted after native refresh"):
         commit_move(prepared)

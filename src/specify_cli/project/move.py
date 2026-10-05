@@ -248,7 +248,7 @@ def _restore_sources(prepared: PreparedMove, recovery: Path, moved: list[str], c
 
 def commit_move(prepared: PreparedMove, *, report: dict[str, str] | None = None) -> Project:
     """Recheck the verified stage and make a recoverable external-storage cutover."""
-    from . import _move_commands
+    from . import _command_move_managed
 
     repository, workspace = prepared.repository_root, prepared.workspace_root
     roots, active = _local_roots(repository)
@@ -266,11 +266,11 @@ def commit_move(prepared: PreparedMove, *, report: dict[str, str] | None = None)
     while not parent.exists():
         absent_parents.add(parent)
         parent = parent.parent
-    for path in _move_commands.native_paths(repository):
+    for path in _command_move_managed.native_paths(repository):
         path = Path(path)
         if not path.is_absolute():
             path = repository / path
-        native_root = _move_commands.native_path_root(repository, path)
+        native_root = _command_move_managed.native_path_root(repository, path)
         if confined(native_root, path) != path or path.is_symlink():
             raise ValueError(f"Native command path contains a symlink: {path}")
         if path == repository or path.is_relative_to(repository / ".git"):
@@ -319,7 +319,7 @@ def commit_move(prepared: PreparedMove, *, report: dict[str, str] | None = None)
         if workspace_root_for(repository) != workspace:
             raise ValueError("The project does not resolve to the staged workspace.")
         refreshed = True
-        _move_commands.refresh_commands(repository)
+        _command_move_managed.refresh_commands(repository)
         if not prepared.no_workspace_git:
             commit_id = initialize_workspace_git(workspace)
             committed = True
@@ -343,7 +343,7 @@ def commit_move(prepared: PreparedMove, *, report: dict[str, str] | None = None)
         if refreshed:
             for path, original in native.items():
                 try:
-                    native_root = _move_commands.native_path_root(repository, path)
+                    native_root = _command_move_managed.native_path_root(repository, path)
                     if path.is_symlink() or confined(native_root, path) != path:
                         raise ValueError(f"Recovery will not replace a symlink: {path}")
                     if original is None:

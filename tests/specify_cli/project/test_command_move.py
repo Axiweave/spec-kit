@@ -562,18 +562,18 @@ def test_workspace_git_error_marked_committed_preserves_identity_and_skips_metad
 
 
 def test_recovery_failure_after_refresh_retains_evidence_without_deleting_it(local_project, monkeypatch):
-    from specify_cli.project import _move_commands
+    from specify_cli.project import _command_move_managed
 
     repository, workspace, home = local_project
     before = snapshot(repository)
-    real_refresh = _move_commands.refresh_commands
+    real_refresh = _command_move_managed.refresh_commands
 
     def blocked_refresh(repo: Path) -> None:
         real_refresh(repo)
         (repo / "specs").write_bytes(b"A concurrent process claimed this path.\n")
         raise ValueError("Injected failure after refresh, before the Git commit.")
 
-    monkeypatch.setattr(_move_commands, "refresh_commands", blocked_refresh)
+    monkeypatch.setattr(_command_move_managed, "refresh_commands", blocked_refresh)
 
     result = CliRunner().invoke(app, ["project", "move", str(workspace), "--confirm-remove-local"])
 
