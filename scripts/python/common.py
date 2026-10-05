@@ -56,34 +56,22 @@ def resolve_specify_init_dir() -> Path:
             file=sys.stderr,
         )
         raise SystemExit(1)
-    if (init_root / ".specify" / "workspace.json").exists():
-        _storage_error(f"SPECIFY_INIT_DIR selects a workspace, not a code repository: {init_root}")
     return init_root
 
 
 def get_repo_root(script_file: Path | None = None) -> Path:
     if os.environ.get("SPECIFY_INIT_DIR"):
-        return resolve_specify_init_dir()
-
-    specify_root = find_specify_root()
-    if specify_root is not None:
-        if (specify_root / ".specify" / "workspace.json").exists():
-            _storage_error(f"Run this command from the code repository, not the workspace: {specify_root}")
-        return specify_root
-
-    if script_file is not None:
-        script_root = find_specify_root(script_file.resolve().parent)
-        if script_root is not None:
-            if (script_root / ".specify" / "workspace.json").exists():
-                _storage_error(
-                    f"Cannot discover the code repository for workspace {script_root}. "
-                    "Run from the repository or set SPECIFY_INIT_DIR."
-                )
-            return script_root
-
-        # Installed scripts live at .specify/scripts/python/<script>.py.
-        return script_file.resolve().parents[3]
-    return Path.cwd().resolve()
+        root = resolve_specify_init_dir()
+    else:
+        root = find_specify_root()
+        if root is None and script_file is not None:
+            # Installed scripts live at .specify/scripts/python/<script>.py.
+            root = find_specify_root(script_file.resolve().parent) or script_file.resolve().parents[3]
+        root = root or Path.cwd().resolve()
+    # A workspace alone is not a code repository. An external repository may hold both records.
+    if (root / ".specify" / "workspace.json").exists() and not (root / ".specify" / "project.json").exists():
+        _storage_error("Run from the code repository or set SPECIFY_INIT_DIR to its path.")
+    return root
 
 
 def _storage_error(message: str) -> None:
@@ -300,6 +288,12 @@ def get_feature_paths(
     if feature_dir_raw:
         if external:
             feature_dir = confined_workspace_path(workspace_root, feature_dir_raw)
+            # Only a no-persist caller (the specify pre-creation check) may name a
+            # feature that does not exist yet, so a missing feature is never saved.
+            if not feature_dir.is_dir() and (
+                feature_dir.exists() or may_persist_feature_selection("automatic", no_persist=no_persist)
+            ):
+                _storage_error(f"Selected feature directory does not exist: {feature_dir}")
         else:
             feature_dir = Path(feature_dir_raw)
             if not feature_dir.is_absolute():

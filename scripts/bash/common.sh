@@ -146,10 +146,10 @@ PY
     return 1
 }
 
-# Resolve existing directory symlinks and preserve nonexistent path suffixes.
-# Reject traversal and file symlinks before any external content write.
+# Resolve symlinks like Python's Path.resolve() and preserve nonexistent path
+# suffixes. Reject traversal and escapes before any external content write.
 workspace_path() {
-    local root="$1" path="$2" suffix="" resolved
+    local root="$1" path="$2" suffix="" resolved target hops=0
     if [[ "$path" =~ ^[A-Za-z]:[/\\] ]] && command -v cygpath >/dev/null 2>&1; then
         path=$(cygpath -u "$path") || return 1
     fi
@@ -160,14 +160,24 @@ workspace_path() {
     local ancestor="$path"
     while [[ ! -d "$ancestor" ]]; do
         if [[ -L "$ancestor" ]]; then
-            echo "ERROR: Unsafe workspace symlink: $ancestor" >&2
-            return 1
+            # Follow file and dangling symlinks. The final check confines the target.
+            if (( ++hops > 40 )) || ! target=$(readlink -- "$ancestor"); then
+                echo "ERROR: Unsafe workspace symlink: $ancestor" >&2
+                return 1
+            fi
+            [[ "$target" == /* ]] || target="${ancestor%/*}/$target"
+            ancestor="$target"
+            continue
         fi
         suffix="/${ancestor##*/}$suffix"
         ancestor="${ancestor%/*}"
         [[ -n "$ancestor" ]] || ancestor="/"
     done
     resolved="$(CDPATH="" cd -- "$ancestor" && pwd -P)$suffix" || return 1
+    # A symlink target can add ".." below a missing directory, which pwd -P cannot fold.
+    case "/$resolved/" in
+        */../*) resolved="" ;;
+    esac
     if [[ "$resolved" != "$root" && "$resolved" != "$root/"* ]]; then
         echo "ERROR: Path leaves the selected workspace $root: $path" >&2
         return 1
@@ -423,6 +433,12 @@ get_feature_paths() {
         feature_dir="$SPECIFY_FEATURE_DIRECTORY"
         if [[ -n "$project_record" ]]; then
             feature_dir=$(workspace_path "$workspace_root" "$feature_dir") || return 1
+            # Only a no-persist caller (the specify pre-creation check) may name a
+            # feature that does not exist yet, so a missing feature is never saved.
+            if [[ ! -d "$feature_dir" ]] && { [[ -e "$feature_dir" ]] || may_persist_feature_selection automatic "$no_persist"; }; then
+                echo "ERROR: Selected feature directory does not exist: $feature_dir" >&2
+                return 1
+            fi
         else
             [[ "$feature_dir" != /* ]] && feature_dir="$workspace_root/$feature_dir"
         fi
@@ -1056,8 +1072,13 @@ except Exception as exc:
 
                 local candidate=""
                 if [ -n "$manifest_file" ]; then
-                    case "$manifest_file" in
-                        /*|*../*) manifest_file="" ;;
+                    case "/$manifest_file/" in
+                        //*|*/../*)
+                            if [ -f "$repo_root/.specify/workspace.json" ]; then
+                                echo "ERROR: Invalid template path in workspace $repo_root: $manifest_file" >&2
+                                return 2
+                            fi
+                            manifest_file="" ;;
                     esac
                 fi
                 if [ -n "$manifest_file" ]; then

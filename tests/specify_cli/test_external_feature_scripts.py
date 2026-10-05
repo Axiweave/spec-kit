@@ -686,19 +686,19 @@ def test_bash_policy_without_a_json_parser_refuses_without_writes(tmp_path, scri
     assert _snapshot(repo) == before
 
 
-@pytest.mark.skipif(not HAS_POWERSHELL, reason="no PowerShell available")
+@pytest.mark.parametrize("policy", ["automatic", "context"])
 @pytest.mark.parametrize("precreation_flag", [None, "1", "true"])
-def test_powershell_context_missing_feature_requires_explicit_precreation_flag(
-    tmp_path, script_env, precreation_flag,
+def test_external_missing_feature_requires_explicit_precreation_flag(
+    tmp_path, variant, script_env, policy, precreation_flag,
 ):
-    """Invariant: context mode does not grant permission to create a missing feature."""
-    project = _make_project(tmp_path, True, "context")
+    """Invariant: no selection mode grants permission to create a missing feature."""
+    project = _make_project(tmp_path, True, policy)
     repo, workspace, _ = project
     script_env["SPECIFY_FEATURE_DIRECTORY"] = "specs/999-missing"
     before = [_snapshot(root) for root in _roots(tmp_path, project)]
     if precreation_flag is not None:
         script_env["SPECIFY_FEATURE_NO_PERSIST"] = precreation_flag
-    result = _invoke("powershell", workspace, repo, script_env, "setup-plan", "--json")
+    result = _invoke(variant, workspace, repo, script_env, "setup-plan", "--json")
     if precreation_flag is not None:
         data = _success(result)
         assert Path(data["FEATURE_DIR"]) == workspace / "specs/999-missing"
@@ -707,3 +707,90 @@ def test_powershell_context_missing_feature_requires_explicit_precreation_flag(
         assert result.returncode != 0
         assert "Selected feature directory does not exist" in result.stderr
         assert [_snapshot(root) for root in _roots(tmp_path, project)] == before
+
+
+@pytest.mark.parametrize("script", ["setup-plan", "check-prerequisites"])
+def test_missing_feature_override_keeps_the_saved_selection(tmp_path, variant, script_env, script):
+    """A rejected override never replaces the saved feature with a missing directory."""
+    project = _make_project(tmp_path, True)
+    repo, workspace, _ = project
+    _select(project)
+    script_env["SPECIFY_FEATURE_DIRECTORY"] = "specs/999-missing"
+    before = [_snapshot(root) for root in _roots(tmp_path, project)]
+    result = _invoke(variant, workspace, repo, script_env, script, "--json")
+    assert result.returncode != 0
+    assert "999-missing" in result.stderr
+    assert [_snapshot(root) for root in _roots(tmp_path, project)] == before
+
+
+@pytest.mark.parametrize("target,contained", [
+    ("../../shared/spec.md", True),
+    ("../../shared/missing.md", True),
+    ("../../../outside/spec.md", False),
+], ids=["inside", "dangling-inside", "outside"])
+def test_external_file_symlink_is_confined_by_its_target(
+    tmp_path, variant, script_env, target, contained,
+):
+    project = _make_project(tmp_path, True)
+    repo, workspace, _ = project
+    feature = _select(project)
+    for shared in (workspace / "shared/spec.md", tmp_path / "outside/spec.md"):
+        shared.parent.mkdir()
+        shared.write_text("# Shared specification\n", encoding="utf-8")
+    (feature / "spec.md").unlink()
+    try:
+        (feature / "spec.md").symlink_to(target)
+    except OSError:
+        pytest.skip("Symlinks are not available")
+    result = _invoke(
+        variant, workspace, repo, script_env, "check-prerequisites", "--json", "--paths-only",
+    )
+    if contained:
+        assert Path(_success(result)["FEATURE_SPEC"]) == feature / "spec.md"
+    else:
+        assert result.returncode != 0
+        assert result.stdout == ""
+
+
+@pytest.mark.parametrize("selection", ["cwd", "init-dir"])
+def test_repository_with_project_record_may_also_hold_workspace_identity(
+    tmp_path, variant, script_env, selection,
+):
+    """Only a workspace without a project record is refused as the code repository."""
+    project = _make_project(tmp_path, True)
+    repo, workspace, _ = project
+    feature = _select(project)
+    (repo / ".specify/workspace.json").write_bytes((workspace / ".specify/workspace.json").read_bytes())
+    cwd = repo
+    if selection == "init-dir":
+        script_env["SPECIFY_INIT_DIR"] = str(repo)
+        cwd = tmp_path
+    data = _success(_invoke(
+        variant, workspace, cwd, script_env, "check-prerequisites", "--json", "--paths-only",
+    ))
+    assert Path(data["REPO_ROOT"]) == repo
+    assert Path(data["FEATURE_DIR"]) == feature
+
+
+@pytest.mark.parametrize("file_value", ["../outside.md", "/nonexistent/plan-template.md", "..", "templates/.."])
+def test_unsafe_preset_template_path_fails_only_in_external_storage(
+    project, variant, script_env, file_value,
+):
+    """External workspaces refuse unsafe manifest paths. Local projects skip that layer."""
+    if variant == "powershell" and not file_value.startswith(("/", "../")):
+        pytest.skip("PowerShell rejects only '..' followed by a separator")
+    repo, workspace, record = project
+    install_composition_stack(workspace, "plan-template", "# Core plan\n")
+    manifest = workspace / ".specify/presets/wrap-pack/preset.yml"
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8").replace(
+            "file: templates/plan-template.md", f"file: {json.dumps(file_value)}",
+        ),
+        encoding="utf-8",
+    )
+    result = _invoke(variant, workspace, repo, script_env, "resolve-template", "plan-template", "--json")
+    if record is None:
+        assert "## Wrapper" not in _success(result)["TEMPLATE_CONTENT"]
+    else:
+        assert result.returncode != 0
+        assert "Invalid template path" in result.stderr
