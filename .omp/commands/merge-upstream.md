@@ -16,7 +16,15 @@ Invocation authorizes a local merge commit after verification. Do not push.
 Never reset, discard, automatically stash, or commit unrelated user work.
 
 7. Fetch upstream release tags: `git fetch <upstream> 'refs/tags/v*:refs/tags/v*'`.
-8. Find the latest upstream release already in `HEAD`: `git describe --tags --abbrev=0 --match 'v[0-9]*' HEAD`.
+8. Find the newest upstream release already in `HEAD`. Upstream tags a version-bump commit beside `main`,
+   so before the first tag merge `git describe` finds only old tags. Accept a tag when it or its parent is in `HEAD`:
+
+   ```bash
+   for t in $(git tag -l 'v[0-9]*' --sort=-v:refname); do
+     git merge-base --is-ancestor "$t^" HEAD && { echo "$t"; break; }
+   done
+   ```
+
 9. Before merging, force the local tag `u<version>` to the current `HEAD`.
 
    ```bash
