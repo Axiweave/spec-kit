@@ -596,9 +596,9 @@ if (-not $DryRun) {
     $env:SPECIFY_FEATURE = $branchName
 }
 
-# Build the PowerShell-idiomatic persist hint, mirroring the core
-# create-new-feature.ps1 twin (and the bash/python twins of this script), which
-# all emit "# To persist in your shell: ...".
+# Build the PowerShell-idiomatic label hint. It matches the label line of the
+# core create-new-feature.ps1 hint. This script creates no feature directory,
+# so it prints no "# To select this feature:" line.
 $quotedBranchName = "'" + $branchName.Replace("'", "''") + "'"
 $featureAssignment = '$env:SPECIFY_FEATURE = ' + $quotedBranchName
 
@@ -618,6 +618,6 @@ if ($Json) {
     Write-Output "BRANCH_NAME: $branchName"
     Write-Output "FEATURE_NUM: $featureNum"
     if (-not $DryRun) {
-        Write-Output "# To persist in your shell: $featureAssignment"
+        Write-Output "# Optional label:         $featureAssignment"
     }
 }

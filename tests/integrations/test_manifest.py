@@ -2,11 +2,13 @@
 
 import hashlib
 import json
+import subprocess
 import sys
+import time
 
 import pytest
 
-from specify_cli.integrations.manifest import IntegrationManifest, _sha256
+from specify_cli.integrations.manifest import IntegrationManifest, sha256_file, append_gitignore
 
 
 class TestManifestRecordFile:
@@ -31,7 +33,7 @@ class TestManifestRecordFile:
         f.write_text("content", encoding="utf-8")
         m = IntegrationManifest("test", tmp_path)
         m.record_existing("existing.txt")
-        assert m.files["existing.txt"] == _sha256(f)
+        assert m.files["existing.txt"] == sha256_file(f)
 
 
 class TestManifestRecordExistingErrors:
@@ -345,6 +347,13 @@ class TestManifestPersistence:
         m.save()
         assert m._installed_at == first_ts
 
+    def test_installed_at_keyword_survives_save(self, tmp_path):
+        stamp = "2020-01-01T00:00:00+00:00"
+        IntegrationManifest("test", tmp_path, installed_at=stamp).save()
+        assert IntegrationManifest.load("test", tmp_path)._installed_at == stamp
+        IntegrationManifest("other", tmp_path, installed_at=None).save()
+        assert IntegrationManifest.load("other", tmp_path)._installed_at not in ("", stamp)
+
 
 class TestManifestLoadValidation:
     def test_load_non_dict_raises(self, tmp_path):
@@ -427,7 +436,7 @@ class TestManifestRecoveredFiles:
         assert m.is_recovered("f.txt") is True
         assert m.recovered_files == {"f.txt"}
         # File still hashed normally so check_modified/uninstall keep working
-        assert m.files["f.txt"] == _sha256(tmp_path / "f.txt")
+        assert m.files["f.txt"] == sha256_file(tmp_path / "f.txt")
 
     def test_recovered_files_round_trips_through_save_load(self, tmp_path):
         (tmp_path / "a.txt").write_text("aaa", encoding="utf-8")
@@ -463,7 +472,7 @@ class TestManifestRecoveredFiles:
         # False because the stored keys are relative POSIX strings. Round-7
         # made this explicit: ``is_recovered`` now rejects absolute paths
         # up front via a lexical ``rel.is_absolute()`` guard and returns
-        # False without calling ``_validate_rel_path`` at all — matching
+        # False without calling ``validate_rel_path`` at all — matching
         # ``record_existing``'s canonical-key guard so the two methods
         # agree on which inputs can ever be stored keys.
         (tmp_path / "f.txt").write_text("x", encoding="utf-8")
@@ -478,7 +487,7 @@ class TestManifestRecoveredFiles:
         # Round-7 added the same lexical ``".." in rel.parts`` guard to
         # ``is_recovered`` that ``record_existing`` already enforces, so the
         # method returns False immediately without reaching
-        # ``_validate_rel_path``. The try/except around ``_validate_rel_path``
+        # ``validate_rel_path``. The try/except around ``validate_rel_path``
         # remains as defense-in-depth for paths that pass the lexical guard
         # but still resolve outside the project root via a symlinked
         # ancestor.
@@ -557,7 +566,7 @@ class TestManifestUnreadableFile:
             raise PermissionError("unreadable")
 
         monkeypatch.setattr(
-            "specify_cli.integrations.manifest._sha256", raise_perm
+            "specify_cli.integrations.manifest.sha256_file", raise_perm
         )
         # Before the fix this raised PermissionError.
         assert m.check_modified() == ["sub/f.md"]
@@ -569,10 +578,61 @@ class TestManifestUnreadableFile:
             raise PermissionError("unreadable")
 
         monkeypatch.setattr(
-            "specify_cli.integrations.manifest._sha256", raise_perm
+            "specify_cli.integrations.manifest.sha256_file", raise_perm
         )
         removed, skipped = m.uninstall(force=False)
         # Can't verify ownership => preserve, don't crash and don't delete.
         assert removed == []
         assert (tmp_path / "sub" / "f.md") in skipped
         assert (tmp_path / "sub" / "f.md").exists()
+
+
+class TestAppendGitignore:
+    def test_missing_file_gets_only_the_line(self, tmp_path):
+        assert append_gitignore(tmp_path, ".specify/checkout.json") is True
+        assert (tmp_path / ".gitignore").read_text(encoding="utf-8") == "/.specify/checkout.json\n"
+
+    def test_file_without_final_newline_keeps_its_last_line(self, tmp_path):
+        (tmp_path / ".gitignore").write_text("node_modules", encoding="utf-8")
+        assert append_gitignore(tmp_path, "my dir/x") is True
+        assert (tmp_path / ".gitignore").read_text(encoding="utf-8") == "node_modules\n/my\\ dir/x\n"
+
+    def test_present_line_is_not_written(self, tmp_path):
+        ignore = tmp_path / ".gitignore"
+        ignore.write_bytes(b"keep\r\n/.specify/checkout.json\r\nlast")
+        assert append_gitignore(tmp_path, ".specify/checkout.json") is False
+        assert ignore.read_bytes() == b"keep\r\n/.specify/checkout.json\r\nlast"
+
+    def test_refuses_symlinked_file(self, tmp_path):
+        target = tmp_path / "shared.ignore"
+        target.write_text("keep\n", encoding="utf-8")
+        (tmp_path / ".gitignore").symlink_to(target)
+        with pytest.raises(ValueError, match="symlinked"):
+            append_gitignore(tmp_path, ".specify/checkout.json")
+        assert target.read_text(encoding="utf-8") == "keep\n"
+
+    def test_concurrent_processes_lose_no_line(self, tmp_path):
+        root = tmp_path / "checkout"
+        root.mkdir()
+        (root / ".gitignore").write_text("keep\n", encoding="utf-8")
+        script = (
+            "import pathlib, sys, time\n"
+            "from specify_cli.integrations.manifest import append_gitignore\n"
+            "root, flags, own = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3]\n"
+            "(flags / own).touch()\n"
+            "while not (flags / 'go').exists():\n"
+            "    time.sleep(0.001)\n"
+            "append_gitignore(root, '.specify/checkout.json')\n"
+            "append_gitignore(root, own)\n"
+        )
+        names = [f"own-{index}" for index in range(8)]
+        workers = [
+            subprocess.Popen([sys.executable, "-c", script, str(root), str(tmp_path), name])
+            for name in names
+        ]
+        while not all((tmp_path / name).exists() for name in names):
+            time.sleep(0.01)
+        (tmp_path / "go").touch()
+        assert all(worker.wait(timeout=60) == 0 for worker in workers)
+        lines = set((root / ".gitignore").read_text(encoding="utf-8").splitlines())
+        assert {"keep", "/.specify/checkout.json", *(f"/{name}" for name in names)} <= lines

@@ -17,7 +17,7 @@ class TestOverlayPathTraversal:
     """Overlay CLI must stay inside the overlay directory."""
 
     def test_overlay_enable_rejects_traversal(self, project_dir, monkeypatch):
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         _write_workflow(
             project_dir,
             "wf",

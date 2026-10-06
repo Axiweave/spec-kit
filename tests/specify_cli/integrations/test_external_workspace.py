@@ -87,7 +87,7 @@ def test_external_catalog_add_writes_workspace_config(external_project):
     assert result.exit_code == 0, result.output
 
     assert (workspace / ".specify/integration-catalogs.yml").is_file()
-    assert sorted(p.name for p in (repo / ".specify").iterdir()) == ["project.json"]
+    assert sorted(p.name for p in (repo / ".specify").iterdir()) == ["checkout.json", "project.json"]
 
     listed = _run_in_project(repo, ["integration", "catalog", "list"])
     assert listed.exit_code == 0, listed.output

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import typer
 
-from ..._console import console
+from ...terminal import console
 from . import catalog_app
 
 
@@ -14,9 +14,9 @@ def integration_catalog_remove(
 ):
     """Remove an integration catalog source by 0-based index."""
     from .. import IntegrationCatalog, IntegrationCatalogError
-    from ... import _require_specify_project
+    from ... import require_specify_project
 
-    project_root = _require_specify_project()
+    project_root = require_specify_project()
     catalog = IntegrationCatalog(project_root)
 
     try:

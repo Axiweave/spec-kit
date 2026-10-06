@@ -103,7 +103,7 @@ class TestIntegrationUpgradeDetailed:
 
         import specify_cli
 
-        real_install_shared_infra = specify_cli._install_shared_infra
+        real_install_shared_infra = specify_cli.install_shared_infra_for_project
         calls = {"count": 0}
 
         def fail_refresh(*args, **kwargs):
@@ -112,7 +112,7 @@ class TestIntegrationUpgradeDetailed:
                 raise ValueError("refuse refresh")
             return real_install_shared_infra(*args, **kwargs)
 
-        monkeypatch.setattr(specify_cli, "_install_shared_infra", fail_refresh)
+        monkeypatch.setattr(specify_cli, "install_shared_infra_for_project", fail_refresh)
 
         result = _run_in_project(project, [
             "integration", "upgrade", "claude",
@@ -1289,7 +1289,7 @@ class TestIntegrationUpgradeDetailed:
 
         A preset overriding a core command that renders as a skill
         (e.g. ``speckit.tasks`` for ``codex``/``claude``) is rewritten by
-        ``_register_presets_for_agent`` *after* ``new_manifest.save()`` during
+        ``register_presets_for_agent`` *after* ``new_manifest.save()`` during
         ``integration upgrade --force``. Without a post-registration resync,
         the manifest keeps the base template's hash for that skill file, so
         ``integration status`` immediately reports it as modified and a
@@ -1346,7 +1346,7 @@ class TestIntegrationUpgradeDetailed:
         actual_hash = hashlib.sha256(skill_file.read_bytes()).hexdigest()
         assert recorded_hash == actual_hash, (
             "manifest hash for the preset-overridden skill must match the "
-            "file `_register_presets_for_agent` just wrote"
+            "file `register_presets_for_agent` just wrote"
         )
 
         status_result = _run_in_project(project, ["integration", "status"])
@@ -1364,7 +1364,7 @@ class TestIntegrationUpgradeDetailed:
         with a stale hash and no signal that the manifest wasn't fully
         synchronized. Rehashing must also continue for the remaining files.
         """
-        from specify_cli.integrations._helpers import (
+        from specify_cli.integrations.helpers import (
             _resync_manifest_after_registration,
         )
         from specify_cli.integrations.manifest import IntegrationManifest
@@ -1424,7 +1424,7 @@ class TestIntegrationUpgradeDetailed:
         inaccessible path), it must not jump past the remaining files in
         ``new_manifest.files`` and leave their hashes stale.
         """
-        from specify_cli.integrations._helpers import (
+        from specify_cli.integrations.helpers import (
             _resync_manifest_after_registration,
         )
         from specify_cli.integrations.manifest import IntegrationManifest
@@ -1719,3 +1719,40 @@ class TestIntegrationUpgradeBasic:
             os.chdir(old)
         assert result.exit_code == 0
         assert "Nothing to upgrade" in result.output
+
+
+def test_no_change_upgrade_keeps_manifest_bytes_and_clean_workspace(tmp_path, monkeypatch):
+    import subprocess
+    from typer.testing import CliRunner
+
+    for key in tuple(os.environ):
+        if key.startswith(("SPECIFY_", "GIT_")):
+            monkeypatch.delenv(key)
+    for key in ("HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME"):
+        monkeypatch.setenv(key, str(tmp_path / "home" / key))
+    for role in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{role}_NAME", "t")
+        monkeypatch.setenv(f"GIT_{role}_EMAIL", "t@t")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    project, workspace = tmp_path / "code", tmp_path / "ws"
+    project.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=project, check=True)
+    monkeypatch.chdir(project)
+    runner = CliRunner()
+    result = runner.invoke(app, [
+        "init", "--here", "--force", "--integration", "claude", "--script", "sh",
+        "--ignore-agent-tools", "--non-interactive", "--workspace", str(workspace),
+    ])
+    assert result.exit_code == 0, result.output
+    git = ["git", "-C", str(workspace), "-c", "commit.gpgsign=false"]
+    subprocess.run([*git, "add", "-A"], check=True)
+    subprocess.run([*git, "commit", "-qm", "init", "--allow-empty"], check=True)
+    manifest = workspace / ".specify/integrations/claude.manifest.json"
+    before = manifest.read_bytes()
+
+    result = runner.invoke(app, ["integration", "upgrade", "claude"])
+
+    assert result.exit_code == 0, result.output
+    assert manifest.read_bytes() == before
+    status = subprocess.run([*git, "status", "--porcelain"], capture_output=True, text=True, check=True)
+    assert status.stdout == ""

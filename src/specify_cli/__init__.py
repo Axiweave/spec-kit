@@ -36,7 +36,7 @@ from .shared_infra import (
     refresh_shared_templates as _refresh_shared_templates_impl,
 )
 
-from ._console import (
+from .terminal import (
     BANNER as BANNER,
     TAGLINE as TAGLINE,
     BannerGroup,
@@ -47,12 +47,12 @@ from ._console import (
     select_with_arrows as select_with_arrows,
     show_banner,
 )
-from ._assets import (
+from .assets import (
     locate_bundled_extension as locate_bundled_extension,
     _locate_bundled_preset as _locate_bundled_preset,
     _locate_bundled_workflow as _locate_bundled_workflow,
-    _locate_core_pack,
-    _repo_root,
+    locate_core_pack,
+    source_repo_root,
     get_speckit_version as get_speckit_version,
 )
 from ._utils import (
@@ -77,7 +77,7 @@ from ._agent_config import (
     SCRIPT_TYPE_CHOICES as SCRIPT_TYPE_CHOICES,
     resolve_default_init_integration as resolve_default_init_integration,
 )
-from ._init_options import (
+from .init_options import (
     INIT_OPTIONS_FILE as INIT_OPTIONS_FILE,
     is_ai_skills_enabled as _is_ai_skills_enabled,
     load_init_options as load_init_options,
@@ -119,8 +119,8 @@ def _refresh_shared_templates(
     _refresh_shared_templates_impl(
         project_path,
         version=get_speckit_version(),
-        core_pack=_locate_core_pack(),
-        repo_root=_repo_root(),
+        core_pack=locate_core_pack(),
+        repo_root=source_repo_root(),
         console=console,
         invoke_separator=invoke_separator,
         invoke_prefix=invoke_prefix,
@@ -128,7 +128,7 @@ def _refresh_shared_templates(
     )
 
 
-def _install_shared_infra(
+def install_shared_infra_for_project(
     project_path: Path,
     script_type: str,
     tracker: StepTracker | None = None,
@@ -173,8 +173,8 @@ def _install_shared_infra(
         project_path,
         script_type,
         version=get_speckit_version(),
-        core_pack=_locate_core_pack(),
-        repo_root=_repo_root(),
+        core_pack=locate_core_pack(),
+        repo_root=source_repo_root(),
         console=console,
         force=force,
         invoke_separator=invoke_separator,
@@ -184,7 +184,7 @@ def _install_shared_infra(
     )
 
 
-def _install_shared_infra_or_exit(
+def install_shared_infra_or_exit(
     project_path: Path,
     script_type: str,
     tracker: StepTracker | None = None,
@@ -195,7 +195,7 @@ def _install_shared_infra_or_exit(
     refresh_hint: str | None = None,
 ) -> bool:
     try:
-        return _install_shared_infra(
+        return install_shared_infra_for_project(
             project_path,
             script_type,
             tracker=tracker,
@@ -310,7 +310,7 @@ def resolve_active_skills_dir(project_root: Path) -> Path | None:
             but is not a directory.
         OSError: If the directory cannot be created (e.g. permission denied).
     """
-    from .shared_infra import _ensure_safe_shared_directory
+    from .shared_infra import ensure_safe_shared_directory
 
     opts = load_init_options(project_root)
     if not isinstance(opts, dict):
@@ -331,14 +331,14 @@ def resolve_active_skills_dir(project_root: Path) -> Path | None:
         # use the native skills directory only if it already exists.
         if not skills_dir.is_dir():
             return None
-        _ensure_safe_shared_directory(
+        ensure_safe_shared_directory(
             project_root, skills_dir,
             create=False, context="agent skills directory",
         )
         return skills_dir
 
     # ai_skills is boolean True: create the directory safely.
-    _ensure_safe_shared_directory(
+    ensure_safe_shared_directory(
         project_root, skills_dir, context="agent skills directory",
     )
     return skills_dir
@@ -358,7 +358,7 @@ def _cli_phase_label(phase: str, target_kind: str, target: str | None = None) ->
     return label
 
 
-def _print_cli_warning(
+def print_cli_warning(
     phase: str,
     target_kind: str,
     target: str | None,
@@ -405,7 +405,7 @@ version = _command_version.version
 
 app.add_typer(_self_app, name="self")
 
-from .project._commands import register as _register_project_cmds  # noqa: E402
+from .project import register as _register_project_cmds  # noqa: E402
 _register_project_cmds(app)
 
 from .configs._commands import register as _register_config_cmds  # noqa: E402
@@ -431,14 +431,14 @@ from .events import register as _register_event_cmds  # noqa: E402
 _register_event_cmds(app)
 
 # Re-export selected helpers to preserve the public import surface.
-from .integrations._helpers import (  # noqa: E402
-    _clear_init_options_for_integration as _clear_init_options_for_integration,
-    _update_init_options_for_integration as _update_init_options_for_integration,
+from .integrations.helpers import (  # noqa: E402
+    clear_init_options_for_integration as clear_init_options_for_integration,
+    update_init_options_for_integration as update_init_options_for_integration,
 )
 from ._project import _resolve_init_dir_override as _resolve_init_dir_override  # noqa: E402
 
 
-def _require_specify_project() -> Path:
+def require_specify_project() -> Path:
     """Return the invoking repository after validating its selected workspace."""
     from ._project import ProjectResolutionError, resolve_specify_project_root
 

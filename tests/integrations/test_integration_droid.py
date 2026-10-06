@@ -48,7 +48,7 @@ class TestDroidIntegration(SkillsIntegrationTests):
         /speckit-<name>, so is_slash_skills_agent must report True — otherwise
         hook invocations and the init next-steps panel render the dotted
         /speckit.<name> form Droid never registers (mirrors grok/trae/zed/devin)."""
-        from specify_cli._invocation_style import is_slash_skills_agent
+        from specify_cli.invocation_style import is_slash_skills_agent
 
         # True in BOTH the enabled and disabled cases: Droid is *always* slash,
         # not conditional. The disabled case is what distinguishes an

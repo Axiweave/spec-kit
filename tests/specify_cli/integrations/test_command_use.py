@@ -328,7 +328,7 @@ class TestIntegrationUse:
             def fail_refresh(*args, **kwargs):
                 raise ValueError("refuse refresh")
 
-            monkeypatch.setattr(specify_cli, "_install_shared_infra", fail_refresh)
+            monkeypatch.setattr(specify_cli, "install_shared_infra_for_project", fail_refresh)
 
             result = runner.invoke(app, [
                 "integration", "use", "codex",

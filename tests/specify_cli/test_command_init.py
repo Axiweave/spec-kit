@@ -311,7 +311,7 @@ def test_external_init_uses_exact_workspace_offline(
     identity = json.loads((workspace / ".specify/workspace.json").read_text(encoding="utf-8"))
     assert identity["project_id"] == project.project_id
     assert not (workspace / ".specify/project.json").exists()
-    assert {path.name for path in (repository / ".specify").iterdir()} == {"project.json"}
+    assert {path.name for path in (repository / ".specify").iterdir()} == {"checkout.json", "project.json"}
     assert {path.name for path in repository.iterdir()} <= {".specify", ".agent", ".gitignore"}
     assert not (repository / "specs").exists()
     for command in ("specify", "plan", "tasks"):
@@ -348,7 +348,7 @@ def test_init_explicit_local_keeps_assets_in_repository(
     assert (repository / ".agent/commands/speckit.specify.md").is_file()
     assert not (repository / ".specify/project.json").exists()
     assert not (isolated_init_home / "speckit-specs").exists()
-    assert not list(isolated_init_home.rglob("projects/*.json"))
+    assert not (repository / ".specify/checkout.json").exists()
 
 
 _TEAM_FILES = (
@@ -521,6 +521,39 @@ def test_init_rejects_local_storage_with_workspace_before_changes(tmp_path: Path
     } == before
 
 
+@pytest.mark.parametrize(("option", "advice"), [
+    ("--storage", "This project uses external storage. Use specify project move --to-local to change storage."),
+    ("--workspace", "--workspace cannot replace an existing project workspace. Use specify project link PATH to relink it."),
+])
+def test_init_refusal_on_external_project_names_a_command_for_its_state(tmp_path: Path, option: str, advice: str):
+    workspace = tmp_path / "workspace"
+    created = _init(tmp_path, "project", "--workspace", str(workspace), "--no-workspace-git")
+    assert created.exit_code == 0, _strip(created.output)
+    repository = tmp_path / "project"
+    before = _tree(repository), _tree(workspace)
+    value = "local" if option == "--storage" else str(tmp_path / "other-workspace")
+
+    result = _init(repository, ".", "--force", option, value)
+
+    assert result.exit_code == 1
+    assert advice in " ".join(_strip(result.output).split())
+    assert (_tree(repository), _tree(workspace)) == before
+    assert not (tmp_path / "other-workspace").exists()
+
+
+def test_init_refusal_on_local_project_names_move_with_a_workspace(tmp_path: Path):
+    assert _init(tmp_path, "project", "--storage", "local").exit_code == 0
+    repository, workspace = tmp_path / "project", tmp_path / "workspace"
+    before = _tree(repository)
+
+    result = _init(repository, ".", "--force", "--workspace", str(workspace))
+
+    assert result.exit_code == 1
+    assert "Use specify project move WORKSPACE instead of init." in " ".join(_strip(result.output).split())
+    assert _tree(repository) == before
+    assert not workspace.exists()
+
+
 def test_external_init_canonicalizes_explicit_workspace_ancestor(tmp_path: Path):
     real = tmp_path / "real"
     real.mkdir()
@@ -531,7 +564,7 @@ def test_external_init_canonicalizes_explicit_workspace_ancestor(tmp_path: Path)
     project = resolve_project(tmp_path / "project")
     assert project.workspace_root == real / "workspace"
     assert (real / "workspace/.specify/workspace.json").is_file()
-    assert {p.name for p in (tmp_path / "project/.specify").iterdir()} == {"project.json"}
+    assert {p.name for p in (tmp_path / "project/.specify").iterdir()} == {"checkout.json", "project.json"}
 
 
 @pytest.fixture
@@ -588,7 +621,7 @@ def test_saved_defaults_create_isolated_same_name_projects(
         locator = json.loads((project.repository_root / ".specify/project.json").read_text(encoding="utf-8"))
         identity = json.loads((project.workspace_root / ".specify/workspace.json").read_text(encoding="utf-8"))
         assert locator["project_id"] == identity["project_id"] == project.project_id
-        assert {path.name for path in (project.repository_root / ".specify").iterdir()} == {"project.json"}
+        assert {path.name for path in (project.repository_root / ".specify").iterdir()} == {"checkout.json", "project.json"}
         assert not (project.workspace_root / ".specify/project.json").exists()
         (project.workspace_root / ".specify/memory/constitution.md").write_text(
             f"{name} project constitution\n", encoding="utf-8"
@@ -761,6 +794,36 @@ def test_noninteractive_init_uses_fallbacks_without_personal_choices(
         "script": "ps" if os.name == "nt" else "sh",
     }
     assert not (project.repository_root / ".specify/project.json").exists()
+
+
+@pytest.mark.parametrize(("storage", "flag", "personal", "expected"), [
+    ("external", None, None, "timestamp"),
+    ("local", None, None, "sequential"),
+    ("external", "sequential", None, "sequential"),
+    ("local", "timestamp", None, "timestamp"),
+    ("external", None, "sequential", "sequential"),
+    ("local", None, "timestamp", "timestamp"),
+    ("external", "timestamp", "sequential", "timestamp"),
+], ids=["external", "local", "flag-external", "flag-local", "personal-external", "personal-local", "flag-over-personal"])
+def test_new_project_numbering_default_follows_storage_unless_chosen(
+    tmp_path: Path, saved_init_defaults: Path, storage: str, flag: str | None, personal: str | None, expected: str,
+):
+    saved_init_defaults.write_text(json.dumps({"feature_numbering": personal} if personal else {}), encoding="utf-8")
+    options = ["--storage", storage, *(["--feature-numbering", flag] if flag else [])]
+    result = _init(tmp_path, "project", *options)
+    assert result.exit_code == 0, _strip(result.output)
+    project = resolve_project(tmp_path / "project")
+    assert project.storage == storage
+    assert _init_choices(project.workspace_root)["feature_numbering"] == expected
+
+
+def test_reinit_keeps_saved_sequential_numbering_of_external_project(tmp_path: Path):
+    first = _init(tmp_path, "project", "--storage", "external", "--feature-numbering", "sequential")
+    assert first.exit_code == 0, _strip(first.output)
+    again = _init(tmp_path, "project", "--force")
+    assert again.exit_code == 0, _strip(again.output)
+    project = resolve_project(tmp_path / "project")
+    assert _init_choices(project.workspace_root)["feature_numbering"] == "sequential"
 
 
 @pytest.mark.parametrize("storage", ["local", "external"])
@@ -957,7 +1020,7 @@ def test_storage_claim_preserves_unrelated_content(tmp_path: Path, condition: st
         assert notes.read_bytes() == b"Unrelated content\n"
         assert not (workspace / ".specify/workspace.json").exists()
     assert not (project.repository_root / ".specify/project.json").exists()
-    assert not storage.project_record_path(project.project_id).exists()
+    assert not (project.repository_root / ".specify/checkout.json").exists()
 
 
 @pytest.mark.parametrize("existing_workspace", [False, True])
@@ -996,7 +1059,7 @@ def test_concurrent_storage_claims_preserve_one_owner(tmp_path: Path, existing_w
     assert resolve_project(winner.repository_root) == winner
     loser = next(project for project in projects if project != winner)
     assert not (loser.repository_root / ".specify/project.json").exists()
-    assert not storage.project_record_path(loser.project_id).exists()
+    assert not (loser.repository_root / ".specify/checkout.json").exists()
     assert (workspace / "notes.txt").read_bytes() == b"Unrelated content\n"
     for project in projects:
         assert (project.repository_root / "source.txt").read_bytes() == b"Existing source\n"
@@ -1033,7 +1096,7 @@ def test_init_reports_storage_claim_write_failures(
     assert "Traceback" not in result.output
     assert source.read_bytes() == b"Existing source\n"
     assert not (repository / ".specify/project.json").exists()
-    assert not list(tmp_path.rglob("projects/*.json"))
+    assert not (repository / ".specify/checkout.json").exists()
 
 
 @pytest.mark.parametrize("storage", ["local", "external"])
@@ -1060,7 +1123,7 @@ def test_init_addons_keep_native_commands_in_repository(
     assert (project.workspace_root / ".specify" / f"{kind}s" / identifier).is_dir()
     if storage == "external":
         assert not (project.workspace_root / ".omp").exists()
-        assert {path.name for path in (repository / ".specify").iterdir()} == {"project.json"}
+        assert {path.name for path in (repository / ".specify").iterdir()} == {"checkout.json", "project.json"}
 
 
 def test_reinit_explicit_target_does_not_use_other_project_override(tmp_path, monkeypatch):
@@ -1419,7 +1482,8 @@ def test_concurrent_external_init_creates_exactly_one_workspace_history(
 
     assert (winner_repo / ".specify/project.json").is_file()
     assert not (loser_repo / ".specify/project.json").exists()
-    assert len(list(isolated_init_home.rglob("projects/*.json"))) == 1
+    assert (winner_repo / ".specify/checkout.json").is_file()
+    assert not (loser_repo / ".specify/checkout.json").exists()
     assert (loser_repo / "source.txt").read_bytes() == b"Existing source\n"
 
     assert subprocess.run(

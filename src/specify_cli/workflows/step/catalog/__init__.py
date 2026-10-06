@@ -7,7 +7,7 @@ from typing import Any
 
 import typer
 
-from ...._download_security import MAX_JSON_CATALOG_BYTES as MAX_JSON_CATALOG_BYTES
+from ....download_security import MAX_JSON_CATALOG_BYTES as MAX_JSON_CATALOG_BYTES
 
 catalog_app = typer.Typer(
     name="catalog",

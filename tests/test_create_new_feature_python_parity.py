@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shlex
 import shutil
 import subprocess
 import sys
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -1793,3 +1798,253 @@ def test_bash_truncation_uses_bounded_byte_checks(repo: Path, tmp_path: Path) ->
     assert result.returncode == 0, result.stderr
     assert json_stdout(result)["BRANCH_NAME"] == "001-" + "𠀀" * 60
     assert count_file.read_text(encoding="utf-8").count(".") <= 16
+
+
+ALL_VARIANTS = [
+    pytest.param("bash", marks=requires_bash),
+    "python",
+    pytest.param(
+        "powershell",
+        marks=pytest.mark.skipif(not HAS_POWERSHELL, reason="no PowerShell available"),
+    ),
+]
+
+
+def _variant_cmd(variant: str, repo: Path, *args: str) -> list[str]:
+    """Build a create command from POSIX-style flags for any variant."""
+    if variant == "powershell":
+        flags = {
+            "--json": "-Json",
+            "--dry-run": "-DryRun",
+            "--timestamp": "-Timestamp",
+            "--short-name": "-ShortName",
+            "--number": "-Number",
+        }
+        return ps_cmd(repo, SCRIPT, *(flags.get(arg, arg) for arg in args))
+    return (bash_cmd if variant == "bash" else py_cmd)(repo, SCRIPT, *args)
+
+
+def _in_process(monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
+    """Run the Python helper in this process against *repo* with fast waits."""
+    for key in list(os.environ):
+        if key.startswith("SPECIFY_"):
+            monkeypatch.delenv(key)
+    monkeypatch.setenv("SPECIFY_INIT_DIR", str(repo))
+    monkeypatch.setenv("SPECIFY_FEATURE_NO_PERSIST", "1")
+    monkeypatch.setattr(
+        create_new_feature,
+        "time",
+        SimpleNamespace(sleep=lambda seconds: time.sleep(seconds / 10)),
+    )
+
+
+@pytest.mark.parametrize("variant", ALL_VARIANTS)
+@pytest.mark.parametrize("scheme", [(), ("--timestamp",)], ids=["sequential", "timestamp"])
+def test_concurrent_runs_reserve_distinct_prefixes(
+    repo: Path, variant: str, scheme: tuple[str, ...]
+) -> None:
+    """Ten rounds of three real processes never share a feature prefix."""
+    env = clean_env()
+    env["SPECIFY_FEATURE_NO_PERSIST"] = "1"
+    created: list[dict[str, str]] = []
+    for round_index in range(10):
+        processes = [
+            subprocess.Popen(
+                _variant_cmd(
+                    variant, repo, "--json", *scheme, "--short-name", f"r{round_index}-p{index}", "x"
+                ),
+                cwd=repo,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+            )
+            for index in range(3)
+        ]
+        for process in processes:
+            stdout, stderr = process.communicate(timeout=120)
+            assert process.returncode == 0, stderr
+            created.append(json.loads(stdout))
+
+    assert len({entry["FEATURE_NUM"] for entry in created}) == 30
+    feature_dirs = sorted((repo / "specs").iterdir())
+    assert [path.name for path in feature_dirs] == sorted(
+        entry["BRANCH_NAME"] for entry in created
+    )
+    assert all((path / "spec.md").is_file() for path in feature_dirs)
+
+
+def test_python_later_claim_loses_even_with_smaller_name(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The later claim of a prefix loses, whatever the name order.
+
+    Run Y picks 008 first, then run X claims 008-zzz and wins before Y claims
+    008-aaa. Y must lose although its name sorts first, and must take 009.
+    """
+    _in_process(monkeypatch, repo)
+    specs = repo / "specs"
+    (specs / "007-old").mkdir(parents=True)
+    real_rescan = create_new_feature._spec_prefix_exists
+    rescans: list[tuple[str, bool, bool]] = []
+
+    def spy_rescan(specs_dir: Path, feature_num: str, own: Path | None = None) -> bool:
+        taken = real_rescan(specs_dir, feature_num, own)
+        assert own is not None
+        rescans.append((own.name, taken, any(own.iterdir())))
+        return taken
+
+    real_resolve = create_new_feature.resolve_template_content
+    ran_x = False
+
+    def run_x_first(name: str, root: Path) -> str:
+        nonlocal ran_x
+        if not ran_x:
+            ran_x = True
+            assert create_new_feature.main(["--json", "--short-name", "zzz", "x"]) == 0
+        return real_resolve(name, root)
+
+    monkeypatch.setattr(create_new_feature, "_spec_prefix_exists", spy_rescan)
+    monkeypatch.setattr(create_new_feature, "resolve_template_content", run_x_first)
+
+    assert create_new_feature.main(["--json", "--short-name", "aaa", "x"]) == 0
+
+    assert sorted(path.name for path in specs.iterdir()) == ["007-old", "008-zzz", "009-aaa"]
+    assert (specs / "008-zzz" / "spec.md").read_text(encoding="utf-8") == TEMPLATE_BODY
+    # The loser rescans an empty directory: it never wrote spec.md.
+    assert rescans == [
+        ("008-zzz", False, False),
+        ("008-aaa", True, False),
+        ("009-aaa", False, False),
+    ]
+
+
+@pytest.mark.parametrize("scheme", [(), ("--timestamp",)], ids=["sequential", "timestamp"])
+def test_python_forced_mutual_loss_ends_with_distinct_prefixes(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, scheme: tuple[str, ...]
+) -> None:
+    """Two runs that both see each other both retry and still end distinct."""
+    _in_process(monkeypatch, repo)
+    specs = repo / "specs"
+    specs.mkdir()
+    real_rescan = create_new_feature._spec_prefix_exists
+    both_picked = threading.Barrier(2, timeout=10)
+    both_claimed = threading.Barrier(2, timeout=10)
+    losses: dict[int, tuple[str, list[str]]] = {}
+
+    def forced_rescan(specs_dir: Path, feature_num: str, own: Path | None = None) -> bool:
+        assert own is not None
+        if threading.get_ident() in losses:
+            return real_rescan(specs_dir, feature_num, own)
+        both_claimed.wait()
+        losses[threading.get_ident()] = (own.name, [path.name for path in own.iterdir()])
+        return True
+
+    real_resolve = create_new_feature.resolve_template_content
+
+    def pick_together(name: str, root: Path) -> str:
+        both_picked.wait()
+        return real_resolve(name, root)
+
+    monkeypatch.setattr(create_new_feature, "_spec_prefix_exists", forced_rescan)
+    monkeypatch.setattr(create_new_feature, "resolve_template_content", pick_together)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        runs = [
+            pool.submit(create_new_feature.main, ["--json", *scheme, "--short-name", name, "x"])
+            for name in ("a", "b")
+        ]
+        assert [run.result(timeout=30) for run in runs] == [0, 0]
+
+    lost_names = sorted(name for name, _ in losses.values())
+    assert [entries for _, entries in losses.values()] == [[], []]
+    if not scheme:
+        assert lost_names == ["001-a", "001-b"]
+    final_names = sorted(path.name for path in specs.iterdir())
+    assert len(final_names) == 2
+    assert len({name.rsplit("-", 1)[0] for name in final_names}) == 2
+    assert all((specs / name / "spec.md").is_file() for name in final_names)
+
+
+def test_python_gives_up_after_twenty_lost_ties(
+    repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _in_process(monkeypatch, repo)
+    rescans: list[str] = []
+
+    def always_taken(specs_dir: Path, feature_num: str, own: Path | None = None) -> bool:
+        assert own is not None
+        rescans.append(own.name)
+        return True
+
+    monkeypatch.setattr(create_new_feature, "_spec_prefix_exists", always_taken)
+
+    assert create_new_feature.main(["--json", "--short-name", "x", "x"]) == 1
+
+    assert len(rescans) == 20
+    assert capsys.readouterr().err.splitlines()[-1] == (
+        "ERROR: Could not reserve a feature directory after 20 tries."
+    )
+    assert list((repo / "specs").iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    "intruder,status", [("005-other", 0), ("005-x", 1)], ids=["sibling", "exact"]
+)
+def test_python_explicit_number_claims_without_tie_rescan(
+    repo: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    intruder: str,
+    status: int,
+) -> None:
+    """A directory that appears after the --number check is not a tie.
+
+    A sibling with the same prefix does not move the run. The exact name fails
+    with the "already exists" error.
+    """
+    _in_process(monkeypatch, repo)
+    specs = repo / "specs"
+    real_resolve = create_new_feature.resolve_template_content
+
+    def intrude(name: str, root: Path) -> str:
+        (specs / intruder).mkdir()
+        return real_resolve(name, root)
+
+    monkeypatch.setattr(create_new_feature, "resolve_template_content", intrude)
+
+    assert create_new_feature.main(["--json", "--number", "5", "--short-name", "x", "x"]) == status
+
+    assert sorted(path.name for path in specs.iterdir()) == sorted({intruder, "005-x"})
+    assert ("already exists" in capsys.readouterr().err) is bool(status)
+
+
+@pytest.mark.parametrize("variant", ALL_VARIANTS)
+@pytest.mark.parametrize("scheme", [(), ("--timestamp",)], ids=["sequential", "timestamp"])
+def test_dry_run_creates_nothing(repo: Path, variant: str, scheme: tuple[str, ...]) -> None:
+    result = run(_variant_cmd(variant, repo, "--json", "--dry-run", *scheme, "x"), repo)
+
+    assert result.returncode == 0, result.stderr
+    assert not (repo / "specs").exists()
+
+
+@pytest.mark.parametrize("variant", ALL_VARIANTS)
+def test_create_prints_selection_hint(repo: Path, variant: str) -> None:
+    """The hint names the directory selector first and the label as optional."""
+    result = run(_variant_cmd(variant, repo, "--number", "7", "x"), repo)
+
+    assert result.returncode == 0, result.stderr
+    if variant == "powershell" or (variant == "python" and sys.platform == "win32"):
+        hint = [
+            "# To select this feature: $env:SPECIFY_FEATURE_DIRECTORY = '<REPO>/specs/007-x'",
+            "# Optional label:         $env:SPECIFY_FEATURE = '007-x'",
+        ]
+    else:
+        hint = [
+            "# To select this feature: export SPECIFY_FEATURE_DIRECTORY=<REPO>/specs/007-x",
+            "# Optional label:         export SPECIFY_FEATURE=007-x",
+        ]
+    for stream in (result.stdout, result.stderr):
+        lines = normalize_repo_paths(stream, repo).splitlines()
+        assert lines[-2:] == hint

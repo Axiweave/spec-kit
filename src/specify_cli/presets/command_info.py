@@ -5,7 +5,7 @@ from __future__ import annotations
 import typer
 from rich.markup import escape as _escape_markup
 
-from .._console import console
+from ..terminal import console
 from ._commands import preset_app
 
 
@@ -14,11 +14,11 @@ def preset_info(
     preset_id: str = typer.Argument(..., help="Preset ID to get info about"),
 ):
     """Show detailed information about a preset."""
-    from .. import _require_specify_project
+    from .. import require_specify_project
     from ..extensions import normalize_priority
     from . import PresetCatalog, PresetError, PresetManager
 
-    project_root = _require_specify_project()
+    project_root = require_specify_project()
     safe_preset_id = _escape_markup(str(preset_id))
     # Check if installed locally first
     manager = PresetManager(project_root)

@@ -12,16 +12,16 @@ from typing import Any, Dict, List, Optional, Set
 from packaging import version as pkg_version
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 
-from .._download_security import safe_extract_archive
-from .._init_options import is_ai_skills_enabled, resolve_active_agent_for_registration
+from ..download_security import safe_extract_archive
+from ..init_options import is_ai_skills_enabled, resolve_active_agent_for_registration
 from .._utils import version_satisfies
 from ..extensions import REINSTALL_COMMAND, normalize_priority
 from ..workspace import workspace_root_for
 from ..shared_infra import (
-    _ensure_safe_shared_destination,
-    _ensure_safe_shared_directory,
-    _write_shared_bytes,
-    _write_shared_text,
+    ensure_safe_shared_destination,
+    ensure_safe_shared_directory,
+    write_shared_bytes,
+    write_shared_text,
 )
 from ._manager_commands import _PresetCommandMethods
 from ._manager_skills import _PresetSkillMethods
@@ -186,10 +186,10 @@ def _constitution_is_generated(
     resolver: "PresetResolver",
 ) -> bool:
     """Return whether the live constitution is an unchanged generated file."""
-    _ensure_safe_shared_destination(project_root, memory_constitution)
+    ensure_safe_shared_destination(project_root, memory_constitution)
     content = memory_constitution.read_bytes()
     provenance = memory_constitution.parent / _CONSTITUTION_PROVENANCE_FILE
-    _ensure_safe_shared_destination(project_root, provenance)
+    ensure_safe_shared_destination(project_root, provenance)
 
     if provenance.exists():
         try:
@@ -219,7 +219,7 @@ def _constitution_provenance_matches_preset(
     provenance = memory_constitution.parent / _CONSTITUTION_PROVENANCE_FILE
     if not provenance.parent.exists():
         return False
-    _ensure_safe_shared_destination(project_root, provenance)
+    ensure_safe_shared_destination(project_root, provenance)
     if not provenance.exists():
         return False
     try:
@@ -232,7 +232,7 @@ def _constitution_provenance_matches_preset(
     )
 
 
-def _materialize_constitution_template(
+def materialize_constitution_template(
     project_root: Path,
     memory_constitution: Path,
 ) -> str | None:
@@ -259,10 +259,10 @@ def _materialize_constitution_template(
         content = composed_content.encode("utf-8")
         result = "composed"
 
-    _ensure_safe_shared_directory(project_root, memory_constitution.parent)
-    _write_shared_bytes(project_root, memory_constitution, content)
+    ensure_safe_shared_directory(project_root, memory_constitution.parent)
+    write_shared_bytes(project_root, memory_constitution, content)
     provenance = memory_constitution.parent / _CONSTITUTION_PROVENANCE_FILE
-    _write_shared_text(
+    write_shared_text(
         project_root,
         provenance,
         json.dumps(
@@ -558,8 +558,8 @@ class PresetManager(_PresetCommandMethods, _PresetSkillMethods):
 
         def _restore_custom_payload_file(target: Path, content: bytes, mode: int) -> None:
             try:
-                _ensure_safe_shared_directory(self.workspace_root, target.parent)
-                _write_shared_bytes(
+                ensure_safe_shared_directory(self.workspace_root, target.parent)
+                write_shared_bytes(
                     self.workspace_root, target, content, mode=stat.S_IMODE(mode)
                 )
             except BaseException as exc:
@@ -780,7 +780,7 @@ class PresetManager(_PresetCommandMethods, _PresetSkillMethods):
             self.workspace_root, memory_constitution, resolver
         ):
             return
-        _materialize_constitution_template(self.workspace_root, memory_constitution)
+        materialize_constitution_template(self.workspace_root, memory_constitution)
 
     def install_from_archive(
         self,
@@ -997,7 +997,7 @@ class PresetManager(_PresetCommandMethods, _PresetSkillMethods):
             # agents' entries still restore as before.
             # The legacy branch above locally imports load_init_options,
             # shadowing the module-level name for this whole function.
-            from .._init_options import load_init_options as _load_init_options
+            from ..init_options import load_init_options as _load_init_options
 
             resolved_active = resolve_active_agent_for_registration(
                 self.project_root

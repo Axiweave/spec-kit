@@ -874,7 +874,7 @@ class TestAzureDevOpsAuth:
         """Oversized token metadata is rejected before JSON parsing."""
         from unittest.mock import MagicMock, patch
 
-        from specify_cli._download_security import MAX_JSON_METADATA_BYTES
+        from specify_cli.download_security import MAX_JSON_METADATA_BYTES
 
         monkeypatch.setenv("MY_SECRET", "secret-value")
         entry = AuthConfigEntry(

@@ -19,8 +19,8 @@ from pathlib import Path
 from urllib.parse import ParseResult, urlparse
 from urllib.request import url2pathname
 
-from .. import _locate_core_pack, _repo_root
-from .._download_security import MAX_JSON_CATALOG_BYTES, read_response_limited
+from .. import locate_core_pack, source_repo_root
+from ..download_security import MAX_JSON_CATALOG_BYTES, read_response_limited
 from . import BundlerError
 from .yamlio import loads_json
 from .catalogs import CatalogSource
@@ -124,11 +124,11 @@ def _validate_remote_url(source_id: str, url: str) -> None:
 
 def _load_packaged_catalog(filename: str) -> dict:
     """Load a packaged bundle catalog snapshot from the wheel or repo root."""
-    core_pack = _locate_core_pack()
+    core_pack = locate_core_pack()
     path = (
         core_pack / "bundles" / filename
         if core_pack is not None
-        else _repo_root() / "bundles" / filename
+        else source_repo_root() / "bundles" / filename
     )
     if not path.is_file():
         raise BundlerError(f"Bundled catalog not found: {path}")

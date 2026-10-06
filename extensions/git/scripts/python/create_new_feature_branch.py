@@ -647,7 +647,7 @@ def main(argv: list[str]) -> int:
                 f"creation for {branch_name}"
             )
 
-        _err(f"# To persist: {_persist_hint('SPECIFY_FEATURE', branch_name)}")
+        _err(f"# Optional label:         {_persist_hint('SPECIFY_FEATURE', branch_name)}")
 
     if args.json_mode:
         payload: dict[str, object] = {
@@ -662,7 +662,7 @@ def main(argv: list[str]) -> int:
         print(f"FEATURE_NUM: {feature_num}")
         if not args.dry_run:
             print(
-                "# To persist in your shell: "
+                "# Optional label:         "
                 f"{_persist_hint('SPECIFY_FEATURE', branch_name)}"
             )
 

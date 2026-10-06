@@ -3,7 +3,8 @@
 prepare_naming_migration() reads the project and writes nothing.
 apply_naming_migration() checks a preview again under an exclusive workspace lock,
 renames the features, edits the owned references, and saves the preference last.
-A handled failure restores every completed step. Backups stay outside the project.
+A handled failure restores every completed step. Backups and a done marker per step stay in
+<workspace>/.specify/naming-recovery-* until the call ends, so `specify project recover` can undo a forced stop.
 Pending merge lock or recovery entries under the effective specs root prevent migration.
 """
 from __future__ import annotations
@@ -27,7 +28,7 @@ from types import MappingProxyType
 from typing import Any
 from urllib.parse import unquote
 
-from specify_cli.workspace import project_record_path, read_json, workspace_root_for
+from specify_cli.workspace import checkout_record_path, read_json, workspace_root_for
 
 _SCHEMES = ("sequential", "timestamp")
 _MAX_NUMBER = 2**63 - 1  # the creation helper's signed 64-bit limit
@@ -340,6 +341,19 @@ def classify_feature_name(name: str) -> tuple[str, object, str]:
     return "custom", None, name
 
 
+def duplicate_prefixes(workspace: Path) -> list[list[str]]:
+    """Group the features that share a scheme and a prefix. Custom names and unusable prefixes form no group."""
+    groups: dict = {}
+    for rel in _survey(workspace).features:
+        try:
+            scheme, key, _ = classify_feature_name(rel.rsplit("/", 1)[1])
+        except ValueError:
+            continue
+        if scheme != "custom":
+            groups.setdefault((scheme, key), []).append(rel)
+    return sorted(sorted(group) for group in groups.values() if len(group) > 1)
+
+
 def _allocate(found: _Survey, target: str, clock: datetime, conflicts: list) -> tuple[list, list]:
     """Assign every source feature a new name in the target scheme. Return (mappings, skipped)."""
     features = set(found.features)
@@ -524,10 +538,10 @@ def _plan_markdown(workspace: Path, found: _Survey, renames: dict, new_of: dict,
     return edits
 
 
-def _plan_selection(workspace: Path, project_id: str | None, renames: dict, read, conflicts: list) -> list:
+def _plan_selection(repo: Path, workspace: Path, project_id: str | None, renames: dict, read, conflicts: list) -> list:
     """Follow an existing saved pointer into a renamed feature. Never create or select one."""
     if project_id:
-        key, path = "active_feature", project_record_path(project_id)
+        key, path = "active_feature", checkout_record_path(repo)
     else:
         key, path = "feature_directory", workspace / ".specify/feature.json"
     try:
@@ -738,7 +752,7 @@ def prepare_naming_migration(
     opaque: list[dict] = []
     if mappings:
         token = _token_pattern(workspace, renames)
-        edits += _plan_selection(workspace, project_id, renames, read, conflicts)
+        edits += _plan_selection(repo, workspace, project_id, renames, read, conflicts)
         edits += _plan_markdown(workspace, found, renames, new_of, token, conflicts)
         edits += _plan_workflows(workspace, token, renames, read, conflicts, opaque)
         edits += _plan_owned_sections(workspace, repo, token, renames, new_of, options, read, conflicts)
@@ -822,6 +836,7 @@ def _backup(preview: MigrationPreview, files: dict, recovery: Path) -> dict[Path
     """Save the original bytes of every edited file and an operation manifest before any change."""
     folder = recovery / "backups"
     folder.mkdir(mode=0o700)
+    (recovery / "done").mkdir(mode=0o700)
     backups, listing = {}, []
     for index, (path, edit) in enumerate(files.items()):
         if edit.original:
@@ -833,8 +848,10 @@ def _backup(preview: MigrationPreview, files: dict, recovery: Path) -> dict[Path
             "backup": str(backups[path]) if path in backups else None,
             "mode": edit.mode,
             "mtime_ns": edit.mtime_ns,
+            "new_sha256": hashlib.sha256(edit.replacement).hexdigest(),
         })
     manifest = {
+        "pid": os.getpid(),
         "repository_root": str(preview.repository_root),
         "workspace_root": str(preview.workspace_root),
         "renames": [{"from": old, "to": new} for old, new in preview.mappings],
@@ -844,21 +861,26 @@ def _backup(preview: MigrationPreview, files: dict, recovery: Path) -> dict[Path
     return backups
 
 
-def _forward(preview: MigrationPreview, files: dict, backups: dict, done: dict) -> None:
-    """Rename the features, replace the edited files, and save the preference. Log each step before it runs."""
+def _forward(preview: MigrationPreview, files: dict, backups: dict, done: dict, marks: Path) -> None:
+    """Rename the features, replace the edited files, and save the preference.
+
+    Log each step in memory before it runs, and mark it on disk after it ran.
+    """
     root = preview.workspace_root
-    for old, new in preview.mappings:
+    for index, (old, new) in enumerate(preview.mappings):
         source, target = root / old, root / new
         if os.path.lexists(target):
             raise FileExistsError(errno.EEXIST, "The new name is taken", str(target))
         done["renames"].append((source, target))
         os.rename(source, target)
-    for path, edit in files.items():
+        (marks / f"rename-{index}").touch()
+    for index, (path, edit) in enumerate(files.items()):
         if path in backups:
             done["writes"].append((path, backups[path], edit.mode, edit.mtime_ns))
         else:
             done["created"].append(path)
         _write(edit.new_path, edit.replacement, edit.mode, edit.mtime_ns)
+        (marks / f"file-{index}").touch()
 
 
 def _verify(preview: MigrationPreview, files: dict) -> None:
@@ -924,8 +946,9 @@ def _transact(preview: MigrationPreview, recovery: Path) -> MigrationResult:
     try:
         files = _files(fresh)
         backups = _backup(fresh, files, recovery)
-        _forward(fresh, files, backups, done)
+        _forward(fresh, files, backups, done, recovery / "done")
         _verify(fresh, files)
+        (recovery / "done" / "applied").touch()  # recover removes the backups of an applied rename and never reverses it
     except BaseException as exc:
         remaining = _rollback(done)
         if remaining:
@@ -955,13 +978,9 @@ def apply_naming_migration(preview: MigrationPreview) -> MigrationResult:
     if not (preview.mappings or preview.preference_edit):
         return MigrationResult(preview, "noop")
     try:
-        recovery = Path(tempfile.mkdtemp(prefix="specify-naming-")).resolve()
+        recovery = Path(tempfile.mkdtemp(prefix="naming-recovery-", dir=preview.workspace_root / ".specify"))
     except OSError as exc:
         return MigrationResult(preview, "rejected", None, (_conflict("recovery-unavailable", ".", str(exc)),))
-    if recovery.is_relative_to(preview.repository_root) or recovery.is_relative_to(preview.workspace_root):
-        shutil.rmtree(recovery, ignore_errors=True)
-        inside = _conflict("recovery-unavailable", ".", "The temporary directory is inside the project. Move TMPDIR out.")
-        return MigrationResult(preview, "rejected", None, (inside,))
     lock = preview.workspace_root / ".specify" / "naming-migration.lock"
     try:
         handle = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
@@ -978,7 +997,7 @@ def apply_naming_migration(preview: MigrationPreview) -> MigrationResult:
     interrupted = None
     try:
         with os.fdopen(handle, "w") as stream:
-            json.dump({"pid": os.getpid()}, stream)
+            json.dump({"operation": "naming", "pid": os.getpid()}, stream)
         started = True
         result = _transact(preview, recovery)
     except OSError as exc:

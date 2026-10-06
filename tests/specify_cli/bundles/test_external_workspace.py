@@ -79,7 +79,7 @@ def test_bundle_metadata_lifecycle(tmp_path: Path, monkeypatch, storage: str):
     assert yaml.safe_load(config_path.read_text())["catalogs"] == []
     assert not any(source.scope == Scope.PROJECT for source in load_source_stack(repository))
     if storage == "external":
-        assert sorted(path.name for path in (repository / ".specify").iterdir()) == ["project.json"]
+        assert sorted(path.name for path in (repository / ".specify").iterdir()) == ["checkout.json", "project.json"]
 
 
 def test_external_integration_is_authoritative(tmp_path: Path, monkeypatch):
@@ -101,7 +101,7 @@ def test_external_integration_is_authoritative(tmp_path: Path, monkeypatch):
     assert result.exit_code == 1
     assert "claude" in result.output and "copilot" in result.output
     assert not (workspace / ".specify/bundle-records.json").exists()
-    assert sorted(path.name for path in (repository / ".specify").iterdir()) == ["project.json"]
+    assert sorted(path.name for path in (repository / ".specify").iterdir()) == ["checkout.json", "project.json"]
 
 
 @pytest.mark.skipif(os.name == "nt", reason="symlink semantics differ on Windows")
@@ -133,7 +133,7 @@ def test_external_metadata_refuses_workspace_symlink_escape(tmp_path: Path, monk
         with pytest.raises(BundlerError, match="escapes the allowed root"):
             remove_source(repository, "local")
     assert outside.read_bytes() == original
-    assert sorted(path.name for path in (repository / ".specify").iterdir()) == ["project.json"]
+    assert sorted(path.name for path in (repository / ".specify").iterdir()) == ["checkout.json", "project.json"]
 
 
 @pytest.mark.parametrize("command", [["list"], ["catalog", "list"], ["catalog", "add", "./catalog.json"]])
@@ -188,7 +188,7 @@ def test_automatic_setup_uses_all_personal_defaults(tmp_path, monkeypatch, opera
     assert (options["integration"], options["script"], options["feature_numbering"]) == (
         "omp", "py", "timestamp",
     )
-    assert sorted(path.name for path in (repository / ".specify").iterdir()) == ["project.json"]
+    assert sorted(path.name for path in (repository / ".specify").iterdir()) == ["checkout.json", "project.json"]
     assert config.read_bytes() == original
 
 
@@ -286,4 +286,4 @@ def test_primitive_lifecycle_keeps_external_ownership(tmp_path, monkeypatch, kin
     assert not installer.is_installed(repository, component)
     assert not registry_type(workspace).is_installed(component.id)
     assert not package.exists()
-    assert sorted(p.name for p in (repository / ".specify").iterdir()) == ["project.json"]
+    assert sorted(p.name for p in (repository / ".specify").iterdir()) == ["checkout.json", "project.json"]

@@ -966,7 +966,8 @@ def test_incomplete_restoration_reports_exact_recovery_work(project, monkeypatch
     assert data["approval_token"] is None
     recovery = data["recovery"]
     directory = Path(recovery["directory"])
-    assert directory.is_dir() and not directory.resolve().is_relative_to(project.root.resolve())
+    assert directory.is_dir() and directory.name.startswith("naming-recovery-")
+    assert directory.parent.resolve() == (project.root / ".specify").resolve()
     if os.name == "posix":
         assert stat.S_IMODE(directory.stat().st_mode) & 0o077 == 0
     remaining = recovery["remaining_operations"]
@@ -1106,6 +1107,23 @@ def test_generated_timestamp_sets_follow_the_reference_allocator(sandbox, tmp_pa
     assert_migrated(root, before, reviewed["mappings"], {".specify/init-options.json"}, context)
 
 
+@pytest.mark.parametrize("scheme", ["sequential", "timestamp"])
+def test_migration_to_timestamp_gives_synced_duplicate_prefixes_unique_names(sandbox, tmp_path, monkeypatch, scheme):
+    """Invariant: the rename that `project info` suggests leaves no shared prefix and keeps every feature."""
+    duplicates = ["specs/008-billing", "specs/008-login", "specs/team/008-nested"]
+    root = make_project(tmp_path, "synced duplicates", scheme, [*duplicates, "specs/custom"])
+    assert project_info(root, monkeypatch)["duplicate_prefixes"] == [duplicates]
+
+    reviewed = review("timestamp")
+    applied = approve(reviewed["approval_token"], "timestamp", "--json")
+
+    assert applied.exit_code == 0, applied.output
+    renamed = sorted(as_map(payload(applied)["mappings"]).values())
+    assert len(renamed) == 3 and len({Path(path).name[:15] for path in renamed}) == 3
+    assert all((root / path / "spec.md").is_file() for path in [*renamed, "specs/custom"])
+    assert project_info(root, monkeypatch)["duplicate_prefixes"] == []
+
+
 LEADS = ["a", "b", " ", "é", "日", "'"]
 HAZARDS = ["\n", "\r", "\x1b[2J", "\x07", "\u202e", "\u2028", "\u0085"]
 
@@ -1199,13 +1217,13 @@ def shared(sandbox, tmp_path, monkeypatch):
 
 
 def test_worktrees_of_one_workspace_migrate_once_and_leave_git_alone(shared, monkeypatch):
-    """Invariant: two worktrees share one feature set, a token binds one worktree, and Git is untouched."""
+    """Invariant: worktrees share features, not selections. A token binds one worktree. Git is untouched."""
     first = project_info(shared.first, monkeypatch)
     second = project_info(shared.second, monkeypatch)
     assert first["workspace_root"] == second["workspace_root"] == str(shared.workspace)
     assert first["project_id"] == second["project_id"] == PROJECT_ID
     assert (first["repository_root"], second["repository_root"]) == (str(shared.first), str(shared.second))
-    assert first["active_feature"] == second["active_feature"] == "specs/001-alpha"
+    assert (first["active_feature"], second["active_feature"]) == ("specs/001-alpha", None)
 
     before = files(shared.workspace)
     code = [snapshot(shared.first), snapshot(shared.second)]
@@ -1240,11 +1258,14 @@ def test_worktrees_of_one_workspace_migrate_once_and_leave_git_alone(shared, mon
     edited = {f"{alpha}/spec.md", f"{beta}/spec.md", ".specify/init-options.json"}
     assert_migrated(shared.workspace, before, reviewed["mappings"], edited)
     assert (shared.workspace / alpha / "spec.md").read_bytes() == linked(ALPHA, "002-beta", Path(beta).name)
-    for root in (shared.first, shared.second):
+    for root, active in ((shared.first, alpha), (shared.second, None)):
         info = project_info(root, monkeypatch)
         assert info["workspace_root"] == str(shared.workspace) and info["project_id"] == PROJECT_ID
-        assert info["active_feature"] == alpha and info["feature_numbering"] == "timestamp"
-    assert [snapshot(shared.first), snapshot(shared.second)] == code
+        assert info["active_feature"] == active and info["feature_numbering"] == "timestamp"
+    after = [snapshot(shared.first), snapshot(shared.second)]
+    # Only the first checkout's record follows its renamed selection.
+    del after[0][".specify/checkout.json"], code[0][".specify/checkout.json"]
+    assert after == code
     assert history(shared.first, shared.workspace) == git_before
     assert git(shared.workspace, "diff", "--cached", "--name-only") == ""
 
@@ -1398,12 +1419,13 @@ def test_human_lock_release_failure_reports_the_committed_work(project, monkeypa
             assert notice["message"] in result.stdout, notice
         assert "timestamp" in result.stdout and str(lock) in result.stderr
         assert_no_content(result)
+        assert [recovery.resolve()] == [path.resolve() for path in (project.root / ".specify").glob("naming-recovery-*")]
     finally:
         monkeypatch.setattr(os, "unlink", real_unlink)
         if lock.exists():
             real_unlink(lock)
-        if recovery is not None and recovery.is_relative_to(Path(tempfile.gettempdir()).resolve()):
-            shutil.rmtree(recovery)
+        for leftover in (project.root / ".specify").glob("naming-recovery-*"):
+            shutil.rmtree(leftover)
     assert_local_migration(project.root, before, reviewed["mappings"])
     retry = run("--feature-numbering", "timestamp", "--dry-run", "--json")
     assert retry.exit_code == 0 and payload(retry)["status"] == "noop"
@@ -1451,10 +1473,11 @@ def test_combined_lock_failures_report_unchanged_or_restored_data(project, monke
         else:
             assert result.stdout == ""
         assert_no_content(result)
+        assert [recovery.resolve()] == [path.resolve() for path in (project.root / ".specify").glob("naming-recovery-*")]
     finally:
         monkeypatch.setattr(os, "unlink", real_unlink)
         if lock.exists():
             real_unlink(lock)
-        if recovery is not None and recovery.is_relative_to(Path(tempfile.gettempdir()).resolve()):
-            shutil.rmtree(recovery)
+        for leftover in (project.root / ".specify").glob("naming-recovery-*"):
+            shutil.rmtree(leftover)
     assert state(project) == before

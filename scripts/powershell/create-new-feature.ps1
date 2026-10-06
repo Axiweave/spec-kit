@@ -68,10 +68,13 @@ function Get-HighestNumberFromSpecs {
     return $highest
 }
 
+# Return whether a spec directory other than the optional own name owns the
+# given numeric prefix. This is also the tie rescan after an exclusive claim.
 function Test-SpecPrefixInUse {
     param(
         [string]$SpecsDir,
-        [string]$FeatureNum
+        [string]$FeatureNum,
+        [string]$OwnName = ''
     )
 
     if (-not (Test-Path -LiteralPath $SpecsDir -PathType Container)) {
@@ -79,7 +82,7 @@ function Test-SpecPrefixInUse {
     }
 
     return $null -ne (Get-ChildItem -LiteralPath $SpecsDir -Directory -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -like "$FeatureNum-*" } |
+        Where-Object { $_.Name -like "$FeatureNum-*" -and $_.Name -cne $OwnName } |
         Select-Object -First 1)
 }
 
@@ -310,22 +313,63 @@ $featureDir = Resolve-StoragePath $storage (Join-Path $specsDir $branchName)
 $specFile = Resolve-StoragePath $storage (Join-Path $featureDir 'spec.md')
 
 if (-not $DryRun) {
-    if ((Test-Path -LiteralPath $featureDir -PathType Container) -and -not $AllowExistingBranch) {
-        if ($Timestamp) {
-            Write-Error "Error: Feature directory '$featureDir' already exists. Rerun to get a new timestamp or use a different -ShortName."
-        } else {
-            Write-Error "Error: Feature directory '$featureDir' already exists. Please use a different feature name or specify a different number with -Number."
-        }
-        exit 1
-    }
-
     $needsSpec = -not (Test-Path -PathType Leaf $specFile)
     $content = $null
     if ($needsSpec) {
         $content = Resolve-TemplateContent -TemplateName 'spec-template' -RepoRoot $repoRoot
     }
 
-    New-Item -ItemType Directory -Path $featureDir -Force | Out-Null
+    # Claim the directory exclusively before any write. An auto-numbered run
+    # loses when any other directory has its prefix, removes its own empty
+    # directory, and retries with a new prefix.
+    $autoNumbered = ($Timestamp -or -not $hasNumber) -and -not $AllowExistingBranch
+    $attempt = 1
+    while ($true) {
+        try {
+            New-Item -ItemType Directory -Path $featureDir -ErrorAction Stop | Out-Null
+        } catch {
+            if (-not (Test-Path -LiteralPath $featureDir)) {
+                throw
+            }
+            if ($AllowExistingBranch -and (Test-Path -LiteralPath $featureDir -PathType Container)) {
+                break
+            }
+            if ($Timestamp) {
+                Write-Error "Error: Feature directory '$featureDir' already exists. Rerun to get a new timestamp or use a different -ShortName."
+            } else {
+                Write-Error "Error: Feature directory '$featureDir' already exists. Please use a different feature name or specify a different number with -Number."
+            }
+            exit 1
+        }
+        if (-not $autoNumbered -or -not (Test-SpecPrefixInUse -SpecsDir $specsDir -FeatureNum $featureNum -OwnName $branchName)) {
+            break
+        }
+        Remove-Item -LiteralPath $featureDir
+        if ($attempt -ge 20) {
+            [Console]::Error.WriteLine('ERROR: Could not reserve a feature directory after 20 tries.')
+            exit 1
+        }
+        $attempt++
+        Start-Sleep -Milliseconds (Get-Random -Maximum 1000)
+        if ($Timestamp) {
+            $lostNum = $featureNum
+            $featureNum = Get-Date -Format 'yyyyMMdd-HHmmss'
+            while ([string]::CompareOrdinal($featureNum, $lostNum) -le 0) {
+                Start-Sleep -Milliseconds 100
+                $featureNum = Get-Date -Format 'yyyyMMdd-HHmmss'
+            }
+        } else {
+            $highestNumber = Get-HighestNumberFromSpecs -SpecsDir $specsDir
+            if ($highestNumber -eq [long]::MaxValue) {
+                Write-Error "Error: feature number must be between 0 and $([long]::MaxValue), got '9223372036854775808'"
+                exit 1
+            }
+            $featureNum = ('{0:000}' -f ($highestNumber + 1))
+        }
+        $branchName = Get-FittedBranchName -FeatureNum $featureNum -BranchSuffix $branchSuffix
+        $featureDir = Resolve-StoragePath $storage (Join-Path $specsDir $branchName)
+        $specFile = Resolve-StoragePath $storage (Join-Path $featureDir 'spec.md')
+    }
 
     if ($needsSpec) {
         if ($null -ne $content) {
@@ -354,8 +398,8 @@ if (-not $DryRun) {
     $quotedFeatureDir = "'" + $featureDir.Replace("'", "''") + "'"
     $featureAssignment = '$env:SPECIFY_FEATURE = ' + $quotedBranchName
     $directoryAssignment = '$env:SPECIFY_FEATURE_DIRECTORY = ' + $quotedFeatureDir
-    [Console]::Error.WriteLine("# To persist: $featureAssignment")
-    [Console]::Error.WriteLine("#              $directoryAssignment")
+    [Console]::Error.WriteLine("# To select this feature: $directoryAssignment")
+    [Console]::Error.WriteLine("# Optional label:         $featureAssignment")
 }
 
 if ($Json) {
@@ -373,7 +417,7 @@ if ($Json) {
     Write-Output "SPEC_FILE: $specFile"
     Write-Output "FEATURE_NUM: $featureNum"
     if (-not $DryRun) {
-        Write-Output "# To persist in your shell: $featureAssignment"
-        Write-Output "#                           $directoryAssignment"
+        Write-Output "# To select this feature: $directoryAssignment"
+        Write-Output "# Optional label:         $featureAssignment"
     }
 }

@@ -121,14 +121,10 @@ def _external_project_record(repo_root: Path) -> tuple[Path, dict] | None:
         _storage_error(f"Invalid project ID in {locator}. Relink the project workspace.")
     if project.get("storage") != "external":
         _storage_error(f"Invalid storage mode in {locator}. Relink the project workspace.")
-    if os.environ.get("XDG_DATA_HOME"):
-        data_home = Path(os.environ["XDG_DATA_HOME"])
-    elif os.name == "nt":
-        data_home = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
-    else:
-        data_home = Path.home() / ".local" / "share"
-    record_path = data_home / "specify" / "projects" / f"{project_id}.json"
-    confined_workspace_path(data_home, record_path)
+    record_path = repo_root / ".specify" / "checkout.json"
+    if not os.path.lexists(record_path):
+        _storage_error(f"Missing workspace mapping for {repo_root}. Use specify project link PATH.")
+    confined_workspace_path(repo_root, record_path)
     record = _read_storage_json(record_path)
     raw_workspace = record.get("workspace")
     if not isinstance(raw_workspace, str) or not Path(raw_workspace).is_absolute():
@@ -302,7 +298,8 @@ def get_feature_paths(
     elif selection_mode != "automatic":
         # Context projects never read the saved feature, so every command names its own.
         print(
-            "ERROR: Feature directory not found. Set SPECIFY_FEATURE_DIRECTORY for this command. "
+            "ERROR: Feature directory not found: no feature is selected. "
+            "Set SPECIFY_FEATURE_DIRECTORY=specs/<feature> for this command. "
             "This project uses feature_selection context, so scripts ignore the saved feature.",
             file=sys.stderr,
         )

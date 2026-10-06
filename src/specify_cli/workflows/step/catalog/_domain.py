@@ -15,7 +15,7 @@ from typing import Any
 
 import yaml
 
-from ...._download_security import (
+from ....download_security import (
     read_response_limited,
 )
 

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import typer
 
-from .._console import console
+from ..terminal import console
 from ._command_scaffold_generation import supported_integration_scaffold_types
 from ._commands import integration_app
 

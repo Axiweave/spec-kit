@@ -19,7 +19,7 @@ class TestOverlayCli:
     """CLI-level tests for ``specify workflow overlay *``."""
 
     def test_workflow_resolve(self, project_dir, monkeypatch):
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         _write_workflow(
             project_dir,
             "wf",
@@ -63,7 +63,7 @@ class TestOverlayCli:
 
     def test_workflow_resolve_prints_tier_labels(self, project_dir, monkeypatch):
         """Layer tiers render literally; an unescaped ``[base]`` is eaten as markup."""
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         _write_workflow(
             project_dir,
             "wf",
@@ -109,7 +109,7 @@ class TestOverlayCli:
         self, project_dir, monkeypatch, step_id
     ):
         """Step IDs are unvalidated for brackets, so they must be escaped."""
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         _write_workflow(
             project_dir,
             "wf",
@@ -143,7 +143,7 @@ class TestOverlayCli:
 
     def test_workflow_resolve_equal_priority_layers_sort_by_source(self, project_dir, monkeypatch):
         """Equal-priority overlays are listed alphabetically by source."""
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         _write_workflow(
             project_dir,
             "wf",

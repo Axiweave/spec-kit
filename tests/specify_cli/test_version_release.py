@@ -12,7 +12,7 @@ import importlib.metadata
 from unittest.mock import MagicMock, patch
 
 import pytest
-from specify_cli._download_security import read_response_limited as _real_read_response_limited
+from specify_cli.download_security import read_response_limited as _real_read_response_limited
 from specify_cli._version import (
     _fetch_latest_release_tag,
     _get_installed_version,

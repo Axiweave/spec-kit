@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import typer
 
-from .._console import console
+from ..terminal import console
 from ..integration_state import installed_integration_keys as _installed_integration_keys
 from ._commands import integration_app
-from ._helpers import (
-    _read_integration_json,
-    _register_extensions_for_agent,
-    _register_presets_for_agent,
-    _resolve_integration_options,
+from .helpers import (
+    read_integration_json,
+    register_extensions_for_agent,
+    register_presets_for_agent,
+    resolve_integration_options_or_exit,
     _set_default_integration_or_exit,
 )
 
@@ -23,10 +23,10 @@ def integration_use(
 ):
     """Set the default integration without uninstalling other integrations."""
     from . import get_integration
-    from .. import _require_specify_project
+    from .. import require_specify_project
 
-    project_root = _require_specify_project()
-    current = _read_integration_json(project_root)
+    project_root = require_specify_project()
+    current = read_integration_json(project_root)
     installed_keys = _installed_integration_keys(current)
     if key not in installed_keys:
         console.print(f"[red]Error:[/red] Integration '{key}' is not installed.")
@@ -41,7 +41,7 @@ def integration_use(
         console.print(f"[red]Error:[/red] Unknown integration '{key}'")
         raise typer.Exit(1)
 
-    raw_options, parsed_options = _resolve_integration_options(integration, current, key, None)
+    raw_options, parsed_options = resolve_integration_options_or_exit(integration, current, key, None)
     _set_default_integration_or_exit(
         project_root,
         current,
@@ -56,12 +56,12 @@ def integration_use(
             f"[cyan]specify integration use {key} --force[/cyan]."
         ),
     )
-    _register_extensions_for_agent(
+    register_extensions_for_agent(
         project_root,
         key,
         continuing="The integration was selected, but installed extensions may need re-registration.",
     )
-    _register_presets_for_agent(
+    register_presets_for_agent(
         project_root,
         key,
         continuing="The integration was selected, but installed presets may need re-registration.",

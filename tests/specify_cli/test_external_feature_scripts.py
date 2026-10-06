@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -108,7 +109,7 @@ def _make_project(tmp_path, external, policy="automatic"):
         _write_json(workspace / ".specify/workspace.json", {
             "schema_version": 1, "project_id": project_id,
         })
-        record = tmp_path / "data/specify/projects" / f"{project_id}.json"
+        record = repo / ".specify/checkout.json"
         _write_json(record, {
             "schema_version": 1, "workspace": str(workspace), "active_feature": None,
         })
@@ -165,7 +166,9 @@ def test_feature_creation_uses_workspace_and_persists_selection(
     project, variant, script_env,
 ):
     repo, workspace, record = project
+    # The record lives in the checkout. Every other checkout byte must stay unchanged.
     before = _snapshot(repo)
+    before.pop(".specify/checkout.json", None)
     result = _invoke(
         variant, workspace, repo, script_env, "create-new-feature",
         "--json", "--number", "3", "--short-name", "external-storage",
@@ -182,7 +185,9 @@ def test_feature_creation_uses_workspace_and_persists_selection(
         state = json.loads(record.read_text(encoding="utf-8"))
         assert state["active_feature"] == "specs/003-external-storage"
         assert state["workspace"] == str(workspace)
-        assert _snapshot(repo) == before
+        after = _snapshot(repo)
+        after.pop(".specify/checkout.json")
+        assert after == before
     paths = _success(_invoke(
         variant, workspace, repo, script_env, "check-prerequisites", "--json", "--paths-only",
     ))
@@ -277,7 +282,7 @@ def test_explicit_feature_override_wins_over_saved_selection(
     assert (selected / "plan.md").read_text(encoding="utf-8") == TEMPLATES["plan-template"]
     assert not (saved / "plan.md").exists()
     if record is not None:
-        assert sorted(path.name for path in (repo / ".specify").iterdir()) == ["project.json"]
+        assert sorted(path.name for path in (repo / ".specify").iterdir()) == ["checkout.json", "project.json"]
 
 
 def test_local_absolute_feature_override_can_remain_outside_repository(
@@ -432,36 +437,8 @@ def test_common_helper_validates_before_feature_creation(
     assert Path(recovered.stdout.strip()) == feature
 
 
-@pytest.mark.parametrize("xdg", [None, "", "distinct"])
-def test_python_windows_record_policy_agrees_with_cli(tmp_path, script_env, xdg):
-    """Windows policy prefers nonempty XDG_DATA_HOME, then LOCALAPPDATA."""
-    repo, workspace, record = _make_project(tmp_path, True)
-    if xdg != "distinct":
-        if xdg is None:
-            script_env.pop("XDG_DATA_HOME")
-        else:
-            script_env["XDG_DATA_HOME"] = ""
-        target = Path(script_env["LOCALAPPDATA"]) / "specify/projects" / record.name
-        target.parent.mkdir(parents=True)
-        record.rename(target)
-    code = (
-        "import os, sys; from pathlib import Path; from types import SimpleNamespace; "
-        "sys.path.insert(0, sys.argv[1]); import common; "
-        "from specify_cli import workspace; "
-        "common.os = workspace.os = SimpleNamespace(**(vars(os) | {'name': 'nt'})); "
-        "resolved = common.get_workspace_root(Path(sys.argv[2])); "
-        "assert list((workspace.user_data_dir() / 'projects').glob('*.json')); print(resolved)"
-    )
-    result = run(
-        [sys.executable, "-c", code, str(workspace / ".specify/scripts/python"), str(repo)],
-        repo, env=script_env,
-    )
-    assert result.returncode == 0, result.stderr
-    assert Path(result.stdout.strip()) == workspace
-
-
 def test_distinct_data_directories_survive_init_link_and_fresh_discovery(tmp_path, variant, script_env):
-    """Setup, relinking, and installed helpers must share one machine record."""
+    """Setup, relinking, and installed helpers share the checkout record, not a data directory."""
     repo, workspace = tmp_path / "repository", tmp_path / "workspace"
     cli = [sys.executable, "-c", "from specify_cli import app; app()"]
     script_type = {"bash": "sh", "python": "py", "powershell": "ps"}[variant]
@@ -484,8 +461,64 @@ def test_distinct_data_directories_survive_init_link_and_fresh_discovery(tmp_pat
         variant, relocated, repo, script_env, "check-prerequisites", "--json", "--paths-only",
     ))
     assert Path(paths["FEATURE_DIR"]) == relocated / feature
-    assert len(list((Path(script_env["XDG_DATA_HOME"]) / "specify/projects").glob("*.json"))) == 1
-    assert not list(Path(script_env["LOCALAPPDATA"]).rglob("projects/*.json"))
+    assert (repo / ".specify/checkout.json").is_file()
+    for data in (script_env["XDG_DATA_HOME"], script_env["LOCALAPPDATA"]):
+        assert not list(Path(data).rglob("projects/*.json"))
+
+
+def _git(cwd, env, *args):
+    result = run(["git", *args], cwd, env=env)
+    assert result.returncode == 0, result.stderr
+    return result.stdout
+
+
+def test_worktrees_resolve_their_own_workspace_and_feature(tmp_path, variant, script_env):
+    """FR-009/FR-010: one helper copy follows the record of the worktree that runs it."""
+    repo, workspace, record = _make_project(tmp_path, True)
+    _git(repo, script_env, "init", "-q")
+    _git(repo, script_env, "commit", "-q", "--allow-empty", "-m", "base")
+    worktree = tmp_path / "second worktree"
+    _git(repo, script_env, "worktree", "add", "-q", "--detach", str(worktree))
+    clone = tmp_path / "workspace clone"
+    shutil.copytree(workspace, clone, symlinks=True)
+    (worktree / ".specify").mkdir()
+    shutil.copy2(repo / ".specify/project.json", worktree / ".specify/project.json")
+    other_record = worktree / ".specify/checkout.json"
+    _write_json(other_record, {"schema_version": 1, "workspace": str(clone), "active_feature": None})
+    first = _select((repo, workspace, record), "specs/001-first")
+    second = _select((worktree, clone, other_record), "specs/002-second")
+    for checkout, feature in ((repo, first), (worktree, second)):
+        # Both runs use the first workspace's helper, so only the record can pick the paths.
+        paths = _success(_invoke(
+            variant, workspace, checkout, script_env, "check-prerequisites", "--json", "--paths-only",
+        ))
+        assert Path(paths["REPO_ROOT"]) == checkout
+        assert Path(paths["FEATURE_DIR"]) == feature
+
+
+def test_checkout_record_is_ignored_after_init_link_and_private_init(tmp_path, script_env):
+    cli = [sys.executable, "-c", "from specify_cli import app; app()"]
+    options = ["--integration", "omp", "--script", "py", "--offline", "--non-interactive", "--ignore-agent-tools"]
+    repo, private = tmp_path / "repository", tmp_path / "private repository"
+    for checkout, extra in ((repo, []), (private, ["--private"])):
+        checkout.mkdir()
+        _git(checkout, script_env, "init", "-q")
+        initialized = run([
+            *cli, "init", ".", "--force", "--workspace", str(tmp_path / f"{checkout.name} workspace"),
+            *options, *extra,
+        ], checkout, env=script_env)
+        assert initialized.returncode == 0, initialized.stderr
+        _git(checkout, script_env, "check-ignore", "-q", ".specify/checkout.json")
+    _git(repo, script_env, "add", "-A")
+    _git(repo, script_env, "commit", "-q", "-m", "Attach external storage")
+    assert ".specify/checkout.json" not in _git(repo, script_env, "ls-files").splitlines()
+    worktree = tmp_path / "second worktree"
+    _git(repo, script_env, "worktree", "add", "-q", "--detach", str(worktree))
+    linked = run([*cli, "project", "link", str(tmp_path / "repository workspace")], worktree, env=script_env)
+    assert linked.returncode == 0, linked.stderr
+    assert (worktree / ".specify/checkout.json").is_file()
+    _git(worktree, script_env, "check-ignore", "-q", ".specify/checkout.json")
+
 
 
 @pytest.mark.parametrize("options", [

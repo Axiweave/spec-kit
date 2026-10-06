@@ -5,7 +5,7 @@ from __future__ import annotations
 import typer
 from rich.markup import escape as _escape_markup
 
-from .._console import console
+from ..terminal import console
 from . import BundlerError
 from ._commands import _build_stack, _fail, _speckit_version, bundle_app
 from .project import active_integration, require_project_root

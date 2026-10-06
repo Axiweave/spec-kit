@@ -143,13 +143,7 @@ def _event_roots():
         project_id = locator.get("project_id")
         if locator.get("storage") != "external" or not isinstance(project_id, str) or str(UUID(project_id)) != project_id:
             raise ValueError(f"Invalid project locator: {locator_path}")
-        if os.environ.get("XDG_DATA_HOME"):
-            data_dir = Path(os.environ["XDG_DATA_HOME"]).expanduser()
-        elif os.name == "nt":
-            data_dir = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData/Local")))
-        else:
-            data_dir = Path.home() / ".local/share"
-        record_path = data_dir / "specify/projects" / (project_id + ".json")
+        record_path = repository / ".specify/checkout.json"
         record = _metadata(record_path)
         value = record.get("workspace")
         if not isinstance(value, str) or not Path(value).is_absolute():
@@ -654,11 +648,11 @@ def _find_command_template(command_name: str, project_root: Path) -> tuple[Path 
     #    templates/commands). The previous bespoke inspect.getfile() math
     #    pointed at core_pack/templates/commands, which never exists in a
     #    wheel build (force-include maps templates/commands -> core_pack/commands).
-    from .._assets import _locate_core_pack, _repo_root
-    core_pack = _locate_core_pack()
+    from ..assets import locate_core_pack, source_repo_root
+    core_pack = locate_core_pack()
     candidate_dirs = [
         core_pack / "commands" if core_pack is not None else None,
-        _repo_root() / "templates" / "commands",
+        source_repo_root() / "templates" / "commands",
     ]
     stem = command_name.replace("speckit.", "").replace("spec.", "")
     for candidate_dir in candidate_dirs:
@@ -813,7 +807,7 @@ def _load_project_script_type(project_root: Path) -> str:
     """
     default = "ps" if platform.system().lower().startswith("win") else "sh"
     try:
-        from .._init_options import load_init_options
+        from ..init_options import load_init_options
         opts = load_init_options(project_root)
         if isinstance(opts, dict):
             script = opts.get("script")
@@ -1800,11 +1794,11 @@ def _other_event_integrations_reference_dispatcher(
     for the dispatcher path so uninstalling one multi-install event-capable
     integration doesn't delete the dispatcher the others still rely on.
     """
-    from ..integrations._helpers import _read_integration_json
+    from ..integrations.helpers import read_integration_json
     from ..integrations.manifest import IntegrationManifest
     from ..integration_state import installed_integration_keys
 
-    state = _read_integration_json(project_root)
+    state = read_integration_json(project_root)
     for key in installed_integration_keys(state):
         if key == excluding_key:
             continue
@@ -1941,10 +1935,10 @@ def refresh_integration_events(project_root: Path) -> None:
     while a stale native hook may still be active (R3).
     """
     from ..integrations import get_integration
-    from ..integrations._helpers import _read_integration_json, _resolve_integration_options
+    from ..integrations.helpers import read_integration_json, resolve_integration_options_or_exit
     from ..integrations.manifest import IntegrationManifest
     from ..integration_state import installed_integration_keys, try_read_integration_json
-    from .._init_options import load_init_options
+    from ..init_options import load_init_options
 
     if load_init_options(project_root).get("ai") == "generic":
         state, error = try_read_integration_json(project_root)
@@ -1957,7 +1951,7 @@ def refresh_integration_events(project_root: Path) -> None:
             raise EventRefreshError([(".specify/integration.json", detail)])
         state = state or {}
     else:
-        state = _read_integration_json(project_root)
+        state = read_integration_json(project_root)
     failures: list[tuple[str, str]] = []
     for key in installed_integration_keys(state):
         integration = get_integration(key)
@@ -1981,7 +1975,7 @@ def refresh_integration_events(project_root: Path) -> None:
             # S7: resolve this integration's persisted parsed_options so a
             # stored --events false is honored across extension lifecycle
             # changes; passing None would re-enable events the user disabled.
-            _, parsed_options = _resolve_integration_options(integration, state, key, None)
+            _, parsed_options = resolve_integration_options_or_exit(integration, state, key, None)
             events_map = resolve_events(
                 key, integration.config, project_root, parsed_options
             )

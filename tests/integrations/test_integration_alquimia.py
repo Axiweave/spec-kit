@@ -42,12 +42,12 @@ class TestAlquimiaAIIntegration:
         invocation helper must report the hyphenated form when skills are on.
 
         It was the only `SkillsIntegration` subclass absent from every set in
-        `_invocation_style`, so `is_slash_skills_agent` returned False and the
+        `invocation_style`, so `is_slash_skills_agent` returned False and the
         two callers that consult it — `HookExecutor._render_hook_invocation`
         and `specify init`'s Next Steps panel — emitted the dotted
         `/speckit.<name>` form Alquimia never registers.
         """
-        from specify_cli._invocation_style import is_slash_skills_agent
+        from specify_cli.invocation_style import is_slash_skills_agent
 
         assert is_slash_skills_agent("alquimia", True) is True
         # Conditional, not always -- matching the other *conditionally
@@ -67,7 +67,7 @@ class TestAlquimiaAIIntegration:
         """The conditional resolves to True for every real Alquimia project.
 
         Both writers of `ai_skills` key off `integration.is_skills_mode(...)`
-        (`commands/init.py` on init, `integrations/_helpers.py` on
+        (`commands/init.py` on init, `integrations/helpers.py` on
         install/use/upgrade), and `SkillsIntegration.is_skills_mode` returns
         True unconditionally. So `is_ai_skills_enabled(opts)` is True for any
         Alquimia project written by any supported path, and the conditional
@@ -97,7 +97,7 @@ class TestAlquimiaAIIntegration:
         that would make this suite fail whenever one of them is legitimately
         reclassified, and any fixed peer list is liable to drift out of date.
         """
-        from specify_cli._invocation_style import (
+        from specify_cli.invocation_style import (
             ALWAYS_SLASH_AGENTS,
             CONDITIONAL_SLASH_AGENTS,
         )
@@ -137,7 +137,7 @@ class TestAlquimiaAIIntegration:
         `/speckit-plan`; only the helper disagreed, which is why the two
         outputs diverged for the same on-disk layout.
         """
-        from specify_cli._invocation_style import is_slash_skills_agent
+        from specify_cli.invocation_style import is_slash_skills_agent
 
         integration = get_integration("alquimia")
         assert integration.build_command_invocation("plan") == "/speckit-plan"

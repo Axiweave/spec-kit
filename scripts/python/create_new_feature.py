@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import datetime
 import json
+import random
 import re
 import shlex
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -244,11 +246,18 @@ def _fit_branch_name(feature_num: str, branch_suffix: str) -> str:
     return f"{feature_num}-{truncated_suffix}"
 
 
-def _spec_prefix_exists(specs_dir: Path, feature_num: str) -> bool:
-    """Return whether a spec directory owns the given numeric prefix."""
+def _spec_prefix_exists(
+    specs_dir: Path, feature_num: str, own: Path | None = None
+) -> bool:
+    """Return whether a spec directory other than *own* owns the given prefix.
+
+    This is also the tie rescan after an exclusive claim.
+    """
     try:
         return any(
-            entry.is_dir() and entry.name.startswith(f"{feature_num}-")
+            entry.is_dir()
+            and entry.name.startswith(f"{feature_num}-")
+            and entry != own
             for entry in specs_dir.iterdir()
         )
     except OSError:
@@ -420,22 +429,6 @@ def main(argv: list[str] | None = None) -> int:
         confined_workspace_path(workspace_root, spec_file)
 
     if not args.dry_run:
-        if feature_dir.is_dir() and not args.allow_existing:
-            if use_timestamp:
-                print(
-                    f"Error: Feature directory '{feature_dir}' already exists. "
-                    "Rerun to get a new timestamp or use a different --short-name.",
-                    file=sys.stderr,
-                )
-            else:
-                print(
-                    f"Error: Feature directory '{feature_dir}' already exists. "
-                    "Please use a different feature name or specify a different "
-                    "number with --number.",
-                    file=sys.stderr,
-                )
-            return 1
-
         template_content = None
         needs_spec = not spec_file.is_file()
         if needs_spec:
@@ -447,7 +440,64 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"Error: {exc}", file=sys.stderr)
                 return 1
 
-        feature_dir.mkdir(parents=True, exist_ok=True)
+        # Claim the directory exclusively before any write. An auto-numbered run
+        # loses when any other directory has its prefix, removes its own empty
+        # directory, and retries with a new prefix.
+        auto_numbered = not branch_number and not args.allow_existing
+        for attempt in range(1, 21):
+            try:
+                feature_dir.mkdir()
+            except FileExistsError:
+                if args.allow_existing and feature_dir.is_dir():
+                    break
+                if use_timestamp:
+                    print(
+                        f"Error: Feature directory '{feature_dir}' already exists. "
+                        "Rerun to get a new timestamp or use a different --short-name.",
+                        file=sys.stderr,
+                    )
+                else:
+                    print(
+                        f"Error: Feature directory '{feature_dir}' already exists. "
+                        "Please use a different feature name or specify a different "
+                        "number with --number.",
+                        file=sys.stderr,
+                    )
+                return 1
+            if not auto_numbered or not _spec_prefix_exists(
+                specs_dir, feature_num, feature_dir
+            ):
+                break
+            feature_dir.rmdir()
+            if attempt == 20:
+                print(
+                    "ERROR: Could not reserve a feature directory after 20 tries.",
+                    file=sys.stderr,
+                )
+                return 1
+            time.sleep(random.random())
+            if use_timestamp:
+                lost_num = feature_num
+                while (
+                    feature_num := datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+                ) <= lost_num:
+                    time.sleep(0.1)
+            else:
+                number = _get_highest_from_specs(specs_dir) + 1
+                if number > _MAX_FEATURE_NUMBER:
+                    print(
+                        f"Error: feature number must be between 0 and "
+                        f"{_MAX_FEATURE_NUMBER}, got '{number}'",
+                        file=sys.stderr,
+                    )
+                    return 1
+                feature_num = f"{number:03d}"
+            branch_name = _fit_branch_name(feature_num, branch_suffix)
+            feature_dir = specs_dir / branch_name
+            spec_file = feature_dir / "spec.md"
+            if workspace_root != repo_root:
+                confined_workspace_path(workspace_root, feature_dir)
+                confined_workspace_path(workspace_root, spec_file)
 
         if needs_spec:
             if template_content is not None:
@@ -470,8 +520,8 @@ def main(argv: list[str] | None = None) -> int:
             str(feature_dir),
             powershell=sys.platform == "win32",
         )
-        print(f"# To persist: {feature_assignment}", file=sys.stderr)
-        print(f"#              {directory_assignment}", file=sys.stderr)
+        print(f"# To select this feature: {directory_assignment}", file=sys.stderr)
+        print(f"# Optional label:         {feature_assignment}", file=sys.stderr)
 
     if args.json_mode:
         payload: dict[str, object] = {
@@ -487,8 +537,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"SPEC_FILE: {spec_file}")
         print(f"FEATURE_NUM: {feature_num}")
         if not args.dry_run:
-            print(f"# To persist in your shell: {feature_assignment}")
-            print(f"#                           {directory_assignment}")
+            print(f"# To select this feature: {directory_assignment}")
+            print(f"# Optional label:         {feature_assignment}")
     return 0
 
 

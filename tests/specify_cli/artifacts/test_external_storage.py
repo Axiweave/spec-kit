@@ -35,8 +35,7 @@ def _project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, storage: str) -> t
     (workspace / ".specify/workspace.json").write_text(
         json.dumps({"schema_version": 1, "project_id": identity})
     )
-    record = tmp_path / "data/specify/projects" / f"{identity}.json"
-    record.parent.mkdir(parents=True)
+    record = repo / ".specify/checkout.json"
     record.write_text(
         json.dumps({"schema_version": 1, "workspace": str(workspace), "active_feature": None})
     )

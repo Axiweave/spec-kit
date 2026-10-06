@@ -294,7 +294,7 @@ class TestExtensionUpdateCLI:
                  return_value=zip_path,
              ), \
              patch(
-                 "specify_cli._download_security.zipfile.ZipFile",
+                 "specify_cli.download_security.zipfile.ZipFile",
                  side_effect=AssertionError("ZipFile constructor was called"),
              ), \
              patch.object(ExtensionManager, "remove") as remove, \

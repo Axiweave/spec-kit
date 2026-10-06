@@ -9,7 +9,7 @@ import typer
 from rich.panel import Panel
 from rich.table import Table
 
-from ._console import console, show_banner
+from .terminal import console, show_banner
 
 
 def _feature_capabilities() -> dict[str, bool]:

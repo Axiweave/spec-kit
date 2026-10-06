@@ -26,6 +26,11 @@ EXT_CREATE_FEATURE_PS = (
     PROJECT_ROOT / "extensions" / "git" / "scripts" / "powershell" / "create-new-feature-branch.ps1"
 )
 COMMON_SH = PROJECT_ROOT / "scripts" / "bash" / "common.sh"
+NO_FEATURE_SELECTED = (
+    "ERROR: Feature directory not found: no feature is selected. "
+    "Set SPECIFY_FEATURE_DIRECTORY=specs/<feature> for this command. "
+    "This project uses feature_selection context, so scripts ignore the saved feature."
+)
 
 HAS_PWSH = shutil.which("pwsh") is not None
 
@@ -221,6 +226,33 @@ class TestTimestampBranch:
         assert branch is not None
         assert len(branch) <= 244
         assert re.match(r"^\d{8}-\d{6}-", branch)
+
+    def test_same_second_same_name_fails_without_retry(self, git_repo: Path, tmp_path: Path):
+        """Two runs in one second with one short name contend for one directory.
+
+        An exact-name clash is not a prefix tie: the second run fails with the
+        "already exists" error and does not retry with a later timestamp.
+        """
+        fake_bin = tmp_path / "fake-bin"
+        fake_bin.mkdir()
+        date_shim = fake_bin / "date"
+        date_shim.write_text(
+            "#!/bin/sh\n"
+            'if [ "$1" = "+%Y%m%d-%H%M%S" ]; then echo 20260101-120000; exit 0; fi\n'
+            f'exec {shutil.which("date")} "$@"\n',
+            encoding="utf-8",
+        )
+        date_shim.chmod(0o755)
+        env = {**os.environ, "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}"}
+        cmd = ["bash", "scripts/bash/create-new-feature.sh", "--json", "--timestamp", "--short-name", "same", "Same"]
+
+        first = subprocess.run(cmd, cwd=git_repo, capture_output=True, text=True, env=env, timeout=30)
+        second = subprocess.run(cmd, cwd=git_repo, capture_output=True, text=True, env=env, timeout=30)
+
+        assert first.returncode == 0, first.stderr
+        assert second.returncode == 1
+        assert "already exists" in second.stderr
+        assert [p.name for p in (git_repo / "specs").iterdir()] == ["20260101-120000-same"]
 
 
 # ── Sequential Branch Tests ──────────────────────────────────────────────────
@@ -1312,6 +1344,7 @@ class TestFeatureDirectoryResolution:
         )
         assert result.returncode != 0
         assert "Feature directory not found" in result.stderr
+        assert (NO_FEATURE_SELECTED in result.stderr) == (mode == "context")
 
     @requires_bash
     def test_context_mode_ignores_saved_feature_json(self, git_repo: Path):
@@ -1333,7 +1366,7 @@ class TestFeatureDirectoryResolution:
             env=clean_env(),
         )
         assert result.returncode != 0
-        assert "Feature directory not found" in result.stderr
+        assert NO_FEATURE_SELECTED in result.stderr
         assert str(custom_dir) not in result.stdout
         assert feature_json.read_bytes() == before
 
@@ -1439,7 +1472,7 @@ class TestFeatureDirectoryResolution:
             env=clean_env(),
         )
         assert result.returncode != 0
-        assert "Feature directory not found" in (result.stderr + result.stdout)
+        assert NO_FEATURE_SELECTED in result.stderr
         assert feature_json.read_bytes() == before
 
 

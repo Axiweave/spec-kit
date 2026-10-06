@@ -18,13 +18,13 @@ from pathlib import Path
 
 import pytest
 
-from specify_cli import _install_shared_infra
+from specify_cli import install_shared_infra_for_project
 from specify_cli.shared_infra import SPECIFY_GITIGNORE_CONTENT
 
 
 def _install(project: Path, **kwargs) -> None:
     (project / ".specify").mkdir(parents=True, exist_ok=True)
-    _install_shared_infra(project, "sh", **kwargs)
+    install_shared_infra_for_project(project, "sh", **kwargs)
 
 
 def test_gitignore_is_written_and_tracked(tmp_path: Path) -> None:

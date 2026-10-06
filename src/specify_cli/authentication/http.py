@@ -16,7 +16,7 @@ import urllib.request
 from typing import Callable
 from urllib.parse import urlparse
 
-from .._download_security import is_safe_download_redirect
+from ..download_security import is_safe_download_redirect
 from . import get_provider
 from .config import (
     AuthConfigEntry,

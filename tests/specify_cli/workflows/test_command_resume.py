@@ -908,7 +908,7 @@ steps:
     ]
     assert finished.inputs["note"] == note
     assert finished.step_results["remember"] == state["step_results"]["remember"]
-    assert {path.name for path in (repo / ".specify").iterdir()} == {"project.json"}
+    assert {path.name for path in (repo / ".specify").iterdir()} == {"checkout.json", "project.json"}
     if moved:
         assert not source.exists()
     else:

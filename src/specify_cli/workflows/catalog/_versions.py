@@ -7,7 +7,7 @@ from typing import Any
 
 from packaging.version import InvalidVersion, Version
 
-from ..._download_security import is_https_or_localhost_http
+from ...download_security import is_https_or_localhost_http
 from ..engine import _is_valid_workflow_version
 from ._domain import WorkflowValidationError
 

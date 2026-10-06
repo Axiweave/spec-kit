@@ -8,9 +8,9 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from ._invocation_style import get_invocation_prefix
+from .invocation_style import get_invocation_prefix
 from ._agent_config import SCRIPT_TYPE_CHOICES
-from ._init_options import load_init_options
+from .init_options import load_init_options
 from .integration_state import integration_setting, integration_settings
 
 

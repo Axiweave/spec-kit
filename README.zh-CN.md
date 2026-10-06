@@ -64,6 +64,20 @@ CLI 只需安装一次，项目只需初始化一次；以下三种流程共用�
 在**助手的聊天界面中逐个调用 `/speckit-*` 技能**，检查结果后再继续。
 这些是助手技能，不是终端命令。其他助手或模式可能采用[不同的调用语法](https://github.github.io/spec-kit/reference/integrations.html#command-invocation)。
 
+### 将规范存放在仓库之外
+
+Spec Kit 可以将规范、计划和任务保存在单独的工作区文件夹中。
+这样，代码仓库中只保留一个小的定位文件 `.specify/project.json`。
+每个克隆或工作树只需一条命令即可链接到工作区：
+
+```bash
+specify init my-project --integration copilot --workspace ~/speckit-specs/my-project
+# 在同一仓库的另一个克隆或工作树中：
+specify project link ~/speckit-specs/my-project
+```
+
+如需通过 Git 与团队共享同一个工作区，请参阅[共享工作区](./docs/guides/shared-workspaces.md)。
+
 <a id="-什么是规范驱动开发"></a>
 <a id="3-确立项目准则"></a>
 <a id="4-编写规范"></a>

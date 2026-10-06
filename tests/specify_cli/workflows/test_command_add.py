@@ -3834,7 +3834,7 @@ class TestOverlayCli:
     """CLI-level tests for ``specify workflow overlay *``."""
 
     def test_workflow_add_does_not_copy_overlays(self, project_dir, monkeypatch, tmp_path):
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         source_dir = tmp_path / "source-wf"
         source_dir.mkdir()
         (source_dir / "workflow.yml").write_text(

@@ -11,8 +11,8 @@ import tempfile
 import yaml
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
-from ._console import console
-from ._download_security import normalize_zip_member_name
+from .terminal import console
+from .download_security import normalize_zip_member_name
 
 CLAUDE_LOCAL_PATH = Path.home() / ".claude" / "local" / "claude"
 CLAUDE_NPM_LOCAL_PATH = Path.home() / ".claude" / "local" / "node_modules" / ".bin" / "claude"

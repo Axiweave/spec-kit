@@ -636,11 +636,11 @@ class TestCliDoesNotManageExtensionConfig:
 
     def test_update_init_options_does_not_create_ext_config(self, tmp_path):
         from specify_cli.integrations import INTEGRATION_REGISTRY
-        from specify_cli.integrations._helpers import (
-            _update_init_options_for_integration,
+        from specify_cli.integrations.helpers import (
+            update_init_options_for_integration,
         )
 
-        _update_init_options_for_integration(
+        update_init_options_for_integration(
             tmp_path, INTEGRATION_REGISTRY["claude"], script_type="sh"
         )
 
@@ -654,12 +654,12 @@ class TestCliDoesNotManageExtensionConfig:
         assert not cfg.exists()
 
     def test_clear_init_options_does_not_create_ext_config(self, tmp_path):
-        from specify_cli.integrations._helpers import (
-            _clear_init_options_for_integration,
+        from specify_cli.integrations.helpers import (
+            clear_init_options_for_integration,
         )
 
         save_init_options(tmp_path, {"integration": "claude", "ai": "claude"})
-        _clear_init_options_for_integration(tmp_path, "claude")
+        clear_init_options_for_integration(tmp_path, "claude")
 
         cfg = (
             tmp_path
@@ -928,9 +928,9 @@ class TestBackwardCompatibility:
         self, tmp_path
     ):
         from specify_cli.integrations import INTEGRATION_REGISTRY
-        from specify_cli.integrations._helpers import (
-            _clear_init_options_for_integration,
-            _update_init_options_for_integration,
+        from specify_cli.integrations.helpers import (
+            clear_init_options_for_integration,
+            update_init_options_for_integration,
         )
 
         project = tmp_path / "legacy"
@@ -944,13 +944,13 @@ class TestBackwardCompatibility:
         before_cfg = cfg_path.read_text(encoding="utf-8")
 
         # Switch to a different integration.
-        _update_init_options_for_integration(
+        update_init_options_for_integration(
             project, INTEGRATION_REGISTRY["gemini"], script_type="sh"
         )
         assert ctx.read_text(encoding="utf-8") == before_ctx
         assert cfg_path.read_text(encoding="utf-8") == before_cfg
 
         # Uninstall.
-        _clear_init_options_for_integration(project, "gemini")
+        clear_init_options_for_integration(project, "gemini")
         assert ctx.read_text(encoding="utf-8") == before_ctx
         assert cfg_path.read_text(encoding="utf-8") == before_cfg

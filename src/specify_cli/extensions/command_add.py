@@ -13,8 +13,9 @@ from packaging.version import InvalidVersion, Version
 from rich.markup import escape as _escape_markup
 from rich.panel import Panel
 
-from .._console import console
+from ..terminal import console
 from . import _commands
+from . import install
 
 
 @_commands.extension_app.command("add")
@@ -76,7 +77,7 @@ def extension_add(
             console.print(f"[red]Error:[/red] Invalid URL: {_escape_markup(from_url)}")
             raise typer.Exit(1)
 
-        if not _commands.is_https_or_localhost_http(from_url):
+        if not install.is_https_or_localhost_http(from_url):
             console.print("[red]Error:[/red] URL must use HTTPS for security.")
             console.print("HTTP is only allowed for loopback URLs.")
             raise typer.Exit(1)
@@ -133,7 +134,7 @@ def extension_add(
                 # bounded read, archive-format detection, TOCTOU-safe transient
                 # archive). Same path used by ``specify init --extension <url>``.
                 console.print(f"Downloading from {safe_url}...")
-                manifest = _commands.install_extension_from_url(
+                manifest = install.install_extension_from_url(
                     manager,
                     project_root,
                     from_url,
@@ -157,7 +158,7 @@ def extension_add(
                     catalog = ExtensionCatalog(project_root)
 
                     # Check if extension exists in catalog (supports both ID and display name)
-                    ext_info, catalog_error = _commands._resolve_catalog_extension(
+                    ext_info, catalog_error = install.resolve_catalog_extension(
                         extension, catalog, "add"
                     )
                     if catalog_error:
@@ -293,7 +294,7 @@ def extension_add(
 
         # #1: regenerate native event config for installed event-capable
         # integrations so the new extension's events take effect immediately.
-        _commands._refresh_events_and_warn(project_root)
+        install.refresh_events_and_warn(project_root)
 
         for warning in manifest.warnings:
             console.print(f"\n[yellow]⚠  Compatibility warning:[/yellow] {_escape_markup(str(warning))}")

@@ -7,15 +7,15 @@ from __future__ import annotations
 
 import typer
 
-from .._assets import get_speckit_version  # noqa: F401 — re-exported for monkeypatching in tests
+from ..assets import get_speckit_version  # noqa: F401 — re-exported for monkeypatching in tests
 from .catalog import catalog_app as integration_catalog_app  # noqa: F401 — compatibility alias
 
 # Re-export helpers used by command_init.py and tests
-from ._helpers import (  # noqa: F401
+from .helpers import (  # noqa: F401
     _cli_error_detail,
     _cli_phase_label,
-    _parse_integration_options,
-    _write_integration_json,
+    parse_integration_options_or_exit,
+    save_integration_json,
 )
 
 integration_app = typer.Typer(

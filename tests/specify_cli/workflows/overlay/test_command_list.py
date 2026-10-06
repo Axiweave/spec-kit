@@ -22,7 +22,7 @@ class TestOverlayCli:
     """CLI-level tests for ``specify workflow overlay *``."""
 
     def test_overlay_list(self, project_dir, monkeypatch):
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         _write_workflow(
             project_dir,
             "wf",
@@ -76,7 +76,7 @@ class TestOverlayFilenameVsManifestId:
 
     def test_find_overlay_by_manifest_id_not_filename(self, project_dir, monkeypatch):
         """_find_overlay_file must locate overlays by manifest id, not filename."""
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         _write_workflow(
             project_dir,
             "wf",
@@ -113,7 +113,7 @@ class TestOverlayFilenameVsManifestId:
 
     def test_duplicate_manifest_id_is_rejected(self, project_dir, monkeypatch):
         """Two files with the same manifest ID are ambiguous."""
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         _write_workflow(
             project_dir,
             "wf",
@@ -163,14 +163,14 @@ class TestOverlayPathTraversal:
     def test_overlay_operations_reject_reserved_workflow_id(
         self, project_dir, monkeypatch, workflow_id
     ):
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         result = runner.invoke(app, ["workflow", "overlay", "list", workflow_id])
         assert result.exit_code != 0, result.output
         assert "Invalid" in result.output or "reserved" in result.output.lower()
 
     def test_overlay_rejects_symlinked_overlays_dir(self, project_dir, monkeypatch, tmp_path):
         """Overlay commands must reject a symlinked .specify/workflows/overlays directory."""
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
 
         # Create a symlinked overlays directory pointing outside the project
         outside_dir = tmp_path / "outside"
@@ -184,7 +184,7 @@ class TestOverlayPathTraversal:
 
     def test_overlay_list_rejects_symlinked_per_workflow_dir(self, project_dir, monkeypatch, tmp_path):
         """Overlay list must reject a symlinked per-workflow overlay directory."""
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
 
         # Create a real overlay directory outside the project.
         outside_dir = tmp_path / "outside_wf"
@@ -219,7 +219,7 @@ class TestOverlayPathTraversal:
 
     def test_overlay_list_reports_invalid_yaml_cleanly(self, project_dir, monkeypatch):
         """Overlay list should surface malformed overlay YAML as a clean user error."""
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         _write_workflow(
             project_dir,
             "wf",

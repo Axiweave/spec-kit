@@ -9,8 +9,8 @@ from uuid import uuid4
 
 import pytest
 
-from specify_cli._private_checkout import (
-    BEGIN, END, attach_integrations, exclude_path, install_integration, plan_checkout_files,
+from specify_cli.private_checkout import (
+    BEGIN, END, attach_integrations, exclude_path, install_integration, plan_checkout_files, plan_reconcile,
     refuse_tracked, regenerate_exclude_block,
 )
 from specify_cli.integration_runtime import parse_integration_options
@@ -273,3 +273,38 @@ def test_preflight_dry_run_changes_nothing_and_lists_private_targets(tmp_path, i
         assert any("external" in path for path in planned), planned
         if key != "generic":  # Preset registration has no command directory for generic.
             assert any("team" in path and "review" in path for path in planned), planned
+
+
+def test_reconcile_keeps_a_modified_file_of_a_stale_integration(tmp_path, isolated_home, monkeypatch):
+    from typer.testing import CliRunner
+
+    from specify_cli import app
+
+    workspace = _private_workspace(tmp_path / "ws", "claude").resolve()
+    project_id = json.loads((workspace / ".specify/workspace.json").read_text(encoding="utf-8"))["project_id"]
+    checkout = _repo(tmp_path / "code")
+    (checkout / ".specify").mkdir()
+    (checkout / ".specify/project.json").write_text(
+        json.dumps({"schema_version": 1, "project_id": project_id, "storage": "external"}), encoding="utf-8",
+    )
+    (checkout / ".specify/checkout.json").write_text(
+        json.dumps({"schema_version": 1, "workspace": str(workspace), "active_feature": None}), encoding="utf-8",
+    )
+    attach_integrations(checkout, ["claude"], version="1")
+    local = checkout / ".specify/integrations/claude.manifest.json"
+    local.write_text(json.dumps({**json.loads(local.read_text(encoding="utf-8")), "version": "0"}), encoding="utf-8")
+    assert plan_reconcile(checkout, workspace, version="1") == (["claude"], ["claude"], {})
+    skill = checkout / ".claude/skills/speckit-plan/SKILL.md"
+    skill.write_text("# Mine\n", encoding="utf-8")
+
+    assert plan_reconcile(checkout, workspace, version="1") == ([], [], {"claude": [".claude/skills/speckit-plan/SKILL.md"]})
+    monkeypatch.chdir(checkout)
+    result = CliRunner().invoke(app, ["project", "link", str(workspace)])
+
+    assert result.exit_code == 0, result.output
+    assert (
+        "Kept modified file: .claude/skills/speckit-plan/SKILL.md\n"
+        "Repair: specify integration upgrade claude --force\n"
+    ) in result.output
+    assert skill.read_text(encoding="utf-8") == "# Mine\n"
+    assert json.loads(local.read_text(encoding="utf-8"))["version"] == "0"

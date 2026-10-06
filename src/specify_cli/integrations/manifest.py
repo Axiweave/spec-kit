@@ -19,7 +19,7 @@ from typing import Any
 from ..workspace import is_private, workspace_root_for
 
 
-def _sha256(path: Path) -> str:
+def sha256_file(path: Path) -> str:
     """Return the hex SHA-256 digest of *path*."""
     h = hashlib.sha256()
     with open(path, "rb") as fh:
@@ -28,7 +28,7 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
-def _validate_rel_path(rel: Path, root: Path, *, resolve_root: bool = True) -> Path:
+def validate_rel_path(rel: Path, root: Path, *, resolve_root: bool = True) -> Path:
     """Resolve *rel* against *root* and verify it stays within *root*.
 
     Raises ``ValueError`` if *rel* is absolute, contains ``..`` segments
@@ -50,7 +50,7 @@ def _validate_rel_path(rel: Path, root: Path, *, resolve_root: bool = True) -> P
     return resolved
 
 
-def _manifest_path_label(root: Path, path: Path) -> str:
+def manifest_path_label(root: Path, path: Path) -> str:
     try:
         return path.relative_to(root).as_posix()
     except ValueError:
@@ -63,13 +63,13 @@ def _ensure_safe_manifest_directory(root: Path, directory: Path) -> None:
     try:
         rel = directory.relative_to(root)
     except ValueError:
-        label = _manifest_path_label(root, directory)
+        label = manifest_path_label(root, directory)
         raise ValueError(f"Integration manifest directory escapes project root: {label}") from None
 
     current = root
     for part in rel.parts:
         current = current / part
-        label = _manifest_path_label(root, current)
+        label = manifest_path_label(root, current)
         if current.is_symlink():
             raise ValueError(f"Refusing to use symlinked integration manifest directory: {label}")
         if current.exists():
@@ -91,7 +91,7 @@ def _ensure_safe_manifest_destination(root: Path, path: Path) -> None:
     """Refuse manifest writes that would escape the project or follow symlinks."""
     root_resolved = root.resolve()
     _ensure_safe_manifest_directory(root, path.parent)
-    label = _manifest_path_label(root, path)
+    label = manifest_path_label(root, path)
     if path.is_symlink():
         raise ValueError(f"Refusing to overwrite symlinked integration manifest path: {label}")
     if path.exists():
@@ -132,7 +132,7 @@ def _read_manifest(path: Path) -> dict[str, Any]:
     return data
 
 
-def _write_manifest(root: Path, path: Path, data: dict[str, Any]) -> None:
+def write_manifest(root: Path, path: Path, data: dict[str, Any]) -> None:
     content = json.dumps(data, indent=2) + "\n"
     _ensure_safe_manifest_destination(root, path)
     fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
@@ -147,6 +147,24 @@ def _write_manifest(root: Path, path: Path, data: dict[str, Any]) -> None:
         temp_path.unlink(missing_ok=True)
 
 
+def append_gitignore(root: Path, relative: str) -> bool:
+    """Append the anchored line for *relative* to ``root/.gitignore`` when missing.
+
+    Append mode never drops a line that a concurrent writer added. Returns True
+    when this call appended the line.
+    """
+    ignore = root / ".gitignore"
+    if ignore.is_symlink():
+        raise ValueError(f"Refusing a symlinked ignore file: {ignore}")
+    content = ignore.read_text(encoding="utf-8") if ignore.exists() else ""
+    entry = "/" + relative.replace("\\", "\\\\").replace(" ", "\\ ")
+    if entry in content.splitlines():
+        return False
+    with ignore.open("a", encoding="utf-8") as handle:
+        handle.write(("\n" if content and not content.endswith("\n") else "") + entry + "\n")
+    return True
+
+
 class IntegrationManifest:
     """Tracks files installed by a single integration.
 
@@ -155,6 +173,7 @@ class IntegrationManifest:
         project_root: Absolute path to the project directory.
         version:      CLI version string recorded in the manifest.
         resolve_project_root: Resolve ``project_root`` before using it.
+        installed_at: Original install timestamp to keep; ``None`` stamps it on save.
     """
 
     def __init__(
@@ -164,6 +183,7 @@ class IntegrationManifest:
         version: str = "",
         *,
         resolve_project_root: bool = True,
+        installed_at: str | None = None,
     ) -> None:
         self.key = key
         self.project_root = (
@@ -179,7 +199,7 @@ class IntegrationManifest:
         self.version = version
         self._files: dict[str, str] = {}  # rel_path → sha256 hex
         self._recovered_files: set[str] = set()
-        self._installed_at: str = ""
+        self._installed_at: str = installed_at or ""
 
     # -- Manifest file location -------------------------------------------
 
@@ -225,19 +245,13 @@ class IntegrationManifest:
             if current.is_symlink():
                 raise ValueError(f"Refusing to use symlinked manifest path: {rel}")
         # Both asset roots already follow the constructor's resolution policy.
-        _validate_rel_path(rel.parent if allow_symlink else rel, root, resolve_root=False)
+        validate_rel_path(rel.parent if allow_symlink else rel, root, resolve_root=False)
         return root / rel
 
     def _ignore_entry_point(self, relative: str) -> None:
         if self.private or self.metadata_root == self.project_root or relative.startswith(".specify/"):
             return
-        ignore = self.project_root / ".gitignore"
-        if ignore.is_symlink():
-            raise ValueError(f"Refusing a symlinked ignore file: {ignore}")
-        content = ignore.read_text(encoding="utf-8") if ignore.exists() else ""
-        entry = "/" + relative.replace("\\", "\\\\").replace(" ", "\\ ")
-        if entry not in content.splitlines():
-            ignore.write_text(content.rstrip("\n") + "\n" + entry + "\n", encoding="utf-8")
+        append_gitignore(self.project_root, relative)
 
     def exclude(self, relatives: list[str]) -> None:
         """Hide checkout paths that Spec Kit writes outside this manifest's hash list.
@@ -255,8 +269,8 @@ class IntegrationManifest:
             else {"integration": self.key, "version": self.version, "files": {}}
         )
         data["excluded"] = sorted(set(data.get("excluded", [])) | set(relatives))
-        _write_manifest(self.project_root, path, data)
-        from .._private_checkout import regenerate_exclude_block
+        write_manifest(self.project_root, path, data)
+        from ..private_checkout import regenerate_exclude_block
         regenerate_exclude_block(self.project_root)
 
     # -- Recording files --------------------------------------------------
@@ -318,7 +332,7 @@ class IntegrationManifest:
                 f"Manifest path is not a regular file: {rel}"
             )
         normalized = rel.as_posix()
-        self._files[normalized] = _sha256(abs_path)
+        self._files[normalized] = sha256_file(abs_path)
         if recovered:
             self._recovered_files.add(normalized)
         else:
@@ -402,7 +416,7 @@ class IntegrationManifest:
                 modified.append(rel)
                 continue
             try:
-                changed = _sha256(abs_path) != expected_hash
+                changed = sha256_file(abs_path) != expected_hash
             except OSError:
                 # Unreadable regular file (e.g. permission denied): treat as
                 # modified, consistent with the symlink / non-regular-file
@@ -469,7 +483,7 @@ class IntegrationManifest:
             else:
                 if not force:
                     try:
-                        matches = _sha256(path) == expected_hash
+                        matches = sha256_file(path) == expected_hash
                     except OSError:
                         # Unreadable: can't verify it's ours, so preserve it
                         # (mirrors the path.unlink() OSError guard below).
@@ -529,7 +543,7 @@ class IntegrationManifest:
                         break
                     parent = parent.parent
         if self.private:
-            from .._private_checkout import regenerate_exclude_block
+            from ..private_checkout import regenerate_exclude_block
             regenerate_exclude_block(self.project_root)
 
         return removed, skipped
@@ -555,19 +569,19 @@ class IntegrationManifest:
             }
 
         if not self.private:
-            _write_manifest(self.metadata_root, self.manifest_path, data(self._files))
+            write_manifest(self.metadata_root, self.manifest_path, data(self._files))
             return self.manifest_path
         shared = {k: v for k, v in self._files.items() if k.startswith(".specify/")}
         local = {k: v for k, v in self._files.items() if k not in shared}
-        _write_manifest(self.metadata_root, self.manifest_path, data(shared))
+        write_manifest(self.metadata_root, self.manifest_path, data(shared))
         checkout = self._checkout_manifest_file()
         local_data = data(local)
         # Paths hidden by exclude() stay hidden until this checkout drops the integration.
         excluded = _read_manifest(checkout).get("excluded", []) if checkout.exists() else []
         if excluded:
             local_data["excluded"] = excluded
-        _write_manifest(self.project_root, checkout, local_data)
-        from .._private_checkout import regenerate_exclude_block
+        write_manifest(self.project_root, checkout, local_data)
+        from ..private_checkout import regenerate_exclude_block
         regenerate_exclude_block(self.project_root)
         return self.manifest_path
 

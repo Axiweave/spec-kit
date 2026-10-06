@@ -177,7 +177,7 @@ def _shared_relative_path(project_path: Path, dest: Path) -> Path:
     return rel
 
 
-def _ensure_safe_shared_directory(
+def ensure_safe_shared_directory(
     project_path: Path,
     directory: Path,
     *,
@@ -213,7 +213,7 @@ def _ensure_safe_shared_directory(
             raise ValueError(f"{context.capitalize()} escapes project root: {label}") from None
 
 
-def _validate_safe_shared_directory(project_path: Path, directory: Path) -> None:
+def validate_safe_shared_directory(project_path: Path, directory: Path) -> None:
     """Validate existing directory parents while allowing missing directories."""
     root = project_path.resolve()
     rel = _shared_relative_path(project_path, directory)
@@ -235,7 +235,7 @@ def _validate_safe_shared_directory(project_path: Path, directory: Path) -> None
 
 
 @contextlib.contextmanager
-def _exclusive_project_lock(project_root: Path, lock_name: str, *, context: str):
+def exclusive_project_lock(project_root: Path, lock_name: str, *, context: str):
     """Hold an exclusive inter-process lock on ``.specify/<lock_name>``.
 
     Callers use one lock file per mutable project resource so that its
@@ -245,7 +245,7 @@ def _exclusive_project_lock(project_root: Path, lock_name: str, *, context: str)
     project_root = Path(project_root)
     lock_dir = project_root / ".specify"
     try:
-        _ensure_safe_shared_directory(
+        ensure_safe_shared_directory(
             project_root, lock_dir, context=f"{context} lock directory"
         )
     except ValueError as exc:
@@ -288,7 +288,7 @@ def _exclusive_project_lock(project_root: Path, lock_name: str, *, context: str)
         os.close(fd)
 
 
-def _ensure_safe_shared_destination(
+def ensure_safe_shared_destination(
     project_path: Path,
     dest: Path,
     *,
@@ -298,9 +298,9 @@ def _ensure_safe_shared_destination(
     root = project_path.resolve()
     _shared_relative_path(project_path, dest)
     if parent_must_exist:
-        _ensure_safe_shared_directory(project_path, dest.parent, create=False)
+        ensure_safe_shared_directory(project_path, dest.parent, create=False)
     else:
-        _validate_safe_shared_directory(project_path, dest.parent)
+        validate_safe_shared_directory(project_path, dest.parent)
     label = _shared_destination_label(project_path, dest)
     if dest.is_symlink():
         raise SymlinkedSharedPathError(f"Refusing to overwrite symlinked shared infrastructure path: {label}")
@@ -312,25 +312,25 @@ def _ensure_safe_shared_destination(
             raise ValueError(f"Shared infrastructure destination escapes project root: {label}") from None
 
 
-def _write_shared_text(project_path: Path, dest: Path, content: str) -> None:
-    _write_shared_bytes(project_path, dest, content.encode("utf-8"))
+def write_shared_text(project_path: Path, dest: Path, content: str) -> None:
+    write_shared_bytes(project_path, dest, content.encode("utf-8"))
 
 
-def _write_shared_bytes(
+def write_shared_bytes(
     project_path: Path,
     dest: Path,
     content: bytes,
     *,
     mode: int = 0o644,
 ) -> None:
-    _ensure_safe_shared_destination(project_path, dest)
+    ensure_safe_shared_destination(project_path, dest)
     fd, temp_name = tempfile.mkstemp(prefix=f".{dest.name}.", dir=dest.parent)
     temp_path = Path(temp_name)
     try:
         with os.fdopen(fd, "wb") as fh:
             fh.write(content)
         temp_path.chmod(mode)
-        _ensure_safe_shared_destination(project_path, dest)
+        ensure_safe_shared_destination(project_path, dest)
         os.replace(temp_path, dest)
     finally:
         temp_path.unlink(missing_ok=True)
@@ -422,13 +422,13 @@ def refresh_shared_templates(
     planned_updates: list[tuple[Path, str, str]] = []
 
     dest_templates = project_path / ".specify" / "templates"
-    _ensure_safe_shared_directory(project_path, dest_templates)
+    ensure_safe_shared_directory(project_path, dest_templates)
     for src in templates_src.iterdir():
         if not src.is_file() or src.name == "vscode-settings.json" or src.name.startswith("."):
             continue
 
         dst = dest_templates / src.name
-        _ensure_safe_shared_destination(project_path, dst)
+        ensure_safe_shared_destination(project_path, dst)
         rel = dst.relative_to(project_path).as_posix()
         if dst.exists() and not force:
             if rel not in tracked_files or rel in modified or manifest.is_recovered(rel):
@@ -445,7 +445,7 @@ def refresh_shared_templates(
         planned_updates.append((dst, rel, content))
 
     for dst, rel, content in planned_updates:
-        _write_shared_text(project_path, dst, content)
+        write_shared_text(project_path, dst, content)
         manifest.record_existing(rel)
 
     manifest.save()
@@ -489,15 +489,15 @@ def install_shared_infra(
     bytes match the current bundle. Migration uses this check to avoid an
     unsafe cutover without overwriting edited or unowned helpers.
     """
-    from .integrations.manifest import _sha256, _validate_rel_path
+    from .integrations.manifest import sha256_file, validate_rel_path
     from .workspace import workspace_root_for
 
     if repo_root is None:
-        from ._assets import _locate_core_pack, _repo_root
+        from .assets import locate_core_pack, source_repo_root
 
-        repo_root = _repo_root()
+        repo_root = source_repo_root()
         if core_pack is None:
-            core_pack = _locate_core_pack()
+            core_pack = locate_core_pack()
 
     project_path = workspace_root_for(project_path)
 
@@ -511,7 +511,7 @@ def install_shared_infra(
         if manifest.is_recovered(rel):
             return False
         try:
-            return _sha256(dst) == expected
+            return sha256_file(dst) == expected
         except OSError:
             return False
 
@@ -559,7 +559,7 @@ def install_shared_infra(
         treating them as "symlinked" would mask security-relevant failures.
         """
         try:
-            _ensure_safe_shared_destination(project_path, dst, parent_must_exist=parent_must_exist)
+            ensure_safe_shared_destination(project_path, dst, parent_must_exist=parent_must_exist)
         except SymlinkedSharedPathError:
             symlinked_files.append(rel)
             return False
@@ -574,7 +574,7 @@ def install_shared_infra(
         (escape, not-a-directory) re-raise so the operation aborts.
         """
         try:
-            _ensure_safe_shared_directory(project_path, directory)
+            ensure_safe_shared_directory(project_path, directory)
         except SymlinkedSharedPathError:
             symlinked_files.append(directory.relative_to(project_path).as_posix())
             return False
@@ -752,11 +752,11 @@ def install_shared_infra(
     for dst_path, rel, content, mode in planned_copies:
         if not _ensure_or_bucket_dir(dst_path.parent):
             continue
-        _write_shared_bytes(project_path, dst_path, content, mode=mode)
+        write_shared_bytes(project_path, dst_path, content, mode=mode)
         manifest.record_existing(rel)
 
     for dst, rel, content in planned_templates:
-        _write_shared_text(project_path, dst, content)
+        write_shared_text(project_path, dst, content)
         manifest.record_existing(rel)
 
     if skipped_files:
@@ -817,7 +817,7 @@ def install_shared_infra(
             # Guard corrupted/hand-edited manifest keys BEFORE any filesystem
             # access: absolute, ``..``, or (on Windows) drive-relative keys such
             # as ``C:tmp`` are not ``is_absolute()`` yet discard the project root
-            # when joined. The lexical check is a fast reject; ``_validate_rel_path``
+            # when joined. The lexical check is a fast reject; ``validate_rel_path``
             # resolves the join and confirms containment, catching the rest. A key
             # that still escapes is *skipped*, never turned into an install-time
             # hard failure. Mirrors IntegrationManifest.is_recovered / remove.
@@ -825,7 +825,7 @@ def install_shared_infra(
             if rel_path.is_absolute() or ".." in rel_path.parts:
                 continue
             try:
-                _validate_rel_path(rel_path, project_path)
+                validate_rel_path(rel_path, project_path)
             except ValueError:
                 continue
             dst = project_path / rel_path

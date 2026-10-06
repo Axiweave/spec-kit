@@ -58,7 +58,7 @@ class TestIntegrationSearch(IntegrationCatalogCliTestBase):
     ):
         """A non-UTF8 ``integration.json`` must surface a clear error and
         avoid falling through to the catalog lookup, mirroring the malformed-JSON
-        case but for the ``UnicodeDecodeError`` branch in ``_read_integration_json``."""
+        case but for the ``UnicodeDecodeError`` branch in ``read_integration_json``."""
         project = self._make_project(tmp_path)
         # 0xFF is invalid as the leading byte of any UTF-8 sequence, so
         # ``Path.read_text(encoding="utf-8")`` raises ``UnicodeDecodeError``.

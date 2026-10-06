@@ -202,6 +202,7 @@ def native_paths(repository: Path) -> tuple[Path, ...]:
 
 def _refresh_core_assets(
     repository: Path, manifests: list[IntegrationManifest], modified: dict[str, set[str]],
+    *, require_current_scripts: bool = True,
 ) -> None:
     from .. import console, ensure_executable_scripts, get_speckit_version
     from ..artifacts.catalog import locate_shared_asset_dir
@@ -229,7 +230,7 @@ def _refresh_core_assets(
             repository, script_type, version=get_speckit_version(),
             console=console,
             invoke_separator=separator, invoke_prefix=prefix,
-            refresh_managed=True, require_current_scripts=True,
+            refresh_managed=True, require_current_scripts=require_current_scripts,
         )
     if script_types:
         refreshed = IntegrationManifest.load("speckit", repository)
@@ -258,10 +259,10 @@ def _refresh_core_assets(
 
 def _stock_specify_body(
     repository: Path, path: Path, manifests: list[IntegrationManifest], modified: dict[str, set[str]],
-) -> str | None:
-    """Render only the managed core feature-selection protocol."""
+) -> tuple[str | None, IntegrationBase | None]:
+    """Render only the managed core feature-selection protocol and name its owner."""
     if not path.is_relative_to(repository):
-        return None
+        return None, None
     from ..presets import PresetResolver
 
     relative = path.relative_to(repository).as_posix()
@@ -289,16 +290,16 @@ def _stock_specify_body(
             invoke_separator=invoke_separator_for_integration(integration, state, manifest.key, project_root=repository),
             project_root=repository,
         )
-        return CommandRegistrar.parse_frontmatter(processed)[1]
-    return None
+        return CommandRegistrar.parse_frontmatter(processed)[1], integration
+    return None, None
 
 
-def _toml_prompt(content: str, replacement: str | None = None) -> str:
+def _toml_prompt(content: str, replacement: str | None = None, note=IntegrationBase.add_workspace_note) -> str:
     data = tomllib.loads(content)
     prompt = data.get("prompt")
     if not isinstance(prompt, str):
         raise ValueError("A native TOML command must have a string prompt.")
-    updated = IntegrationBase.add_workspace_note(prompt if replacement is None else replacement)
+    updated = note(prompt if replacement is None else replacement)
     if updated == prompt:
         return content
     expected = {**data, "prompt": updated}
@@ -325,7 +326,7 @@ def _toml_prompt(content: str, replacement: str | None = None) -> str:
     raise ValueError("Cannot safely locate the native TOML prompt string.")
 
 
-def _yaml_prompt(content: str, replacement: str | None = None) -> str:
+def _yaml_prompt(content: str, replacement: str | None = None, note=IntegrationBase.add_workspace_note) -> str:
     try:
         data = yaml.safe_load(content)
         node = yaml.compose(content)
@@ -335,7 +336,7 @@ def _yaml_prompt(content: str, replacement: str | None = None) -> str:
         prompt = data.get(field)
         if not isinstance(prompt, str):
             raise ValueError("A native YAML command must have string instructions.")
-        updated = IntegrationBase.add_workspace_note(prompt if replacement is None else replacement)
+        updated = note(prompt if replacement is None else replacement)
         if updated == prompt:
             return content
         candidates = [value for key, value in node.value if key.value == field]
@@ -397,7 +398,7 @@ def refresh_commands(repository: Path) -> None:
     for path in sorted(commands):
         content = path.read_bytes().decode("utf-8")
         original_content = content
-        replacement = _stock_specify_body(repository, path, manifests, modified)
+        replacement, integration = _stock_specify_body(repository, path, manifests, modified)
         if path.suffix == ".toml":
             updated = _toml_prompt(content, replacement)
         elif path.suffix in {".yaml", ".yml"}:
@@ -405,7 +406,11 @@ def refresh_commands(repository: Path) -> None:
         else:
             if replacement is not None:
                 header = re.match(r"\A---[ \t]*\r?\n.*?^---[ \t]*(?:\r?\n|$)", content, re.M | re.S)
-                content = (header.group(0) if header else "") + "\n" + replacement + "\n"
+                # A fresh SKILL.md keeps the blank line that opens the workspace note.
+                gap = "\n\n" if path.name == "SKILL.md" else "\n"
+                content = (header.group(0) if header else "") + gap + replacement + "\n"
+                if path.name == "SKILL.md":
+                    content = integration.post_process_skill_content(content)
             updated = IntegrationBase.add_workspace_note(content)
         if updated != original_content:
             replacements[path] = updated.encode("utf-8")
@@ -432,3 +437,47 @@ def refresh_commands(repository: Path) -> None:
         current = {**original, **current, "files": files}
         if current != original:
             atomic_json(manifest.manifest_path, current)
+
+
+def remove_workspace_notes(repository: Path) -> tuple[Path, ...]:
+    """Refresh core assets and remove the workspace note after a move to local storage.
+
+    Edited and recovered commands keep their bytes. Commands outside the
+    repository (Hermes skills) are shared by every checkout, so they keep the
+    note too. Return those shared commands. The caller owns rollback.
+    """
+    repository = repository.resolve()
+    if workspace_root_for(repository) != repository:
+        raise ValueError("Workspace note removal requires local storage.")
+    _, commands, manifests = _inventory(repository)
+    modified = {
+        manifest.key: set(manifest.check_modified()) | manifest.recovered_files
+        for manifest in manifests
+    }
+    _refresh_core_assets(repository, manifests, modified, require_current_scripts=False)
+    edited = set().union(*modified.values())
+    changed, shared = set(), []
+    for path in sorted(commands):
+        if not path.is_relative_to(repository):
+            shared.append(path)
+            continue
+        if path.relative_to(repository).as_posix() in edited:
+            continue
+        content = path.read_bytes().decode("utf-8")
+        if path.suffix == ".toml":
+            updated = _toml_prompt(content, note=IntegrationBase.remove_workspace_note)
+        elif path.suffix in {".yaml", ".yml"}:
+            updated = _yaml_prompt(content, note=IntegrationBase.remove_workspace_note)
+        else:
+            updated = IntegrationBase.remove_workspace_note(content)
+        if updated != content:
+            path.write_bytes(updated.encode("utf-8"))
+            changed.add(path)
+    for manifest in manifests:
+        owned = [relative for relative in manifest.files if repository / relative in changed]
+        if owned:
+            current = IntegrationManifest.load(manifest.key, repository)
+            for relative in owned:
+                current.record_existing(relative)
+            current.save()
+    return tuple(shared)

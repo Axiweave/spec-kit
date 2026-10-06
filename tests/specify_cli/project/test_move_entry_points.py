@@ -114,7 +114,7 @@ def test_native_command_keeps_content_and_finds_external_workspace(tmp_path, mon
     assert (workspace / ".specify/init-options.json").read_bytes() == choices
     for name, content in artifacts.items():
         assert (workspace / feature / name).read_bytes() == content
-    assert set(path.name for path in (repository / ".specify").iterdir()) == {"project.json"}
+    assert set(path.name for path in (repository / ".specify").iterdir()) == {"checkout.json", "project.json"}
     monkeypatch.chdir(repository)
     info = CliRunner().invoke(app, ["project", "info", "--json"])
     assert info.exit_code == 0, info.output

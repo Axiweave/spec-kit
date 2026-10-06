@@ -154,7 +154,7 @@ def _isolate_auth_config(monkeypatch):
 def _strip_specify_env(monkeypatch):
     """Drop any inherited SPECIFY_* vars for every test.
 
-    The Python CLI's project resolver (`_require_specify_project`) now honors
+    The Python CLI's project resolver (`require_specify_project`) now honors
     SPECIFY_INIT_DIR, and the shell resolvers honor SPECIFY_FEATURE* — so a
     developer or CI runner with any SPECIFY_* var exported would silently
     retarget (or hard-error) the many command/script tests that resolve a

@@ -154,7 +154,7 @@ def resolve_github_release_asset_api_url(
     import json
     import urllib.error
 
-    from .._download_security import read_response_limited
+    from ..download_security import read_response_limited
 
     # Accessing ``.hostname`` (like ``.port`` below) raises ValueError on a
     # malformed authority, e.g. an invalid bracketed IPv6 host

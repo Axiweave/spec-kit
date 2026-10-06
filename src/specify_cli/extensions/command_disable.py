@@ -8,8 +8,9 @@ from __future__ import annotations
 import typer
 from rich.markup import escape as _escape_markup
 
-from .._console import console
+from ..terminal import console
 from . import _commands
+from . import install
 
 
 @_commands.extension_app.command("disable")
@@ -70,4 +71,4 @@ def extension_disable(
 
     # #1: regenerate native event config so the disabled extension's events
     # are stripped from installed integrations.
-    _commands._refresh_events_and_warn(project_root)
+    install.refresh_events_and_warn(project_root)

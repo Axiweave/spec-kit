@@ -12,7 +12,7 @@ import zlib
 
 import pytest
 
-from specify_cli._download_security import (
+from specify_cli.download_security import (
     MAX_ZIP_CENTRAL_DIRECTORY_BYTES,
     archive_format_from_content_type,
     archive_format_from_name,

@@ -7,7 +7,7 @@ import json as _json
 import typer
 from rich.markup import escape as _escape_markup
 
-from .._console import console
+from ..terminal import console
 from . import BundlerError
 from ._commands import _fail, bundle_app
 from .project import require_project_root

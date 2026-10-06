@@ -20,7 +20,7 @@ class TestOverlayCli:
     """CLI-level tests for ``specify workflow overlay *``."""
 
     def test_overlay_remove(self, project_dir, monkeypatch):
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         _write_workflow(
             project_dir,
             "wf",
@@ -76,7 +76,7 @@ class TestOverlayFilenameVsManifestId:
 
     def test_remove_with_mismatched_filename(self, project_dir, monkeypatch):
         """remove must work when filename != manifest id."""
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         _write_workflow(
             project_dir,
             "wf",
@@ -111,7 +111,7 @@ class TestOverlayPathTraversal:
     """Overlay CLI must stay inside the overlay directory."""
 
     def test_overlay_remove_cannot_escape_overlays_dir(self, project_dir, monkeypatch):
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         _write_workflow(
             project_dir,
             "wf",
@@ -133,7 +133,7 @@ class TestOverlayPathTraversal:
         assert "Invalid" in result.output or "traversal" in result.output.lower()
 
     def test_overlay_remove_rejects_symlink(self, project_dir, monkeypatch):
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         _write_workflow(
             project_dir,
             "wf",

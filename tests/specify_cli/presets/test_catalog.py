@@ -1007,7 +1007,7 @@ class TestPresetCatalog:
         """Package bounds fail before checksum verification or disk writes."""
         import specify_cli.presets as preset_module
         from unittest.mock import patch
-        from specify_cli._download_security import (
+        from specify_cli.download_security import (
             read_response_limited as real_read_response_limited,
         )
 

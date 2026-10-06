@@ -4,10 +4,10 @@ Handlers live in ``command_*.py`` and ``catalog/``. Domain implementations
 live in private modules; package-level names preserve existing internal imports.
 """
 
-from .._download_security import (
+from ..download_security import (
     MAX_JSON_CATALOG_BYTES as MAX_JSON_CATALOG_BYTES,
 )
-from .._download_security import (
+from ..download_security import (
     read_response_limited as read_response_limited,
 )
 from ..extensions import ExtensionRegistry as ExtensionRegistry
@@ -36,7 +36,7 @@ from ._manager import (
     _is_comparable_version as _is_comparable_version,
 )
 from ._manager import (
-    _materialize_constitution_template as _materialize_constitution_template,
+    materialize_constitution_template as materialize_constitution_template,
 )
 from ._manager_commands import _substitute_core_template as _substitute_core_template
 from ._manifest import (

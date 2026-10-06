@@ -6,7 +6,7 @@ from specify_cli import (
     StepTracker,
     select_with_arrows,
 )
-from specify_cli._console import logger as console_logger
+from specify_cli.terminal import logger as console_logger
 
 
 def test_console_symbols_importable():
@@ -55,7 +55,7 @@ def test_select_with_arrows_fails_fast_when_stdin_is_not_a_tty(monkeypatch, caps
         raise AssertionError("readkey must not be called when stdin is not a TTY")
 
     monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
-    monkeypatch.setattr("specify_cli._console.readchar.readkey", fail_readkey)
+    monkeypatch.setattr("specify_cli.terminal.readchar.readkey", fail_readkey)
 
     with pytest.raises(typer.Exit) as exc:
         select_with_arrows(
@@ -81,7 +81,7 @@ def test_select_with_arrows_tty_check_does_not_call_readkey_without_hint(monkeyp
         raise AssertionError("readkey must not be called when stdin is not a TTY")
 
     monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
-    monkeypatch.setattr("specify_cli._console.readchar.readkey", fail_readkey)
+    monkeypatch.setattr("specify_cli.terminal.readchar.readkey", fail_readkey)
 
     with pytest.raises(typer.Exit) as exc:
         select_with_arrows({"a": "Option A"}, "Pick one")

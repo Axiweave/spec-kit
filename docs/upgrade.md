@@ -152,6 +152,18 @@ specify extension update
 
 With no extension argument, this updates all installed extensions. Use `specify extension update <extension-id-or-name>` to update only one extension. See the [extensions reference](reference/extensions.md#update-extensions) for details.
 
+### Projects with external storage
+
+A project with external storage keeps its Spec Kit files in a workspace folder. Each checkout links to that folder. See [Shared Workspaces](guides/shared-workspaces.md). Do these steps in this order:
+
+1. Upgrade the CLI on each machine, as Part 1 shows.
+2. In one checkout of each workspace, run `specify integration upgrade <key>` for each installed integration.
+3. In the workspace folder, commit and push the changed files. When no managed file changed, the upgrade leaves the workspace Git status empty.
+4. On each other machine, pull the workspace changes in the workspace folder.
+5. In each other checkout, run `specify project link <workspace>`. Link restores the missing generated files of that checkout.
+
+When link prints `Kept modified file: <relative path>`, link kept your edit of that file. To replace the edited files with the new managed copy, run the `Repair:` command that link prints, in the same checkout.
+
 ### Fallback: re-run init
 
 If a project predates manifests, has missing integration metadata, or needs a broader recovery, you can still re-run init:

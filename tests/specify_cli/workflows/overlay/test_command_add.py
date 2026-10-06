@@ -21,7 +21,7 @@ class TestOverlayCli:
     """CLI-level tests for ``specify workflow overlay *``."""
 
     def test_overlay_add(self, project_dir, monkeypatch):
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         _write_workflow(
             project_dir,
             "wf",
@@ -63,7 +63,7 @@ class TestOverlayCli:
 
     def test_overlay_add_reuses_yaml_extension(self, project_dir, monkeypatch):
         """If <id>.yaml already exists, overlay add must write to it instead of creating <id>.yml."""
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         _write_workflow(
             project_dir,
             "wf",
@@ -116,7 +116,7 @@ class TestOverlayCli:
 
     def test_overlay_add_with_priority_override_missing_in_file(self, project_dir, monkeypatch):
         """--priority must fix a missing priority in the overlay file."""
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         _write_workflow(
             project_dir,
             "wf",
@@ -157,7 +157,7 @@ class TestOverlayCli:
         assert data["priority"] == 5
 
     def test_overlay_add_defaults_priority_to_ten(self, project_dir, monkeypatch):
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         overlay_file = project_dir / "overlay.yml"
         overlay_file.write_text(
             yaml.safe_dump(
@@ -177,7 +177,7 @@ class TestOverlayCli:
         assert yaml.safe_load(installed.read_text(encoding="utf-8"))["priority"] == 10
 
     def test_overlay_add_rejects_non_positive_priority(self, project_dir, monkeypatch):
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         overlay_file = project_dir / "overlay.yml"
         overlay_file.write_text(
             yaml.safe_dump(
@@ -206,7 +206,7 @@ class TestOverlayCli:
         Overlay files are documented as hand-authored, so writing them back
         with ``\\uXXXX`` escapes makes the user's own file unreadable.
         """
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         _write_workflow(
             project_dir,
             "wf",
@@ -261,7 +261,7 @@ class TestOverlayPathTraversal:
     """Overlay CLI must stay inside the overlay directory."""
 
     def test_overlay_add_rejects_traversal_in_workflow_id(self, project_dir, monkeypatch):
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         overlay_file = project_dir / "overlay.yml"
         overlay_file.write_text(
             yaml.safe_dump(
@@ -288,7 +288,7 @@ class TestOverlayPathTraversal:
         assert "invalid" in result.output.lower() or "traversal" in result.output.lower()
 
     def test_overlay_add_rejects_traversal_in_overlay_id(self, project_dir, monkeypatch):
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         _write_workflow(
             project_dir,
             "wf",
@@ -325,7 +325,7 @@ class TestOverlayPathTraversal:
 
     def test_overlay_add_rejects_symlinked_target_file(self, project_dir, monkeypatch):
         """overlay add must not overwrite through a symlinked overlay file target."""
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         _write_workflow(
             project_dir,
             "wf",
@@ -417,7 +417,7 @@ class TestOverlayAddDoesNotClobber:
     def test_add_does_not_clobber_a_different_overlay(
         self, project_dir, monkeypatch
     ):
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         overlay_dir, incoming = self._setup(project_dir, occupant_id="format")
 
         result = runner.invoke(app, ["workflow", "overlay", "add", str(incoming)])
@@ -434,7 +434,7 @@ class TestOverlayAddDoesNotClobber:
         self, project_dir, monkeypatch
     ):
         """The guard must only fire for a different overlay id."""
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         overlay_dir, incoming = self._setup(project_dir, occupant_id="lint")
 
         result = runner.invoke(app, ["workflow", "overlay", "add", str(incoming)])
@@ -447,7 +447,7 @@ class TestOverlayAddDoesNotClobber:
         assert updated["priority"] == 10
 
     def test_add_refuses_a_directory_occupant(self, project_dir, monkeypatch):
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         overlay_dir, incoming = self._setup(project_dir, occupant_id=None)
         occupant = overlay_dir / "lint.yml"
         occupant.mkdir()
@@ -463,7 +463,7 @@ class TestOverlayAddDoesNotClobber:
 
     @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="FIFOs are POSIX-only")
     def test_add_refuses_a_fifo_occupant(self, project_dir, monkeypatch):
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         overlay_dir, incoming = self._setup(project_dir, occupant_id=None)
         occupant = overlay_dir / "lint.yml"
         os.mkfifo(occupant)
@@ -489,7 +489,7 @@ class TestOverlayAddDoesNotClobber:
     def test_add_fails_closed_when_the_occupant_cannot_be_identified(
         self, project_dir, monkeypatch, raw
     ):
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         overlay_dir, incoming = self._setup(project_dir, occupant_id=None)
         occupant = overlay_dir / "lint.yml"
         occupant.write_text(raw, encoding="utf-8")
@@ -501,7 +501,7 @@ class TestOverlayAddDoesNotClobber:
         assert [path.name for path in overlay_dir.iterdir() if "bak" in path.name] == []
 
     def test_add_creates_the_file_when_absent(self, project_dir, monkeypatch):
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         overlay_dir, incoming = self._setup(project_dir, occupant_id=None)
 
         result = runner.invoke(app, ["workflow", "overlay", "add", str(incoming)])

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from uuid import uuid4
 
@@ -13,15 +14,13 @@ from specify_cli.workspace import feature_selection_mode, resolve_project, save_
 def external(tmp_path, monkeypatch):
     monkeypatch.delenv("SPECIFY_INIT_DIR", raising=False)
     monkeypatch.delenv("SPECIFY_FEATURE_DIRECTORY", raising=False)
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     repo, workspace = tmp_path / "repo", tmp_path / "workspace"
     (repo / ".specify").mkdir(parents=True)
     (workspace / ".specify").mkdir(parents=True)
     identity = str(uuid4())
     (repo / ".specify/project.json").write_text(json.dumps({"schema_version": 1, "project_id": identity, "storage": "external"}))
     (workspace / ".specify/workspace.json").write_text(json.dumps({"schema_version": 1, "project_id": identity}))
-    record = tmp_path / "data/specify/projects" / f"{identity}.json"
-    record.parent.mkdir(parents=True)
+    record = repo / ".specify/checkout.json"
     record.write_text(json.dumps({"schema_version": 1, "workspace": str(workspace), "active_feature": None}))
     return repo, workspace, record
 
@@ -53,7 +52,7 @@ def test_selection_round_trip_is_external_and_repository_stays_fixed(tmp_path, m
     assert selected.repository_root == repo
     assert selected.workspace_root == workspace
     assert selected.feature_dir == feature
-    assert sorted(p.name for p in (repo / ".specify").iterdir()) == ["project.json"]
+    assert sorted(p.name for p in (repo / ".specify").iterdir()) == ["checkout.json", "project.json"]
 
 
 @pytest.mark.parametrize("mode", ["context", "automatic"])
@@ -158,28 +157,42 @@ def test_malformed_saved_feature_breaks_only_automatic_mode(tmp_path, monkeypatc
         resolve_project(repo)
 
 
-def test_worktrees_sharing_one_record_resolve_only_their_own_explicit_feature(tmp_path, monkeypatch):
-    first, workspace, record = external(tmp_path, monkeypatch)
+def test_checkouts_of_one_project_resolve_their_own_record(tmp_path, monkeypatch):
+    """FR-009/FR-010: a record or selection in one checkout never reaches another checkout."""
+    first, workspace, _ = external(tmp_path, monkeypatch)
+    clone = tmp_path / "workspace clone"
+    shutil.copytree(workspace / ".specify", clone / ".specify")
     second = tmp_path / "second worktree"
     (second / ".specify").mkdir(parents=True)
     (second / ".specify/project.json").write_bytes((first / ".specify/project.json").read_bytes())
-    for name in ("shared", "one", "two"):
-        (workspace / "specs" / name).mkdir(parents=True)
-    # A stale shared selection and metadata this version does not know must both stay untouched.
-    record.write_text(json.dumps({
-        "schema_version": 1, "workspace": str(workspace), "active_feature": "specs/shared",
-        "future_setting": {"kept": True},
+    (second / ".specify/checkout.json").write_text(json.dumps({
+        "schema_version": 1, "workspace": str(clone), "active_feature": None,
     }))
-    before = record.read_bytes()
-    assert resolve_project(first).feature_dir is None
-    assert resolve_project(second).feature_dir is None
-    for repo, name in ((first, "one"), (second, "two")):
-        monkeypatch.setenv("SPECIFY_FEATURE_DIRECTORY", f"specs/{name}")
-        assert resolve_project(repo).feature_dir == workspace / "specs" / name
-    monkeypatch.delenv("SPECIFY_FEATURE_DIRECTORY")
-    assert resolve_project(first).feature_dir is None
-    assert resolve_project(second).feature_dir is None
-    assert record.read_bytes() == before
+    for root in (workspace, clone):
+        policy(root, "automatic")
+        for name in ("one", "two"):
+            (root / "specs" / name).mkdir(parents=True)
+    save_active_feature(resolve_project(first), workspace / "specs/one")
+    save_active_feature(resolve_project(second), clone / "specs/two")
+    one, two = resolve_project(first), resolve_project(second)
+    assert (one.workspace_root, one.feature_dir) == (workspace, workspace / "specs/one")
+    assert (two.workspace_root, two.feature_dir) == (clone, clone / "specs/two")
+
+
+def test_symlinked_checkout_record_is_refused_for_read_and_write(tmp_path, monkeypatch):
+    repo, workspace, record = external(tmp_path, monkeypatch)
+    policy(workspace, "automatic")
+    (workspace / "specs/one").mkdir(parents=True)
+    project = resolve_project(repo)
+    target = tmp_path / "elsewhere.json"
+    record.rename(target)
+    record.symlink_to(target)
+    before = target.read_bytes()
+    with pytest.raises(ValueError, match="symlink"):
+        resolve_project(repo)
+    with pytest.raises(ValueError, match="symlink"):
+        save_active_feature(project, workspace / "specs/one")
+    assert record.is_symlink() and target.read_bytes() == before
 
 
 def test_workspace_lookup_ignores_selection_policy_state_and_override(tmp_path, monkeypatch):

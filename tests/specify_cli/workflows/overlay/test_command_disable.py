@@ -20,7 +20,7 @@ class TestOverlayCli:
     """CLI-level tests for ``specify workflow overlay *``."""
 
     def test_overlay_disable_and_enable(self, project_dir, monkeypatch):
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         _write_workflow(
             project_dir,
             "wf",
@@ -67,7 +67,7 @@ class TestOverlayCli:
         assert data["enabled"] is True
 
     def test_overlay_list_shows_disabled_overlay(self, project_dir, monkeypatch):
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         _write_workflow(
             project_dir,
             "wf",
@@ -123,7 +123,7 @@ class TestOverlayFilenameVsManifestId:
 
     def test_enable_disable_with_mismatched_filename(self, project_dir, monkeypatch):
         """enable/disable must work when filename != manifest id."""
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         _write_workflow(
             project_dir,
             "wf",

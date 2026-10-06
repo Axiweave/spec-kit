@@ -195,13 +195,13 @@ load_workspace_context() {
     if [[ ! -e "$locator" && ! -L "$locator" ]]; then
         return 0
     fi
-    local project_id data_root selected identity
+    local project_id selected identity
     project_id=$(_storage_json "$locator" locator project_id) || return 1
-    case "$(uname -s)" in
-        MINGW*|MSYS*|CYGWIN*) data_root="${XDG_DATA_HOME:-${LOCALAPPDATA:-$HOME/AppData/Local}}" ;;
-        *) data_root="${XDG_DATA_HOME:-$HOME/.local/share}" ;;
-    esac
-    PROJECT_RECORD="$data_root/specify/projects/$project_id.json"
+    PROJECT_RECORD="$repo_root/.specify/checkout.json"
+    if [[ ! -e "$PROJECT_RECORD" && ! -L "$PROJECT_RECORD" ]]; then
+        echo "ERROR: Missing workspace mapping for $repo_root. Use specify project link PATH." >&2
+        return 1
+    fi
     selected=$(_storage_json "$PROJECT_RECORD" record workspace) || return 1
     if [[ ! -d "$selected" || ! -r "$selected" || ! -w "$selected" || ! -x "$selected" ]]; then
         echo "ERROR: External workspace is unavailable: $selected. Relink the workspace." >&2
@@ -448,7 +448,7 @@ get_feature_paths() {
         fi
     elif [[ "$selection_mode" != automatic ]]; then
         # Context projects never read the saved feature, so every command names its own.
-        echo "ERROR: Feature directory not found. Set SPECIFY_FEATURE_DIRECTORY for this command. This project uses feature_selection context, so scripts ignore the saved feature." >&2
+        echo "ERROR: Feature directory not found: no feature is selected. Set SPECIFY_FEATURE_DIRECTORY=specs/<feature> for this command. This project uses feature_selection context, so scripts ignore the saved feature." >&2
         return 1
     elif [[ -n "$project_record" ]]; then
         local saved_feature

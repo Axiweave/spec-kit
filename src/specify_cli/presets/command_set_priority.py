@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import typer
 
-from .._console import console
+from ..terminal import console
 from . import _commands
 from ._commands import preset_app
 
@@ -15,10 +15,10 @@ def preset_set_priority(
     priority: int = typer.Argument(help="New priority (lower = higher precedence)"),
 ):
     """Set the resolution priority of an installed preset."""
-    from .. import _require_specify_project
+    from .. import require_specify_project
     from . import PresetManager
 
-    project_root = _require_specify_project()
+    project_root = require_specify_project()
     _commands._validate_priority(priority)
 
     manager = PresetManager(project_root)

@@ -18,7 +18,7 @@ from typer.testing import CliRunner
 
 from specify_cli import app
 from specify_cli.extensions import ExtensionCatalog, ExtensionManager
-from specify_cli.extensions import _commands
+from specify_cli.extensions import _commands, install
 
 
 _MINIMAL_ZIP_BYTES = b"PK\x05\x06" + b"\x00" * 18
@@ -72,7 +72,7 @@ def test_symlinked_cache_ancestor_is_refused(
     _symlink_directory(parent / ancestor_parts[-1], outside)
 
     with pytest.raises(typer.Exit):
-        _commands._validate_safe_cache_dir(project_dir)
+        install._validate_safe_cache_dir(project_dir)
 
     assert list(outside.iterdir()) == []
 
@@ -104,7 +104,7 @@ def test_symlinked_cache_ancestor_is_refused_without_dir_fd(
     _symlink_directory(parent / ancestor_parts[-1], outside)
 
     with pytest.raises(typer.Exit):
-        _commands._validate_safe_cache_dir(project_dir)
+        install._validate_safe_cache_dir(project_dir)
 
     assert list(outside.iterdir()) == []
 
@@ -127,20 +127,20 @@ def test_cache_ancestor_resolving_outside_project_is_refused(
     monkeypatch.setattr(Path, "resolve", fake_resolve)
 
     with pytest.raises(typer.Exit):
-        _commands._validate_safe_cache_dir(project_dir)
+        install._validate_safe_cache_dir(project_dir)
 
     assert list(outside.iterdir()) == []
 
 
 def test_safe_open_refuses_exclusive_leaf_collision(project_dir: Path) -> None:
     _require_secure_dir_fd()
-    download_dir = _commands._validate_safe_cache_dir(project_dir)
+    download_dir = install._validate_safe_cache_dir(project_dir)
     zip_filename = "extension-url-download-collision.zip"
     collision = download_dir / zip_filename
     collision.write_bytes(b"sentinel")
 
     with pytest.raises(OSError):
-        _commands._safe_open_download_zip(
+        install._safe_open_download_zip(
             project_dir, download_dir, zip_filename
         )
 
@@ -151,7 +151,7 @@ def test_safe_open_refuses_swapped_cache_ancestor(
     project_dir: Path, tmp_path: Path
 ) -> None:
     _require_secure_dir_fd()
-    download_dir = _commands._validate_safe_cache_dir(project_dir)
+    download_dir = install._validate_safe_cache_dir(project_dir)
     cache_root = project_dir / ".specify" / "extensions" / ".cache"
     outside = tmp_path / "outside"
     outside.mkdir()
@@ -160,7 +160,7 @@ def test_safe_open_refuses_swapped_cache_ancestor(
     _symlink_directory(cache_root, outside)
 
     with pytest.raises(OSError):
-        _commands._safe_open_download_zip(
+        install._safe_open_download_zip(
             project_dir,
             download_dir,
             "extension-url-download-swapped.zip",
@@ -178,7 +178,7 @@ def test_safe_open_refuses_symlinked_project_root(
     download_dir = project_link / ".specify" / "extensions" / ".cache" / "downloads"
 
     with pytest.raises(OSError):
-        _commands._safe_open_download_zip(
+        install._safe_open_download_zip(
             project_link,
             download_dir,
             "extension-url-download-project-link.zip",
@@ -193,12 +193,12 @@ def test_safe_open_succeeds_without_dir_fd_support(
     failing closed."""
     monkeypatch.setattr(os, "supports_dir_fd", set())
 
-    download_dir = _commands._validate_safe_cache_dir(project_dir)
+    download_dir = install._validate_safe_cache_dir(project_dir)
     assert download_dir == (
         project_dir / ".specify" / "extensions" / ".cache" / "downloads"
     )
 
-    fd = _commands._safe_open_download_zip(
+    fd = install._safe_open_download_zip(
         project_dir, download_dir, "extension-url-download-portable.zip"
     )
     try:
@@ -215,7 +215,7 @@ def test_safe_open_without_dir_fd_refuses_symlinked_leaf(
     """The portable path must refuse a leaf pre-staged as a symlink so an
     attacker cannot redirect the exclusive create outside the project."""
     monkeypatch.setattr(os, "supports_dir_fd", set())
-    download_dir = _commands._validate_safe_cache_dir(project_dir)
+    download_dir = install._validate_safe_cache_dir(project_dir)
     outside = tmp_path / "outside.zip"
     zip_filename = "extension-url-download-symlink-leaf.zip"
     try:
@@ -224,7 +224,7 @@ def test_safe_open_without_dir_fd_refuses_symlinked_leaf(
         pytest.skip(f"symlinks are unavailable: {exc}")
 
     with pytest.raises(OSError):
-        _commands._safe_open_download_zip(project_dir, download_dir, zip_filename)
+        install._safe_open_download_zip(project_dir, download_dir, zip_filename)
 
     assert not outside.exists()
 
@@ -271,7 +271,7 @@ def test_url_install_succeeds_without_dir_fd_support(
         lambda *args, **kwargs: FakeResponse(_MINIMAL_ZIP_BYTES),
     )
     monkeypatch.setattr(ExtensionManager, "install_from_zip", fake_install)
-    monkeypatch.setattr(_commands, "_refresh_events_and_warn", lambda root: None)
+    monkeypatch.setattr(install, "refresh_events_and_warn", lambda root: None)
     monkeypatch.setattr(_commands, "load_init_options", lambda root: {})
 
     result = runner.invoke(
@@ -332,7 +332,7 @@ def test_url_install_writes_and_cleans_up_secure_download(
         lambda *args, **kwargs: FakeResponse(_MINIMAL_ZIP_BYTES),
     )
     monkeypatch.setattr(ExtensionManager, "install_from_zip", fake_install)
-    monkeypatch.setattr(_commands, "_refresh_events_and_warn", lambda root: None)
+    monkeypatch.setattr(install, "refresh_events_and_warn", lambda root: None)
     monkeypatch.setattr(_commands, "load_init_options", lambda root: {})
 
     result = runner.invoke(
@@ -377,14 +377,14 @@ def test_url_install_open_error_surfaces_as_controlled_exit(
         lambda *args, **kwargs: io.BytesIO(_MINIMAL_ZIP_BYTES),
     )
     monkeypatch.setattr(
-        _commands, "_validate_safe_cache_dir", lambda root: download_dir
+        install, "_validate_safe_cache_dir", lambda root: download_dir
     )
     download_dir.mkdir(parents=True, exist_ok=True)
 
     def _raise_collision(project_root, dir_, zip_filename):
         raise FileExistsError("leaf already exists")
 
-    monkeypatch.setattr(_commands, "_safe_open_download_zip", _raise_collision)
+    monkeypatch.setattr(install, "_safe_open_download_zip", _raise_collision)
     install_spy = MagicMock()
     monkeypatch.setattr(ExtensionManager, "install_from_zip", install_spy)
 

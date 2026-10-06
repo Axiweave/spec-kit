@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from specify_cli._assets import _locate_bundled_workflow
+from specify_cli.assets import _locate_bundled_workflow
 from specify_cli.workflows.engine import WorkflowDefinition, validate_workflow
 
 

@@ -20,12 +20,12 @@ from ._agent_config import (
     SCRIPT_TYPE_CHOICES,
     resolve_default_init_integration,
 )
-from ._assets import (
+from .assets import (
     _locate_bundled_preset,
     _locate_bundled_workflow,
     get_speckit_version,
 )
-from ._console import StepTracker, console, select_with_arrows, show_banner
+from .terminal import StepTracker, console, select_with_arrows, show_banner
 from ._utils import check_tool
 
 
@@ -110,8 +110,8 @@ def _install_extension_during_init(project_path: Path, ext_spec: str, speckit_ve
 
     from . import locate_bundled_extension
     from .extensions import ExtensionCatalog, ExtensionError, ExtensionManager
-    from .extensions._commands import (
-        _resolve_catalog_extension,
+    from .extensions.install import (
+        resolve_catalog_extension,
         install_extension_from_url,
     )
 
@@ -148,7 +148,7 @@ def _install_extension_during_init(project_path: Path, ext_spec: str, speckit_ve
 
     # Fall back to catalog
     catalog = ExtensionCatalog(project_path)
-    ext_info, catalog_error = _resolve_catalog_extension(ext_spec, catalog, "add")
+    ext_info, catalog_error = resolve_catalog_extension(ext_spec, catalog, "add")
     if catalog_error:
         raise ValueError(f"Could not query extension catalog: {catalog_error}")
     if not ext_info:
@@ -219,7 +219,7 @@ def ensure_constitution_from_template(
     constitution) can seed the memory file. When nothing overrides it, the
     resolver falls through to the core template.
     """
-    from .presets import _materialize_constitution_template
+    from .presets import materialize_constitution_template
 
     memory_constitution = project_path / ".specify" / "memory" / "constitution.md"
 
@@ -230,7 +230,7 @@ def ensure_constitution_from_template(
         return
 
     try:
-        materialization = _materialize_constitution_template(
+        materialization = materialize_constitution_template(
             project_path, memory_constitution
         )
         if materialization is None:
@@ -410,8 +410,8 @@ def register(app: typer.Typer) -> None:
         """
         # Lazy imports to avoid circular dependency — __init__.py imports this module
         from . import (
-            _install_shared_infra_or_exit,
-            _print_cli_warning,
+            install_shared_infra_or_exit,
+            print_cli_warning,
             ensure_executable_scripts,
             save_init_options,
         )
@@ -419,9 +419,9 @@ def register(app: typer.Typer) -> None:
             invoke_prefix_for_integration as _invoke_prefix_for_integration,
             with_integration_setting as _with_integration_setting,
         )
-        from .integrations._commands import (
-            _parse_integration_options,
-            _write_integration_json,
+        from .integrations.helpers import (
+            parse_integration_options_or_exit,
+            save_integration_json,
         )
 
         show_banner()
@@ -445,7 +445,7 @@ def register(app: typer.Typer) -> None:
             raise typer.Exit(1)
 
         from ._command_init_storage import claim_storage, select_storage
-        from ._init_options import load_init_options
+        from .init_options import load_init_options
         from .user_config import load_defaults
         from .workspace_git import initialize_workspace_git, preflight_workspace_git
 
@@ -733,6 +733,8 @@ def register(app: typer.Typer) -> None:
             else:
                 selected_script = default_script
 
+        # A new external project defaults to timestamp: parallel checkouts cannot pick the same prefix.
+        default_numbering = "timestamp" if not existing_project and project.project_id is not None else "sequential"
         if feature_numbering:
             if feature_numbering not in ("sequential", "timestamp"):
                 console.print("Error: --feature-numbering must be sequential or timestamp.", style="red")
@@ -741,15 +743,15 @@ def register(app: typer.Typer) -> None:
             feature_numbering = select_with_arrows(
                 {"sequential": "Sequential (001, 002)", "timestamp": "Timestamp (YYYYMMDD-HHMMSS)"},
                 "Choose feature numbering:",
-                "sequential",
+                default_numbering,
                 flag_hint="--feature-numbering sequential|timestamp",
             )
         else:
-            feature_numbering = "sequential"
+            feature_numbering = default_numbering
 
         integration_parsed_options: dict[str, Any] = {}
         if integration_options:
-            extra = _parse_integration_options(resolved_integration, integration_options)
+            extra = parse_integration_options_or_exit(resolved_integration, integration_options)
             if extra:
                 integration_parsed_options.update(extra)
 
@@ -805,7 +807,7 @@ def register(app: typer.Typer) -> None:
         _transient = sys.platform != "win32"
 
         if private:
-            from ._private_checkout import install_integration, plan_checkout_files, refuse_tracked
+            from .private_checkout import install_integration, plan_checkout_files, refuse_tracked
 
             try:
                 refuse_tracked(project.repository_root, plan_checkout_files(
@@ -869,12 +871,12 @@ def register(app: typer.Typer) -> None:
                 save_init_options(workspace_path, init_opts)
 
                 if force:
-                    from .integrations._helpers import (
-                        _register_extensions_for_agent,
-                        _register_presets_for_agent,
+                    from .integrations.helpers import (
+                        register_extensions_for_agent,
+                        register_presets_for_agent,
                     )
 
-                    _register_extensions_for_agent(
+                    register_extensions_for_agent(
                         project_path,
                         resolved_integration.key,
                         force=True,
@@ -883,7 +885,7 @@ def register(app: typer.Typer) -> None:
                             " may need re-registration."
                         ),
                     )
-                    _register_presets_for_agent(
+                    register_presets_for_agent(
                         project_path,
                         resolved_integration.key,
                         continuing=(
@@ -901,7 +903,7 @@ def register(app: typer.Typer) -> None:
                     parsed_options=integration_parsed_options or None,
                     project_root=project_path,
                 )
-                _write_integration_json(
+                save_integration_json(
                     workspace_path,
                     resolved_integration.key,
                     [resolved_integration.key],
@@ -914,7 +916,7 @@ def register(app: typer.Typer) -> None:
                 )
 
                 tracker.start("shared-infra")
-                _install_shared_infra_or_exit(
+                install_shared_infra_or_exit(
                     workspace_path,
                     selected_script,
                     tracker=tracker,
@@ -1032,7 +1034,7 @@ def register(app: typer.Typer) -> None:
                                             catalog_name=pack_info.get("_catalog_name"),
                                         )
                                     except PresetError as preset_err:
-                                        _print_cli_warning(
+                                        print_cli_warning(
                                             "install",
                                             "preset",
                                             preset,
@@ -1046,7 +1048,7 @@ def register(app: typer.Typer) -> None:
                                             except OSError:
                                                 pass
                     except Exception as preset_err:
-                        _print_cli_warning(
+                        print_cli_warning(
                             "install",
                             "preset",
                             preset,
@@ -1056,7 +1058,7 @@ def register(app: typer.Typer) -> None:
 
                 # Install extensions specified via --extension
                 if extensions:
-                    from .extensions._commands import _refresh_events_and_warn
+                    from .extensions.install import refresh_events_and_warn
 
                     speckit_ver = get_speckit_version()
                     any_extension_installed = False
@@ -1090,7 +1092,7 @@ def register(app: typer.Typer) -> None:
                     # that an extension declaring ``events:`` has its hooks
                     # activated, mirroring the ``extension add`` path.
                     if any_extension_installed:
-                        _refresh_events_and_warn(project_path)
+                        refresh_events_and_warn(project_path)
 
                 # Seed the constitution AFTER preset installation so that a
                 # preset-provided constitution-template (resolved via the
@@ -1288,7 +1290,7 @@ def register(app: typer.Typer) -> None:
             step_num += 1
         usage_label = "skills" if native_skill_mode else "slash commands"
 
-        from ._invocation_style import (
+        from .invocation_style import (
             is_dollar_skills_agent as _is_dollar_skills_agent,
             is_slash_skills_agent as _is_slash_skills_agent,
         )

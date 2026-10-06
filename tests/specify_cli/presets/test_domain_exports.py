@@ -19,7 +19,7 @@ import specify_cli.presets as presets
         ("PresetCatalog", "_catalog"),
         ("PresetResolver", "_resolver"),
         ("PresetManager", "_manager"),
-        ("_materialize_constitution_template", "_manager"),
+        ("materialize_constitution_template", "_manager"),
         ("_constitution_provenance_matches_preset", "_manager"),
         ("_substitute_core_template", "_manager_commands"),
     ],

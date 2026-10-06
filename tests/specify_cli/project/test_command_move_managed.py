@@ -1,6 +1,7 @@
 """Migration upgrades owned helper generations without claiming user changes."""
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 import stat
@@ -109,10 +110,13 @@ def test_move_upgrades_installed_helpers_and_preserves_user_work(local_project, 
     ))
     assert Path(checked["FEATURE_DIR"]) == feature
     assert "tasks.md" in checked["AVAILABLE_DOCS"]
-    assert snapshot(repository) == repository_after_move
+    # Only the checkout record follows the new selection.
+    after = snapshot(repository)
+    del after[".specify/checkout.json"], repository_after_move[".specify/checkout.json"]
+    assert after == repository_after_move
     assert git_state(repository) == history
     assert not (repository / "specs").exists()
-    assert set(snapshot(repository / ".specify")) == {"project.json"}
+    assert set(snapshot(repository / ".specify")) == {"checkout.json", "project.json"}
     for relative, content in before.items():
         if relative.startswith(("specs/", ".specify/templates/", ".specify/memory/")):
             assert (workspace / relative).read_bytes() == content
@@ -206,3 +210,32 @@ def test_new_bash_helper_runs_directly_without_changing_user_script_mode(local_p
     migrated_user_script = workspace / user_script.relative_to(repository)
     assert migrated_user_script.read_bytes() == user_bytes
     assert stat.S_IMODE(migrated_user_script.stat().st_mode) == 0o640
+
+
+@pytest.mark.parametrize(("agent", "skills"), [("claude", ".claude/skills"), ("codex", ".agents/skills")])
+def test_moved_skills_equal_fresh_external_init_and_their_manifest_hashes(local_project, monkeypatch, agent, skills):
+    _, _, home = local_project
+    base = home.parent
+    init = ["init", "--here", "--force", "--integration", agent, "--script", "sh",
+            "--ignore-agent-tools", "--non-interactive", "--no-workspace-git"]
+    fresh, moved = base / "fresh", base / "moved"
+    for repository, storage in ((fresh, ["--workspace", str(base / "fresh-ws")]), (moved, ["--storage", "local"])):
+        repository.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=repository, check=True)
+        monkeypatch.chdir(repository)
+        result = CliRunner().invoke(app, [*init, *storage])
+        assert result.exit_code == 0, result.output
+    subprocess.run(["git", "add", "-A"], cwd=moved, check=True)
+    subprocess.run(["git", "-c", "commit.gpgsign=false", "-c", "user.name=t", "-c", "user.email=t@t",
+                    "commit", "-qm", "local"], cwd=moved, check=True)
+
+    result = CliRunner().invoke(app, ["project", "move", str(base / "moved-ws"), "--confirm-remove-local"])
+
+    assert result.exit_code == 0, result.output
+    expected = {p.relative_to(fresh / skills): p.read_bytes() for p in (fresh / skills).rglob("*") if p.is_file()}
+    actual = {p.relative_to(moved / skills): p.read_bytes() for p in (moved / skills).rglob("*") if p.is_file()}
+    assert actual == expected
+    manifest = IntegrationManifest.load(agent, moved)
+    specify = f"{skills}/speckit-specify/SKILL.md"
+    assert manifest.files[specify] == hashlib.sha256((moved / specify).read_bytes()).hexdigest()
+    assert manifest.check_modified() == []

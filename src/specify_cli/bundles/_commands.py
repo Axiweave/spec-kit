@@ -12,7 +12,7 @@ from pathlib import Path
 import typer
 from rich.markup import escape as _escape_markup
 
-from .._console import err_console
+from ..terminal import err_console
 from . import BundlerError
 from .project import active_integration
 from .records import load_records

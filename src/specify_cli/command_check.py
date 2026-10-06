@@ -5,7 +5,7 @@ from __future__ import annotations
 import typer
 
 from ._agent_config import AGENT_CONFIG
-from ._console import StepTracker, console, show_banner
+from .terminal import StepTracker, console, show_banner
 
 
 def check() -> None:

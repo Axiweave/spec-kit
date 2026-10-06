@@ -7,7 +7,7 @@ from pathlib import Path
 import typer
 from rich.markup import escape as _escape_markup
 
-from .._console import console
+from ..terminal import console
 from . import BundlerError
 from ._commands import (
     _build_stack,

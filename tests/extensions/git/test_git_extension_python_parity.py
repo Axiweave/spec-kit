@@ -114,7 +114,7 @@ def _without_persist_hint(stderr: str) -> str:
     return "".join(
         line
         for line in stderr.splitlines(keepends=True)
-        if not line.startswith("# To persist: ")
+        if not line.startswith("# Optional label: ")
     )
 
 
@@ -474,11 +474,11 @@ class TestCreateFeatureBranchParity:
     def test_shell_specific_persist_hint_can_be_ignored_for_parity(self):
         bash_stderr = (
             "[specify] Warning\n"
-            "# To persist: export SPECIFY_FEATURE=feature/name\n"
+            "# Optional label:         export SPECIFY_FEATURE=feature/name\n"
         )
         windows_stderr = (
             "[specify] Warning\n"
-            "# To persist: $env:SPECIFY_FEATURE = 'feature/name'\n"
+            "# Optional label:         $env:SPECIFY_FEATURE = 'feature/name'\n"
         )
 
         assert _without_persist_hint(bash_stderr) == _without_persist_hint(
@@ -492,13 +492,13 @@ class TestCreateFeatureBranchParity:
         bash_result = subprocess.CompletedProcess(
             args=[], returncode=0, stdout="", stderr=(
                 "[specify] Warning\n"
-                "# To persist: export SPECIFY_FEATURE=feature/name\n"
+                "# Optional label:         export SPECIFY_FEATURE=feature/name\n"
             )
         )
         py_result = subprocess.CompletedProcess(
             args=[], returncode=0, stdout="", stderr=(
                 "[specify] Warning\n"
-                "# To persist: $env:SPECIFY_FEATURE = 'feature/name'\n"
+                "# Optional label:         $env:SPECIFY_FEATURE = 'feature/name'\n"
             )
         )
 

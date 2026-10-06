@@ -5,7 +5,7 @@ import os
 
 import typer
 
-from .._console import console
+from ..terminal import console
 from ..integration_runtime import invoke_prefix_for_integration as _invoke_prefix_for_integration, invoke_separator_for_integration as _invoke_separator_for_integration
 from ..integration_state import (
     dedupe_integration_keys as _dedupe_integration_keys,
@@ -14,7 +14,7 @@ from ..integration_state import (
     integration_settings as _integration_settings,
 )
 from ._commands import integration_app
-from ._helpers import _MANIFEST_READ_ERRORS, _SharedTemplateRefreshError, _clear_init_options_for_integration, _cli_error_detail, _cli_phase_label, _get_speckit_version, _read_integration_json, _register_extensions_for_agent, _register_presets_for_agent, _remove_integration_json, _resolve_integration_options, _resolve_script_type, _set_default_integration, _set_default_integration_or_exit, _unregister_extensions_for_agent, _unregister_presets_for_agent, _write_integration_json
+from .helpers import _MANIFEST_READ_ERRORS, _SharedTemplateRefreshError, clear_init_options_for_integration, _cli_error_detail, _cli_phase_label, _get_speckit_version, read_integration_json, register_extensions_for_agent, register_presets_for_agent, _remove_integration_json, resolve_integration_options_or_exit, _resolve_script_type, _set_default_integration, _set_default_integration_or_exit, _unregister_extensions_for_agent, _unregister_presets_for_agent, save_integration_json
 
 
 @integration_app.command("switch")
@@ -28,9 +28,9 @@ def integration_switch(
     """Switch from the current integration to a different one."""
     from . import INTEGRATION_REGISTRY, get_integration
     from .manifest import IntegrationManifest
-    from .. import _print_cli_warning, _require_specify_project, _install_shared_infra_or_exit
+    from .. import print_cli_warning, require_specify_project, install_shared_infra_or_exit
 
-    project_root = _require_specify_project()
+    project_root = require_specify_project()
     target_integration = get_integration(target)
     if target_integration is None:
         console.print(f"[red]Error:[/red] Unknown integration '{target}'")
@@ -38,7 +38,7 @@ def integration_switch(
         console.print(f"Available integrations: {available}")
         raise typer.Exit(1)
 
-    current = _read_integration_json(project_root)
+    current = read_integration_json(project_root)
     installed_keys = _installed_integration_keys(current)
     installed_key = _default_integration_key(current)
 
@@ -54,7 +54,7 @@ def integration_switch(
             )
             raise typer.Exit(1)
         if force:
-            raw_options, parsed_options = _resolve_integration_options(
+            raw_options, parsed_options = resolve_integration_options_or_exit(
                 target_integration, current, target, None
             )
             _set_default_integration_or_exit(
@@ -86,7 +86,7 @@ def integration_switch(
                 f"to update managed files/options, then [cyan]specify integration use {target}[/cyan]."
             )
             raise typer.Exit(1)
-        raw_options, parsed_options = _resolve_integration_options(
+        raw_options, parsed_options = resolve_integration_options_or_exit(
             target_integration, current, target, None
         )
         _set_default_integration_or_exit(
@@ -99,7 +99,7 @@ def integration_switch(
             parsed_options=parsed_options,
             refresh_templates_force=force,
         )
-        _register_extensions_for_agent(
+        register_extensions_for_agent(
             project_root,
             target,
             continuing=(
@@ -107,7 +107,7 @@ def integration_switch(
                 "need re-registration."
             ),
         )
-        _register_presets_for_agent(
+        register_presets_for_agent(
             project_root,
             target,
             continuing=(
@@ -123,7 +123,7 @@ def integration_switch(
     # Resolve and validate target options before uninstalling the current
     # integration. Invalid options must not leave the project partially
     # switched with the previous integration already removed.
-    target_raw_options, target_parsed_options = _resolve_integration_options(
+    target_raw_options, target_parsed_options = resolve_integration_options_or_exit(
         target_integration, current, target, integration_options
     )
     target_integration.is_skills_mode(target_parsed_options, project_root)
@@ -201,7 +201,7 @@ def integration_switch(
         # Private mode keeps the old integration listed for the other checkouts.
         if not old_private:
             installed_keys = [installed for installed in installed_keys if installed != installed_key]
-            _clear_init_options_for_integration(project_root, installed_key)
+            clear_init_options_for_integration(project_root, installed_key)
             if installed_keys:
                 fallback_key = installed_keys[0]
                 fallback_integration = get_integration(fallback_key)
@@ -209,7 +209,7 @@ def integration_switch(
                     (
                         fallback_raw_options,
                         fallback_parsed_options,
-                    ) = _resolve_integration_options(
+                    ) = resolve_integration_options_or_exit(
                         fallback_integration, current, fallback_key, None
                     )
                     _set_default_integration_or_exit(
@@ -222,12 +222,12 @@ def integration_switch(
                         parsed_options=fallback_parsed_options,
                     )
                 else:
-                    _write_integration_json(
+                    save_integration_json(
                         project_root, fallback_key, installed_keys, _integration_settings(current)
                     )
             else:
                 _remove_integration_json(project_root)
-            current = _read_integration_json(project_root)
+            current = read_integration_json(project_root)
 
     # Refresh shared infrastructure to the current CLI version. Switching
     # integrations is exactly when stale vendored shared scripts (e.g.
@@ -238,7 +238,7 @@ def integration_switch(
     # recorded hash are overwritten — user customizations are detected via
     # hash divergence and preserved with a warning. Pass
     # --refresh-shared-infra to overwrite customizations as well. See #2293.
-    _install_shared_infra_or_exit(
+    install_shared_infra_or_exit(
         project_root,
         selected_script,
         force=refresh_shared_infra,
@@ -298,7 +298,7 @@ def integration_switch(
             target_integration.teardown(project_root, manifest, force=True)
         except Exception as rollback_err:
             # Suppress so the original setup error remains the primary failure
-            _print_cli_warning(
+            print_cli_warning(
                 "rollback",
                 "integration",
                 target,
@@ -309,7 +309,7 @@ def integration_switch(
             fallback_key = installed_keys[0]
             fallback_integration = get_integration(fallback_key)
             if fallback_integration is not None:
-                raw_options, parsed_options = _resolve_integration_options(
+                raw_options, parsed_options = resolve_integration_options_or_exit(
                     fallback_integration, current, fallback_key, None
                 )
                 try:
@@ -335,18 +335,18 @@ def integration_switch(
                     # artifacts. Rescaffold so the restored default is
                     # actually usable. Both helpers are best-effort and
                     # cannot raise past this point.
-                    _register_extensions_for_agent(
+                    register_extensions_for_agent(
                         project_root,
                         fallback_key,
                         continuing="The switch was rolled back; installed extensions may need re-registration.",
                     )
-                    _register_presets_for_agent(
+                    register_presets_for_agent(
                         project_root,
                         fallback_key,
                         continuing="The switch was rolled back; installed presets may need re-registration.",
                     )
             else:
-                _write_integration_json(
+                save_integration_json(
                     project_root, fallback_key, installed_keys, _integration_settings(current)
                 )
         else:
@@ -360,12 +360,12 @@ def integration_switch(
     # Re-register extension commands for the new agent so previously-installed
     # extensions are available in it. Done after the try/except (the switch has
     # committed) so this best-effort step can never trigger the rollback above.
-    _register_extensions_for_agent(
+    register_extensions_for_agent(
         project_root,
         target,
         continuing="The integration switch succeeded, but installed extensions may need re-registration.",
     )
-    _register_presets_for_agent(
+    register_presets_for_agent(
         project_root,
         target,
         continuing="The integration switch succeeded, but installed presets may need re-registration.",

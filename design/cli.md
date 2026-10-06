@@ -308,6 +308,7 @@ src/specify_cli/extensions/
 ├── _command_update_discovery.py
 ├── _command_update_artifacts.py
 ├── _command_update_transaction.py
+├── install.py
 └── catalog/
     ├── __init__.py
     ├── _helpers.py
@@ -333,7 +334,8 @@ When deciding where code belongs:
 | Does it define a real CLI command? | `command_<name>.py` |
 | Is it used only by one small command? | That command module |
 | Is it a cohesive private phase of one complex command? | `_command_<name>_<phase>.py` |
-| Is it shared by multiple commands or an external CLI flow? | `_commands.py` or a focused shared module |
+| Is it shared by multiple commands in the package? | `_commands.py` or a focused shared module |
+| Is it used by another package (for example `specify init`)? | A public module, such as `extensions/install.py` |
 | Does it define a nested CLI namespace? | A directory matching that namespace |
 | Is it shared only by commands in a nested namespace? | The nested package's `_helpers.py` |
 | Is it domain behavior independent of the CLI? | The package domain modules, not command modules |

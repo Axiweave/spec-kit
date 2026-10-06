@@ -180,11 +180,10 @@ function Get-StorageContext {
         throw "Invalid external project locator: $locatorPath"
     }
     $projectId = ([guid]$locator.project_id).ToString()
-    $dataRoot = if ($env:XDG_DATA_HOME) { $env:XDG_DATA_HOME } elseif ($env:OS -eq 'Windows_NT') {
-        if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $HOME 'AppData/Local' }
-    } else { Join-Path $HOME '.local/share' }
-    if (-not (Test-AbsoluteStoragePath $dataRoot)) { throw "User data directory must be absolute: $dataRoot" }
-    $recordPath = Resolve-ContainedStoragePath $dataRoot "specify/projects/$projectId.json"
+    if (-not (Get-Item -LiteralPath (Join-Path $RepoRoot '.specify/checkout.json') -Force -ErrorAction SilentlyContinue)) {
+        throw "Missing workspace mapping for $RepoRoot. Use specify project link PATH."
+    }
+    $recordPath = Resolve-ContainedStoragePath $RepoRoot '.specify/checkout.json'
     $record = Read-StorageRecord $recordPath
     if ($record.workspace -isnot [string] -or -not (Test-AbsoluteStoragePath $record.workspace)) {
         throw "Workspace path must be absolute in storage record: $recordPath"
@@ -368,7 +367,7 @@ function Get-FeaturePathsEnv {
     #   3. Error - no feature context available
     if (-not $env:SPECIFY_FEATURE_DIRECTORY -and $selectionMode -cne 'automatic') {
         # Context projects never read the saved feature, so every command names its own.
-        [Console]::Error.WriteLine("ERROR: Feature directory not found. Set SPECIFY_FEATURE_DIRECTORY for this command. This project uses feature_selection context, so scripts ignore the saved feature.")
+        [Console]::Error.WriteLine("ERROR: Feature directory not found: no feature is selected. Set SPECIFY_FEATURE_DIRECTORY=specs/<feature> for this command. This project uses feature_selection context, so scripts ignore the saved feature.")
         if ($ReturnNullOnError) { return $null }
         exit 1
     }

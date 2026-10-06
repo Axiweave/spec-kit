@@ -23,7 +23,7 @@ class TestOverlayCli:
         self, project_dir, monkeypatch
     ):
         """Toggling an overlay must not mangle non-ASCII text already in it."""
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         _write_workflow(
             project_dir,
             "wf",
@@ -72,7 +72,7 @@ class TestOverlayCli:
         assert data["edits"][0]["step"]["message"] == message
 
     def test_overlay_set_priority(self, project_dir, monkeypatch):
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         _write_workflow(
             project_dir,
             "wf",
@@ -117,7 +117,7 @@ class TestOverlayCli:
         ) == []
 
     def test_overlay_set_priority_rejects_zero(self, project_dir, monkeypatch):
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
 
         result = runner.invoke(
             app, ["workflow", "overlay", "set-priority", "wf", "ov1", "0"]
@@ -127,7 +127,7 @@ class TestOverlayCli:
         assert "must be >= 1" in result.output
 
     def test_overlay_set_priority_rejects_ids_with_trailing_newline(self, project_dir, monkeypatch):
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         _write_workflow(
             project_dir,
             "wf",
@@ -189,7 +189,7 @@ class TestOverlayFilenameVsManifestId:
 
     def test_set_priority_with_mismatched_filename(self, project_dir, monkeypatch):
         """set-priority must work when filename != manifest id."""
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         _write_workflow(
             project_dir,
             "wf",
@@ -227,7 +227,7 @@ class TestOverlayPathTraversal:
     """Overlay CLI must stay inside the overlay directory."""
 
     def test_overlay_set_priority_rejects_traversal(self, project_dir, monkeypatch):
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         _write_workflow(
             project_dir,
             "wf",

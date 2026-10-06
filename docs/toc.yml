@@ -21,6 +21,8 @@
       href: guides/assessment.md
     - name: Existing Projects
       href: guides/existing-projects.md
+    - name: Shared Workspaces
+      href: guides/shared-workspaces.md
     - name: Customize or Bring Your Own
       href: guides/customization.md
     - name: Upgrade

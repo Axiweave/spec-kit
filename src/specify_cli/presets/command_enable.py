@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import typer
 
-from .._console import console
+from ..terminal import console
 from ._commands import preset_app
 
 
@@ -13,10 +13,10 @@ def preset_enable(
     preset_id: str = typer.Argument(help="Preset ID to enable"),
 ):
     """Enable a disabled preset."""
-    from .. import _require_specify_project
+    from .. import require_specify_project
     from . import PresetManager
 
-    project_root = _require_specify_project()
+    project_root = require_specify_project()
     manager = PresetManager(project_root)
 
     # Check if preset is installed

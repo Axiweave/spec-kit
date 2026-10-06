@@ -1,9 +1,11 @@
 """Helpers for interpreting persisted init options."""
 
+from __future__ import annotations
+
 import json
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Union
+from typing import Any
 
 from .workspace import workspace_root_for
 
@@ -50,7 +52,7 @@ def is_ai_skills_enabled(opts: Mapping[str, Any] | None) -> bool:
 
 def resolve_active_agent_for_registration(
     project_path: Path,
-) -> Union[str, None, _MissingInitOptionsFile]:
+) -> str | None | _MissingInitOptionsFile:
     """Resolve the active integration key for active-only registration (#2948).
 
     ``load_init_options`` collapses "no file", "unreadable/malformed file",

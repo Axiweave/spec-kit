@@ -7,7 +7,7 @@ from typing import Any, Callable
 import typer
 from rich.markup import escape
 
-from .._console import console
+from ..terminal import console
 from ..workspace import confined, workspace_root_for
 from ..integration_runtime import (
     invoke_prefix_for_integration as _invoke_prefix_for_integration,
@@ -40,7 +40,7 @@ def _get_speckit_version() -> str:
 # JSON read / write helpers
 # ---------------------------------------------------------------------------
 
-def _read_integration_json(project_root: Path) -> dict[str, Any]:
+def read_integration_json(project_root: Path) -> dict[str, Any]:
     """Load ``.specify/integration.json``. Returns normalized state when present.
 
     Delegates the parse / schema-guard logic to the shared
@@ -74,7 +74,7 @@ def _read_integration_json(project_root: Path) -> dict[str, Any]:
     raise typer.Exit(1)
 
 
-def _write_integration_json(
+def save_integration_json(
     project_root: Path,
     integration_key: str | None,
     installed_integrations: list[str] | None = None,
@@ -104,7 +104,7 @@ def _refresh_init_options_speckit_version(project_root: Path) -> None:
     save_init_options(project_root, opts)
 
 
-def _clear_init_options_for_integration(project_root: Path, integration_key: str) -> None:
+def clear_init_options_for_integration(project_root: Path, integration_key: str) -> None:
     """Clear active integration keys from init-options.json when they match."""
     from .. import (
         load_init_options,
@@ -162,7 +162,7 @@ def _resolve_integration_script_type(
 # Integration options
 # ---------------------------------------------------------------------------
 
-def _parse_integration_options(integration: Any, raw_options: str) -> dict[str, Any] | None:
+def parse_integration_options_or_exit(integration: Any, raw_options: str) -> dict[str, Any] | None:
     """Parse CLI integration options with user-facing error handling."""
     try:
         return _parse_integration_options_impl(integration, raw_options)
@@ -171,7 +171,7 @@ def _parse_integration_options(integration: Any, raw_options: str) -> dict[str, 
         raise typer.Exit(1) from exc
 
 
-def _resolve_integration_options(
+def resolve_integration_options_or_exit(
     integration: Any,
     state: dict[str, Any],
     key: str,
@@ -183,11 +183,11 @@ def _resolve_integration_options(
         state,
         key,
         raw_options,
-        parse_options=_parse_integration_options,
+        parse_options=parse_integration_options_or_exit,
     )
 
 
-def _update_init_options_for_integration(
+def update_init_options_for_integration(
     project_root: Path,
     integration: Any,
     script_type: str | None = None,
@@ -244,7 +244,7 @@ def _set_default_integration(
     refresh_hint: str | None = None,
 ) -> None:
     """Persist *key* as default and align active runtime metadata."""
-    from .. import _install_shared_infra
+    from .. import install_shared_infra_for_project
     resolved_script = _resolve_integration_script_type(project_root, state, key, script_type)
     settings = _with_integration_setting(
         state,
@@ -258,7 +258,7 @@ def _set_default_integration(
 
     if refresh_templates:
         try:
-            _install_shared_infra(
+            install_shared_infra_for_project(
                 project_root,
                 resolved_script,
                 invoke_separator=_invoke_separator_for_integration(
@@ -277,8 +277,8 @@ def _set_default_integration(
                 f"Failed to refresh shared infrastructure for '{key}': {exc}"
             ) from exc
 
-    _write_integration_json(project_root, key, installed_keys, settings)
-    _update_init_options_for_integration(
+    save_integration_json(project_root, key, installed_keys, settings)
+    update_init_options_for_integration(
         project_root, integration, script_type=resolved_script, parsed_options=parsed_options
     )
 
@@ -306,7 +306,7 @@ def _best_effort_extension_op(
     """Run a best-effort ``ExtensionManager`` operation for ``agent_key``.
 
     ``op`` receives the ``ExtensionManager`` and ``agent_key``. Any failure is
-    surfaced as a warning via ``_print_cli_warning`` and never aborts the
+    surfaced as a warning via ``print_cli_warning`` and never aborts the
     surrounding integration operation. ``continuing`` describes what already
     succeeded so the warning makes the partial outcome clear.
     """
@@ -316,12 +316,12 @@ def _best_effort_extension_op(
         ext_mgr = ExtensionManager(project_root)
         op(ext_mgr, agent_key)
     except Exception as ext_err:
-        from .. import _print_cli_warning
+        from .. import print_cli_warning
 
-        _print_cli_warning(phase, "integration", agent_key, ext_err, continuing=continuing)
+        print_cli_warning(phase, "integration", agent_key, ext_err, continuing=continuing)
 
 
-def _register_extensions_for_agent(
+def register_extensions_for_agent(
     project_root: Path,
     agent_key: str,
     *,
@@ -379,7 +379,7 @@ def _unregister_extensions_for_agent(
     )
 
 
-def _register_presets_for_agent(
+def register_presets_for_agent(
     project_root: Path,
     agent_key: str,
     *,
@@ -400,9 +400,9 @@ def _register_presets_for_agent(
         preset_mgr = PresetManager(project_root)
         preset_mgr.register_enabled_presets_for_agent(agent_key)
     except Exception as preset_err:
-        from .. import _print_cli_warning
+        from .. import print_cli_warning
 
-        _print_cli_warning(
+        print_cli_warning(
             "register preset artifacts for",
             "integration",
             agent_key,
@@ -419,7 +419,7 @@ def _resync_manifest_after_registration(
 ) -> None:
     """Refresh tracked-file hashes after extensions/presets re-registration.
 
-    ``_register_extensions_for_agent`` / ``_register_presets_for_agent`` run
+    ``register_extensions_for_agent`` / ``register_presets_for_agent`` run
     after ``new_manifest`` is saved and can overwrite files it already
     tracks (e.g. a preset overriding a core command rendered as a skill).
     Nothing else touches the project between the manifest save and these
@@ -441,9 +441,9 @@ def _resync_manifest_after_registration(
                 new_manifest.record_existing(rel)
                 changed = True
             except (ValueError, OSError) as file_err:
-                from .. import _print_cli_warning
+                from .. import print_cli_warning
 
-                _print_cli_warning(
+                print_cli_warning(
                     "resync manifest hash for",
                     "file",
                     str(rel),
@@ -454,9 +454,9 @@ def _resync_manifest_after_registration(
         if changed:
             new_manifest.save()
     except Exception as resync_err:
-        from .. import _print_cli_warning
+        from .. import print_cli_warning
 
-        _print_cli_warning(
+        print_cli_warning(
             "resync manifest hashes for",
             "integration",
             agent_key,
@@ -487,9 +487,9 @@ def _unregister_presets_for_agent(
         preset_mgr = PresetManager(project_root)
         preset_mgr.unregister_agent_artifacts(agent_key)
     except Exception as preset_err:
-        from .. import _print_cli_warning
+        from .. import print_cli_warning
 
-        _print_cli_warning(
+        print_cli_warning(
             "clean up preset artifacts for",
             "integration",
             agent_key,

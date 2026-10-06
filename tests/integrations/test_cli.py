@@ -480,7 +480,7 @@ class TestInitIntegrationFlag:
 
     def test_shared_infra_skips_existing_files_without_force(self, tmp_path):
         """Pre-existing shared files are not overwritten without --force."""
-        from specify_cli import _install_shared_infra
+        from specify_cli import install_shared_infra_for_project
 
         project = tmp_path / "skip-test"
         project.mkdir()
@@ -498,7 +498,7 @@ class TestInitIntegrationFlag:
         custom_template = "# user-modified spec-template\n"
         (templates_dir / "spec-template.md").write_text(custom_template, encoding="utf-8")
 
-        _install_shared_infra(project, "sh", force=False)
+        install_shared_infra_for_project(project, "sh", force=False)
 
         # User's files should be preserved (not overwritten)
         assert (scripts_dir / "common.sh").read_text(encoding="utf-8") == custom_content
@@ -510,7 +510,7 @@ class TestInitIntegrationFlag:
 
     def test_shared_infra_overwrites_existing_files_with_force(self, tmp_path):
         """Pre-existing shared files ARE overwritten when force=True."""
-        from specify_cli import _install_shared_infra
+        from specify_cli import install_shared_infra_for_project
 
         project = tmp_path / "force-test"
         project.mkdir()
@@ -528,7 +528,7 @@ class TestInitIntegrationFlag:
         custom_template = "# user-modified spec-template\n"
         (templates_dir / "spec-template.md").write_text(custom_template, encoding="utf-8")
 
-        _install_shared_infra(project, "sh", force=True)
+        install_shared_infra_for_project(project, "sh", force=True)
 
         # Files should be overwritten with bundled versions
         assert (scripts_dir / "common.sh").read_text(encoding="utf-8") != custom_content
@@ -539,12 +539,12 @@ class TestInitIntegrationFlag:
         assert (templates_dir / "plan-template.md").exists()
 
     def test_shared_infra_installs_python_scripts_for_py(self, tmp_path):
-        from specify_cli import _install_shared_infra
+        from specify_cli import install_shared_infra_for_project
 
         project = tmp_path / "python-scripts"
         project.mkdir()
 
-        _install_shared_infra(project, "py")
+        install_shared_infra_for_project(project, "py")
 
         assert (
             project / ".specify" / "scripts" / "python" / "common.py"
@@ -554,7 +554,7 @@ class TestInitIntegrationFlag:
         """A managed script the core no longer ships (e.g. the legacy
         update-agent-context.sh, superseded by the agent-context extension) is
         removed, and the manifest stops tracking it (#3076)."""
-        from specify_cli import _install_shared_infra
+        from specify_cli import install_shared_infra_for_project
         from specify_cli.integrations.manifest import IntegrationManifest
 
         project = tmp_path / "stale-test"
@@ -571,7 +571,7 @@ class TestInitIntegrationFlag:
         manifest.record_existing(stale_rel)
         manifest.save()
 
-        _install_shared_infra(project, "sh", force=False)
+        install_shared_infra_for_project(project, "sh", force=False)
 
         # The orphan is gone and the manifest no longer tracks it.
         assert not (scripts_dir / "update-agent-context.sh").exists()
@@ -584,7 +584,7 @@ class TestInitIntegrationFlag:
     def test_shared_infra_preserves_modified_stale_script(self, tmp_path):
         """A user-modified stale script is preserved (hash diverges from the
         managed baseline), never silently deleted (#3076)."""
-        from specify_cli import _install_shared_infra
+        from specify_cli import install_shared_infra_for_project
         from specify_cli.integrations.manifest import IntegrationManifest
 
         project = tmp_path / "stale-modified"
@@ -602,7 +602,7 @@ class TestInitIntegrationFlag:
         # User customizes it after install → on-disk hash now diverges.
         stale.write_text("# user customization\n", encoding="utf-8")
 
-        _install_shared_infra(project, "sh", force=False)
+        install_shared_infra_for_project(project, "sh", force=False)
 
         # Preserved: it is no longer a managed (hash-matching) copy.
         assert stale.exists()
@@ -611,7 +611,7 @@ class TestInitIntegrationFlag:
     def test_shared_infra_prunes_orphan_manifest_entry_when_file_absent(self, tmp_path):
         """A stale manifest entry whose file is already gone from disk is pruned
         so the manifest stays consistent, not left tracked forever (#3076 review)."""
-        from specify_cli import _install_shared_infra
+        from specify_cli import install_shared_infra_for_project
         from specify_cli.integrations.manifest import IntegrationManifest
 
         project = tmp_path / "orphan-entry"
@@ -629,7 +629,7 @@ class TestInitIntegrationFlag:
         # File removed out of band, but the manifest still tracks it.
         stale.unlink()
 
-        _install_shared_infra(project, "sh", force=False)
+        install_shared_infra_for_project(project, "sh", force=False)
 
         refreshed = IntegrationManifest.load("speckit", project)
         assert stale_rel not in refreshed.files
@@ -638,7 +638,7 @@ class TestInitIntegrationFlag:
         """If the bundle's script source dir exists but is empty, stale-cleanup
         must NOT run (no source files seen → can't tell what's obsolete): a
         previously-tracked script is preserved, never mass-deleted (#3076 review)."""
-        from specify_cli import _install_shared_infra, shared_infra
+        from specify_cli import install_shared_infra_for_project, shared_infra
         from specify_cli.integrations.manifest import IntegrationManifest
 
         # Point the script source at an empty ``bash/`` directory.
@@ -657,7 +657,7 @@ class TestInitIntegrationFlag:
         manifest.record_existing(tracked_rel)
         manifest.save()
 
-        _install_shared_infra(project, "sh", force=False)
+        install_shared_infra_for_project(project, "sh", force=False)
 
         # Empty source → scripts_scanned stays False → nothing deleted.
         assert (scripts_dir / "common.sh").exists()
@@ -670,7 +670,7 @@ class TestInitIntegrationFlag:
         (#3076 review, containment guard)."""
         import hashlib
         import json
-        from specify_cli import _install_shared_infra
+        from specify_cli import install_shared_infra_for_project
 
         project = tmp_path / "unsafe-key"
         project.mkdir()
@@ -697,7 +697,7 @@ class TestInitIntegrationFlag:
             encoding="utf-8",
         )
 
-        _install_shared_infra(project, "sh", force=False)
+        install_shared_infra_for_project(project, "sh", force=False)
 
         # The unsafe key was skipped; its target file is untouched.
         assert victim.exists()
@@ -708,11 +708,11 @@ class TestInitIntegrationFlag:
     ):
         """A key that passes the lexical guard but escapes containment — e.g. a
         Windows drive-relative ``C:tmp`` that is not ``is_absolute()`` yet discards
-        the project root when joined — is skipped via ``_validate_rel_path``, never
+        the project root when joined — is skipped via ``validate_rel_path``, never
         unlinked, and never turned into an install-time hard failure (#3076 review
-        round 4). Simulated portably by forcing ``_validate_rel_path`` to reject the
+        round 4). Simulated portably by forcing ``validate_rel_path`` to reject the
         managed key, since real drive-relative paths only escape on Windows."""
-        from specify_cli import _install_shared_infra
+        from specify_cli import install_shared_infra_for_project
         from specify_cli.integrations import manifest as manifest_mod
         from specify_cli.integrations.manifest import IntegrationManifest
 
@@ -732,17 +732,17 @@ class TestInitIntegrationFlag:
 
         # Force the containment check to reject this key, as it would for a
         # drive-relative escape on Windows. The cleanup must skip it gracefully.
-        real_validate = manifest_mod._validate_rel_path
+        real_validate = manifest_mod.validate_rel_path
 
         def fake_validate(rel, root, **kwargs):
             if str(rel).endswith("update-agent-context.sh"):
                 raise ValueError("simulated drive-relative escape")
             return real_validate(rel, root, **kwargs)
 
-        monkeypatch.setattr(manifest_mod, "_validate_rel_path", fake_validate)
+        monkeypatch.setattr(manifest_mod, "validate_rel_path", fake_validate)
 
         # Must not raise (no install-time hard failure from a corrupted key).
-        _install_shared_infra(project, "sh", force=False)
+        install_shared_infra_for_project(project, "sh", force=False)
 
         # The escaping key was skipped, so its file is left untouched...
         assert stale.exists()
@@ -752,7 +752,7 @@ class TestInitIntegrationFlag:
 
     def test_shared_infra_skip_warning_displayed(self, tmp_path, capsys):
         """Console warning is displayed when files are skipped."""
-        from specify_cli import _install_shared_infra
+        from specify_cli import install_shared_infra_for_project
         from tests.conftest import strip_ansi
 
         project = tmp_path / "warn-test"
@@ -763,7 +763,7 @@ class TestInitIntegrationFlag:
         scripts_dir.mkdir(parents=True)
         (scripts_dir / "common.sh").write_text("# custom\n", encoding="utf-8")
 
-        _install_shared_infra(project, "sh", force=False)
+        install_shared_infra_for_project(project, "sh", force=False)
 
         captured = capsys.readouterr()
         plain = strip_ansi(captured.out)
@@ -775,7 +775,7 @@ class TestInitIntegrationFlag:
 
     def test_shared_infra_warns_when_manifest_cannot_be_loaded(self, tmp_path, capsys):
         """Invalid shared manifests warn before falling back to a new manifest."""
-        from specify_cli import _install_shared_infra
+        from specify_cli import install_shared_infra_for_project
 
         project = tmp_path / "bad-shared-manifest-test"
         project.mkdir()
@@ -784,7 +784,7 @@ class TestInitIntegrationFlag:
         manifest_path = integrations_dir / "speckit.manifest.json"
         manifest_path.write_text("{not json", encoding="utf-8")
 
-        _install_shared_infra(project, "sh")
+        install_shared_infra_for_project(project, "sh")
 
         captured = capsys.readouterr()
         assert "Could not read shared infrastructure manifest" in captured.out
@@ -792,7 +792,7 @@ class TestInitIntegrationFlag:
 
     def test_shared_infra_warns_when_manifest_cannot_be_decoded(self, tmp_path, capsys):
         """Non-UTF-8 shared manifests warn before falling back to a new manifest."""
-        from specify_cli import _install_shared_infra
+        from specify_cli import install_shared_infra_for_project
 
         project = tmp_path / "bad-shared-manifest-encoding-test"
         project.mkdir()
@@ -801,7 +801,7 @@ class TestInitIntegrationFlag:
         manifest_path = integrations_dir / "speckit.manifest.json"
         manifest_path.write_bytes(b"\xff\xfe\x00")
 
-        _install_shared_infra(project, "sh")
+        install_shared_infra_for_project(project, "sh")
 
         captured = capsys.readouterr()
         assert "Could not read shared infrastructure manifest" in captured.out
@@ -810,7 +810,7 @@ class TestInitIntegrationFlag:
     @pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks are unavailable")
     def test_shared_infra_buckets_symlinked_script_destination(self, tmp_path, capsys):
         """Symlinked script destinations are bucketed with a warning; the symlink target is preserved."""
-        from specify_cli import _install_shared_infra
+        from specify_cli import install_shared_infra_for_project
 
         project = tmp_path / "symlink-script-test"
         project.mkdir()
@@ -822,7 +822,7 @@ class TestInitIntegrationFlag:
         scripts_dir.mkdir(parents=True)
         os.symlink(outside, scripts_dir / "common.sh")
 
-        _install_shared_infra(project, "sh", force=True)
+        install_shared_infra_for_project(project, "sh", force=True)
 
         captured = capsys.readouterr()
         assert "symlinked shared infrastructure" in captured.out
@@ -831,7 +831,7 @@ class TestInitIntegrationFlag:
     @pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks are unavailable")
     def test_shared_infra_buckets_symlinked_template_destination(self, tmp_path, capsys):
         """Symlinked template destinations are bucketed with a warning; the symlink target is preserved."""
-        from specify_cli import _install_shared_infra
+        from specify_cli import install_shared_infra_for_project
 
         project = tmp_path / "symlink-template-test"
         project.mkdir()
@@ -843,7 +843,7 @@ class TestInitIntegrationFlag:
         templates_dir.mkdir(parents=True)
         os.symlink(outside, templates_dir / "plan-template.md")
 
-        _install_shared_infra(project, "sh", force=True)
+        install_shared_infra_for_project(project, "sh", force=True)
 
         captured = capsys.readouterr()
         assert "symlinked shared infrastructure" in captured.out
@@ -872,7 +872,7 @@ class TestInitIntegrationFlag:
     @pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks are unavailable")
     def test_shared_infra_refuses_symlinked_specify_directory_before_mkdir(self, tmp_path):
         """Shared infra installs must not follow a symlinked .specify directory."""
-        from specify_cli import _install_shared_infra
+        from specify_cli import install_shared_infra_for_project
 
         project = tmp_path / "symlink-dir-test"
         project.mkdir()
@@ -881,7 +881,7 @@ class TestInitIntegrationFlag:
         os.symlink(outside, project / ".specify")
 
         with pytest.raises(ValueError, match="symlinked"):
-            _install_shared_infra(project, "sh", force=True)
+            install_shared_infra_for_project(project, "sh", force=True)
         # Nothing should have been written under the symlinked .specify target.
         assert list(outside.iterdir()) == []
 
@@ -1083,7 +1083,7 @@ class TestInitIntegrationFlag:
 
     def test_shared_infra_no_warning_when_forced(self, tmp_path, capsys):
         """No skip warning when force=True (all files overwritten)."""
-        from specify_cli import _install_shared_infra
+        from specify_cli import install_shared_infra_for_project
 
         project = tmp_path / "no-warn-test"
         project.mkdir()
@@ -1093,7 +1093,7 @@ class TestInitIntegrationFlag:
         scripts_dir.mkdir(parents=True)
         (scripts_dir / "common.sh").write_text("# custom\n", encoding="utf-8")
 
-        _install_shared_infra(project, "sh", force=True)
+        install_shared_infra_for_project(project, "sh", force=True)
 
         captured = capsys.readouterr()
         assert "already exist and were not updated" not in captured.out
@@ -1161,7 +1161,7 @@ class TestInitIntegrationFlag:
 
 
     def test_init_here_force_reapplies_installed_presets(self, tmp_path, monkeypatch):
-        """Regression for #3990: init --here --force must call _register_presets_for_agent
+        """Regression for #3990: init --here --force must call register_presets_for_agent
         after setup() so preset-composed files are not silently reverted to core."""
         from unittest.mock import MagicMock, patch
 
@@ -1186,17 +1186,17 @@ class TestInitIntegrationFlag:
             ], catch_exceptions=False)
             assert result.exit_code == 0, result.output
 
-            # Second init --here --force: verify _register_presets_for_agent is called.
+            # Second init --here --force: verify register_presets_for_agent is called.
             # Patch at the source module since init.py does a lazy import of these functions.
             mock_presets = MagicMock()
             mock_extensions = MagicMock()
             with (
                 patch(
-                    "specify_cli.integrations._helpers._register_presets_for_agent",
+                    "specify_cli.integrations.helpers.register_presets_for_agent",
                     mock_presets,
                 ),
                 patch(
-                    "specify_cli.integrations._helpers._register_extensions_for_agent",
+                    "specify_cli.integrations.helpers.register_extensions_for_agent",
                     mock_extensions,
                 ),
             ):
@@ -1211,14 +1211,14 @@ class TestInitIntegrationFlag:
 
         assert result2.exit_code == 0, result2.output
         assert mock_presets.called, (
-            "_register_presets_for_agent was not called during init --here --force"
+            "register_presets_for_agent was not called during init --here --force"
         )
         assert mock_extensions.called, (
-            "_register_extensions_for_agent was not called during init --here --force"
+            "register_extensions_for_agent was not called during init --here --force"
         )
 
     def test_init_here_without_force_does_not_reapply_presets(self, tmp_path):
-        """Without --force (fresh project), _register_presets_for_agent should NOT be called."""
+        """Without --force (fresh project), register_presets_for_agent should NOT be called."""
         from unittest.mock import MagicMock, patch
 
         from typer.testing import CliRunner
@@ -1234,7 +1234,7 @@ class TestInitIntegrationFlag:
             runner = CliRunner()
             mock_presets = MagicMock()
             with patch(
-                "specify_cli.integrations._helpers._register_presets_for_agent",
+                "specify_cli.integrations.helpers.register_presets_for_agent",
                 mock_presets,
             ):
                 result = runner.invoke(app, [
@@ -1249,7 +1249,7 @@ class TestInitIntegrationFlag:
         assert result.exit_code == 0, result.output
         # On a fresh project without --force the reapply guard should not fire.
         assert not mock_presets.called, (
-            "_register_presets_for_agent should not be called on a fresh init without --force"
+            "register_presets_for_agent should not be called on a fresh init without --force"
         )
 
 
@@ -1376,7 +1376,7 @@ class TestGitExtensionOptIn:
 
 
 class TestSharedInfraCommandRefs:
-    """Verify _install_shared_infra resolves __SPECKIT_COMMAND_*__ in shared infra."""
+    """Verify install_shared_infra_for_project resolves __SPECKIT_COMMAND_*__ in shared infra."""
 
     @staticmethod
     def _combined_script_content(project, script_type):
@@ -1396,13 +1396,13 @@ class TestSharedInfraCommandRefs:
 
     def test_dot_separator_in_page_templates(self, tmp_path):
         """Markdown agents get /speckit.<name> in page templates."""
-        from specify_cli import _install_shared_infra
+        from specify_cli import install_shared_infra_for_project
 
         project = tmp_path / "dot-test"
         project.mkdir()
         (project / ".specify").mkdir()
 
-        _install_shared_infra(project, "sh", invoke_separator=".")
+        install_shared_infra_for_project(project, "sh", invoke_separator=".")
 
         plan = project / ".specify" / "templates" / "plan-template.md"
         assert plan.exists()
@@ -1417,13 +1417,13 @@ class TestSharedInfraCommandRefs:
 
     def test_hyphen_separator_in_page_templates(self, tmp_path):
         """Skills agents get /speckit-<name> in page templates."""
-        from specify_cli import _install_shared_infra
+        from specify_cli import install_shared_infra_for_project
 
         project = tmp_path / "hyphen-test"
         project.mkdir()
         (project / ".specify").mkdir()
 
-        _install_shared_infra(project, "sh", invoke_separator="-")
+        install_shared_infra_for_project(project, "sh", invoke_separator="-")
 
         plan = project / ".specify" / "templates" / "plan-template.md"
         assert plan.exists()
@@ -1439,13 +1439,13 @@ class TestSharedInfraCommandRefs:
 
     def test_dollar_prefix_in_page_templates(self, tmp_path):
         """Dollar-style skills agents get $speckit-<name> in page templates."""
-        from specify_cli import _install_shared_infra
+        from specify_cli import install_shared_infra_for_project
 
         project = tmp_path / "dollar-test"
         project.mkdir()
         (project / ".specify").mkdir()
 
-        _install_shared_infra(
+        install_shared_infra_for_project(
             project, "sh", invoke_separator="-", invoke_prefix="$"
         )
 
@@ -1457,13 +1457,13 @@ class TestSharedInfraCommandRefs:
     @pytest.mark.parametrize("script_type", ["sh", "ps"])
     def test_dot_separator_in_shared_scripts(self, tmp_path, script_type):
         """Markdown agents get /speckit.<name> in shared script hints."""
-        from specify_cli import _install_shared_infra
+        from specify_cli import install_shared_infra_for_project
 
         project = tmp_path / f"dot-script-{script_type}"
         project.mkdir()
         (project / ".specify").mkdir()
 
-        _install_shared_infra(project, script_type, invoke_separator=".")
+        install_shared_infra_for_project(project, script_type, invoke_separator=".")
 
         content = self._combined_script_content(project, script_type)
         assert "__SPECKIT_COMMAND_" not in content
@@ -1477,13 +1477,13 @@ class TestSharedInfraCommandRefs:
     @pytest.mark.parametrize("script_type", ["sh", "ps"])
     def test_hyphen_separator_in_shared_scripts(self, tmp_path, script_type):
         """Skills agents get /speckit-<name> in shared script hints."""
-        from specify_cli import _install_shared_infra
+        from specify_cli import install_shared_infra_for_project
 
         project = tmp_path / f"hyphen-script-{script_type}"
         project.mkdir()
         (project / ".specify").mkdir()
 
-        _install_shared_infra(project, script_type, invoke_separator="-")
+        install_shared_infra_for_project(project, script_type, invoke_separator="-")
 
         content = self._combined_script_content(project, script_type)
         assert "__SPECKIT_COMMAND_" not in content
@@ -1497,13 +1497,13 @@ class TestSharedInfraCommandRefs:
     @pytest.mark.parametrize("script_type", ["sh", "ps", "py"])
     def test_dollar_prefix_in_shared_scripts(self, tmp_path, script_type):
         """Dollar-style skills agents get native prefixes in shared script hints."""
-        from specify_cli import _install_shared_infra
+        from specify_cli import install_shared_infra_for_project
 
         project = tmp_path / f"dollar-script-{script_type}"
         project.mkdir()
         (project / ".specify").mkdir()
 
-        _install_shared_infra(
+        install_shared_infra_for_project(
             project, script_type, invoke_separator="-", invoke_prefix="$"
         )
 
@@ -1841,7 +1841,7 @@ class TestExtensionFlag:
 
     def test_catalog_preset_init_forwards_catalog_name(self, tmp_path, monkeypatch):
         """The init preset catalog branch keeps resolved provenance."""
-        import specify_cli._assets as assets
+        import specify_cli.assets as assets
         from specify_cli.presets import PresetCatalog, PresetManager
 
         captured = {}
@@ -2083,10 +2083,10 @@ class TestExtensionFlag:
             "specify_cli.authentication.http.open_url",
             return_value=FakeResponse(zip_bytes),
         ), patch(
-            "specify_cli.extensions._commands._validate_safe_cache_dir",
+            "specify_cli.extensions.install._validate_safe_cache_dir",
             side_effect=_cache_dir_stand_in,
         ), patch(
-            "specify_cli.extensions._commands._safe_open_download_zip",
+            "specify_cli.extensions.install._safe_open_download_zip",
             side_effect=_open_download_zip,
         ):
             project, result = self._run_init(
@@ -2148,10 +2148,10 @@ class TestExtensionFlag:
             "specify_cli.authentication.http.open_url",
             return_value=FakeResponse(zip_bytes),
         ), patch(
-            "specify_cli.extensions._commands._validate_safe_cache_dir",
+            "specify_cli.extensions.install._validate_safe_cache_dir",
             side_effect=_cache_dir_stand_in,
         ), patch(
-            "specify_cli.extensions._commands._safe_open_download_zip",
+            "specify_cli.extensions.install._safe_open_download_zip",
             side_effect=_open_download_zip,
         ):
             project, result = self._run_init(
@@ -2209,10 +2209,10 @@ class TestExtensionFlag:
             "specify_cli.authentication.http.open_url",
             return_value=FakeResponse(zip_bytes),
         ), patch(
-            "specify_cli.extensions._commands._validate_safe_cache_dir",
+            "specify_cli.extensions.install._validate_safe_cache_dir",
             side_effect=_cache_dir_stand_in,
         ), patch(
-            "specify_cli.extensions._commands._safe_open_download_zip",
+            "specify_cli.extensions.install._safe_open_download_zip",
             side_effect=_open_download_zip,
         ):
             project, result = self._run_init(

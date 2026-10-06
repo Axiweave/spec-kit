@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
-from .._invocation_style import get_invocation_prefix, is_dollar_skills_agent
+from ..invocation_style import get_invocation_prefix, is_dollar_skills_agent
 from ..toml_string import escape_toml_basic as _escape_toml_basic
 from ..toml_string import has_illegal_toml_control as _has_illegal_toml_control
 from ..events import install_integration_events, remove_integration_events
@@ -818,27 +818,29 @@ class IntegrationBase(ABC):
         except (OSError, subprocess.SubprocessError):
             return False
 
+    WORKSPACE_NOTE = (
+        "\n## Workspace resolution\n\n"
+        "Before these instructions, run `specify project info --json` from the code repository.\n"
+        "Stop if it fails. Use its `workspace_root` for all Spec Kit assets and feature artifacts.\n"
+        "Resolve `.specify/` asset paths below against that workspace, not against the code repository.\n"
+        "Use absolute, shell-quoted paths when running the selected workspace scripts.\n"
+        "Keep the code repository as the working directory for Git and implementation commands.\n\n"
+        "## Feature context\n\n"
+        "For an existing-feature command, read `feature_selection` from `.specify/init-options.json`. Its default is `context`.\n"
+        "In `context` mode, use the user's explicit feature or the feature established in this conversation.\n"
+        "If the target is unclear, ask the user before hooks, helpers, or file changes.\n"
+        "Do not infer the target from the newest directory, a saved pointer, or another worktree's selection.\n"
+        "In `automatic` mode, use `active_feature` from project info unless the user names another feature.\n"
+        "Pass `SPECIFY_FEATURE_DIRECTORY` only for each helper or hook invocation. Do not export it for later commands.\n"
+        "Keep saved selection unchanged in `context` mode. This rule overrides saved-selection instructions below.\n"
+        "Creating a specification needs no existing feature. Carry its new path in conversation context.\n\n"
+    )
+
     @staticmethod
     def add_workspace_note(content: str) -> str:
         """Add workspace and invocation-scoped feature instructions."""
         newline = "\r\n" if "\r\n" in content else "\n"
-        note = (
-            "\n## Workspace resolution\n\n"
-            "Before these instructions, run `specify project info --json` from the code repository.\n"
-            "Stop if it fails. Use its `workspace_root` for all Spec Kit assets and feature artifacts.\n"
-            "Resolve `.specify/` asset paths below against that workspace, not against the code repository.\n"
-            "Use absolute, shell-quoted paths when running the selected workspace scripts.\n"
-            "Keep the code repository as the working directory for Git and implementation commands.\n\n"
-            "## Feature context\n\n"
-            "For an existing-feature command, read `feature_selection` from `.specify/init-options.json`. Its default is `context`.\n"
-            "In `context` mode, use the user's explicit feature or the feature established in this conversation.\n"
-            "If the target is unclear, ask the user before hooks, helpers, or file changes.\n"
-            "Do not infer the target from the newest directory, a saved pointer, or another worktree's selection.\n"
-            "In `automatic` mode, use `active_feature` from project info unless the user names another feature.\n"
-            "Pass `SPECIFY_FEATURE_DIRECTORY` only for each helper or hook invocation. Do not export it for later commands.\n"
-            "Keep saved selection unchanged in `context` mode. This rule overrides saved-selection instructions below.\n"
-            "Creating a specification needs no existing feature. Carry its new path in conversation context.\n\n"
-        ).replace("\n", newline)
+        note = IntegrationBase.WORKSPACE_NOTE.replace("\n", newline)
         if note in content:
             return content
         lines = content.splitlines(keepends=True)
@@ -848,6 +850,12 @@ class IntegrationBase(ABC):
                     prefix = "".join(lines[:index + 1])
                     return prefix + note + "".join(lines[index + 1:])
         return note + content
+
+    @staticmethod
+    def remove_workspace_note(content: str) -> str:
+        """Remove the instructions that ``add_workspace_note`` adds."""
+        newline = "\r\n" if "\r\n" in content else "\n"
+        return content.replace(IntegrationBase.WORKSPACE_NOTE.replace("\n", newline), "", 1)
 
     @staticmethod
     def process_template(

@@ -184,7 +184,7 @@ def uninstall_global_commands() -> tuple[list[Path], list[Path]]:
 def run_global_command(key: str | None, action: str) -> None:
     """Handle the standalone CLI route before any project lookup."""
     import typer
-    from ..._console import console
+    from ...terminal import console
 
     if key != "omp":
         console.print(f"Global integration {action} supports only omp, not {key!r}.", style="red", markup=False)

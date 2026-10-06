@@ -7,7 +7,7 @@ from pathlib import Path
 
 import typer
 
-from ._console import err_console
+from .terminal import err_console
 from .workspace import Project, ProjectNotFoundError, find_repository, resolve_project, workspace_root_for
 
 

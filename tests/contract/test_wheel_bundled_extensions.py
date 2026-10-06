@@ -1,7 +1,7 @@
 """Contract tests: every bundled extension must ship inside the wheel's core_pack.
 
 ``specify extension add <id>`` resolves a bundled extension via
-``specify_cli._assets.locate_bundled_extension``, which checks the wheel's
+``specify_cli.assets.locate_bundled_extension``, which checks the wheel's
 ``specify_cli/core_pack/extensions/<id>/`` directory before the source
 checkout. A source checkout always finds ``extensions/<id>/``, so a bundled
 extension missing from the wheel force-include list passes every in-repo test

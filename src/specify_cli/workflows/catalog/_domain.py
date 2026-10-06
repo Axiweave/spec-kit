@@ -21,7 +21,7 @@ from typing import Any
 
 import yaml
 
-from ..._download_security import (
+from ...download_security import (
     MAX_JSON_CATALOG_BYTES as MAX_JSON_CATALOG_BYTES,
     read_response_limited,
 )

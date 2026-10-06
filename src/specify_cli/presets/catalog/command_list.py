@@ -8,7 +8,7 @@ from pathlib import Path
 import typer
 from rich.markup import escape as _escape_markup
 
-from ..._console import console
+from ...terminal import console
 from ...workspace import workspace_root_for
 from . import catalog_app
 
@@ -16,10 +16,10 @@ from . import catalog_app
 @catalog_app.command("list")
 def preset_catalog_list():
     """List all active preset catalogs."""
-    from ... import _display_project_path, _require_specify_project
+    from ... import _display_project_path, require_specify_project
     from .. import PresetCatalog, PresetValidationError
 
-    project_root = _require_specify_project()
+    project_root = require_specify_project()
     catalog = PresetCatalog(project_root)
 
     try:

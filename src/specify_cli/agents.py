@@ -16,8 +16,8 @@ from typing import Any, Dict, Iterable, List, Optional
 
 import yaml
 
-from ._init_options import is_ai_skills_enabled, load_init_options
-from ._invocation_style import get_invocation_prefix
+from .init_options import is_ai_skills_enabled, load_init_options
+from .invocation_style import get_invocation_prefix
 from .toml_string import escape_toml_basic as _escape_toml_basic
 from .toml_string import has_illegal_toml_control as _has_illegal_toml_control
 from ._utils import relative_extension_path_violation
@@ -67,7 +67,7 @@ class CommandRegistrar:
         if project_root is not None:
             from .integrations.generic import registration_directory
 
-            from ._init_options import load_init_options
+            from .init_options import load_init_options
 
             opts = load_init_options(project_root)
             if isinstance(opts, dict) and opts.get("ai") == "generic":

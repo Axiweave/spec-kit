@@ -184,7 +184,7 @@ class TestInitOptions:
         assert loaded["ai_skills"] is True
 
     def test_save_and_load_available_from_init_options_module(self, project_dir):
-        from specify_cli._init_options import load_init_options, save_init_options
+        from specify_cli.init_options import load_init_options, save_init_options
 
         opts = {"ai": "codex", "ai_skills": True, "script": "sh"}
         save_init_options(project_dir, opts)
@@ -362,7 +362,7 @@ class TestInitOptions:
         ],
     )
     def test_is_ai_skills_enabled_requires_boolean_true(self, value, expected):
-        from specify_cli._init_options import is_ai_skills_enabled
+        from specify_cli.init_options import is_ai_skills_enabled
 
         assert is_ai_skills_enabled({"ai_skills": value}) is expected
 
@@ -379,7 +379,7 @@ class TestResolveActiveAgentForRegistration:
     """
 
     def test_missing_file_returns_sentinel(self, project_dir):
-        from specify_cli._init_options import (
+        from specify_cli.init_options import (
             MISSING_INIT_OPTIONS_FILE,
             resolve_active_agent_for_registration,
         )
@@ -391,7 +391,7 @@ class TestResolveActiveAgentForRegistration:
 
     def test_valid_active_agent_returns_string(self, project_dir):
         from specify_cli import save_init_options
-        from specify_cli._init_options import resolve_active_agent_for_registration
+        from specify_cli.init_options import resolve_active_agent_for_registration
 
         save_init_options(project_dir, {"ai": "claude"})
 
@@ -399,7 +399,7 @@ class TestResolveActiveAgentForRegistration:
 
     def test_corrupted_json_fails_closed(self, project_dir):
         """A present-but-unparseable file must not behave like "no file"."""
-        from specify_cli._init_options import resolve_active_agent_for_registration
+        from specify_cli.init_options import resolve_active_agent_for_registration
 
         opts_file = project_dir / ".specify" / "init-options.json"
         opts_file.parent.mkdir(parents=True, exist_ok=True)
@@ -411,7 +411,7 @@ class TestResolveActiveAgentForRegistration:
     def test_malformed_ai_value_fails_closed(self, project_dir, value):
         """A recorded but non-string/empty ``ai`` value fails closed too."""
         from specify_cli import save_init_options
-        from specify_cli._init_options import resolve_active_agent_for_registration
+        from specify_cli.init_options import resolve_active_agent_for_registration
 
         save_init_options(project_dir, {"ai": value})
 
@@ -427,7 +427,7 @@ class TestResolveActiveAgentForRegistration:
         legacy all-agent registration. The path is present (just broken),
         so it must be treated as a corrupted file and fail closed instead.
         """
-        from specify_cli._init_options import resolve_active_agent_for_registration
+        from specify_cli.init_options import resolve_active_agent_for_registration
 
         opts_file = project_dir / ".specify" / "init-options.json"
         opts_file.parent.mkdir(parents=True, exist_ok=True)

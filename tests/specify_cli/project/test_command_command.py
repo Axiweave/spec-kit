@@ -53,8 +53,7 @@ def external_project(tmp_path, name, *, active_feature="specs/001-first", featur
         "command_scope": "global", "feature_numbering": "sequential",
         "feature_selection": feature_selection,
     }), encoding="utf-8")
-    record = Path(os.environ["XDG_DATA_HOME"]) / "specify/projects" / f"{project_id}.json"
-    record.parent.mkdir(parents=True, exist_ok=True)
+    record = repository / ".specify/checkout.json"
     record.write_text(json.dumps({
         "schema_version": 1, "workspace": str(workspace),
         "active_feature": active_feature,
@@ -243,7 +242,9 @@ def test_concurrent_git_worktrees_resolve_features_without_shared_selection_writ
             ["git", "worktree", "add", "--detach", str(worktree)],
             cwd=repository, check=True, capture_output=True,
         )
-    before = files_under(workspace, record.parent)
+        shutil.copy2(record, worktree / ".specify/checkout.json")
+    roots = (workspace, *(worktree / ".specify" for worktree in worktrees))
+    before = files_under(*roots)
 
     def resolve(index):
         relative = ("specs/001-first", "specs/002-second")[index]
@@ -261,7 +262,7 @@ def test_concurrent_git_worktrees_resolve_features_without_shared_selection_writ
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         list(pool.map(resolve, [0, 1]))
-    assert files_under(workspace, record.parent) == before
+    assert files_under(*roots) == before
 
 
 

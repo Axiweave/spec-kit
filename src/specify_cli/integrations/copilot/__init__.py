@@ -95,7 +95,7 @@ def _validate_mode_options(parsed_options: dict[str, Any] | None) -> None:
     """Reject the two explicit Copilot layout selectors used together."""
     opts = parsed_options or {}
     if opts.get("skills") and opts.get("commands"):
-        from ..._console import console
+        from ...terminal import console
 
         console.print(
             "[red]Error:[/red] --skills and --commands are mutually exclusive; "

@@ -9,9 +9,9 @@ import typer
 from rich.markup import escape as _escape_markup
 
 
-from .._console import console
-from .._download_security import read_response_limited as _read_response_limited
-from .._download_security import (
+from ..terminal import console
+from ..download_security import read_response_limited as _read_response_limited
+from ..download_security import (
     archive_format_from_name,
     archive_suffix,
     detect_archive_format,
@@ -89,7 +89,7 @@ def _install_preset(
     force: bool = False,
 ) -> None:
     """Install or restore a preset through the same validated source paths."""
-    from .. import _locate_bundled_preset, _require_specify_project, get_speckit_version
+    from .. import _locate_bundled_preset, require_specify_project, get_speckit_version
     from . import (
         PresetCatalog,
         PresetCompatibilityError,
@@ -98,7 +98,7 @@ def _install_preset(
         PresetValidationError,
     )
 
-    project_root = _require_specify_project()
+    project_root = require_specify_project()
     _validate_priority(priority)
 
     manager = PresetManager(project_root)

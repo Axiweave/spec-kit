@@ -16,6 +16,7 @@ from typer.testing import CliRunner
 
 from specify_cli import app
 from tests.parity_helpers import install_scripts, py_cmd
+from tests.specify_cli.project.test_command_unlink import external_project
 
 
 ACTIVE_FEATURE = "specs/007-current"
@@ -131,7 +132,7 @@ def project_info(repository: Path) -> dict:
 def assert_local(repository: Path, home: Path, before: dict[str, bytes], history: tuple):
     assert snapshot(repository) == before
     assert git_state(repository) == history
-    assert not list((home / "data/specify/projects").glob("*.json"))
+    assert not (repository / ".specify/checkout.json").exists()
     info = project_info(repository)
     assert info["storage"] == "local"
     assert info["workspace_root"] == info["repository_root"] == str(repository)
@@ -148,7 +149,8 @@ def assert_moved(
         elif not relative.startswith((".specify/", "specs/")):
             assert (repository / relative).read_bytes() == content
     assert not (repository / "specs").exists()
-    assert set(snapshot(repository / ".specify")) == {"project.json"}
+    assert set(snapshot(repository / ".specify")) == {"checkout.json", "project.json"}
+    git(repository, "check-ignore", "-q", ".specify/checkout.json")
     assert not (workspace / ".specify/project.json").exists()
     assert not (workspace / ".specify/feature.json").exists()
     assert git_state(repository) == history
@@ -191,7 +193,7 @@ def test_confirmation_observes_verified_stage_and_untouched_source(local_project
                 assert (workspace / relative).read_bytes() == content
         assert snapshot(repository) == before
         assert git_state(repository) == history
-        assert not list((home / "data/specify/projects").glob("*.json"))
+        assert not (repository / ".specify/checkout.json").exists()
         assert not (workspace / ".specify/workspace.json").exists()
         sys.stdout.flush()
         sys.stderr.flush()
@@ -392,6 +394,34 @@ def test_failed_locator_write_restores_local_project_and_reports_stage(local_pro
     assert_recovery(result.output, repository, workspace)
 
 
+def test_ctrl_c_during_cutover_rolls_back_and_exits_130(local_project, monkeypatch):
+    from specify_cli.project import move
+
+    repository, workspace, home = local_project
+    before, history = snapshot(repository), git_state(repository)
+
+    def interrupt(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(move, "initialize_workspace_git", interrupt)
+    result = CliRunner().invoke(app, ["project", "move", str(workspace), "--confirm-remove-local"])
+
+    assert result.exit_code == 130, result.output
+    assert "interrupted" in result.output and f"Source remains usable at {repository}" in result.output
+    assert_local(repository, home, before, history)
+    assert_recovery(result.output, repository, workspace)
+
+
+def test_prompt_cancel_names_the_staged_copy_and_both_ways_to_retry(local_project):
+    repository, workspace, home = local_project
+
+    result = CliRunner().invoke(app, ["project", "move", str(workspace)], input="n\n")
+
+    assert result.exit_code == 1
+    assert f"staged copy remains at {workspace}" in result.output
+    assert "delete the staged copy or choose another empty destination" in result.output
+
+
 def test_default_migration_creates_one_commit_with_durable_history(local_project):
     repository, workspace, home = local_project
     before, history = snapshot(repository), git_state(repository)
@@ -586,3 +616,51 @@ def test_recovery_failure_after_refresh_retains_evidence_without_deleting_it(loc
     recovery_dirs = [p for p in repository.glob(".specify-move-*") if p.is_dir()]
     assert recovery_dirs, "The recovery directory must remain for manual inspection."
     assert (recovery_dirs[0] / "specs/001-complete/spec.md").read_bytes() == before["specs/001-complete/spec.md"]
+
+
+@pytest.mark.parametrize("arguments", [[], ["workspace", "--to-local"]], ids=["neither", "both"])
+def test_move_requires_exactly_one_of_workspace_and_to_local(local_project, arguments):
+    repository, workspace, home = local_project
+    before, history = snapshot(repository), git_state(repository)
+
+    result = CliRunner().invoke(app, ["project", "move", *[str(workspace) if a == "workspace" else a for a in arguments]])
+
+    assert result.exit_code == 1
+    assert result.stderr == "Error: Pass exactly one of WORKSPACE and --to-local.\n"
+    assert_local(repository, home, before, history)
+    assert not workspace.exists()
+
+
+def test_to_local_reports_copied_and_verified_files_and_a_clean_workspace(tmp_path, monkeypatch):
+    repository, workspace = external_project(tmp_path, monkeypatch)
+    copied = [
+        name for name in snapshot(workspace)
+        if name.startswith(("specs/", ".specify/")) and name != ".specify/workspace.json"
+    ]
+
+    result = CliRunner().invoke(app, ["project", "move", "--to-local"])
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout.endswith(
+        f"Copied {len(copied)} files from {workspace}. Verified 2 files. The workspace was not changed.\n"
+    )
+    assert git(workspace, "status", "--porcelain") == b""
+    assert project_info(repository)["storage"] == "local"
+
+
+def test_to_local_ctrl_c_rolls_back_and_exits_130(tmp_path, monkeypatch):
+    from specify_cli.project import _command_move_managed
+
+    repository, workspace = external_project(tmp_path, monkeypatch)
+    before = snapshot(repository)
+
+    def interrupt(root):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(_command_move_managed, "remove_workspace_notes", interrupt)
+    result = CliRunner().invoke(app, ["project", "move", "--to-local"])
+
+    assert result.exit_code == 130, result.output
+    assert "interrupted" in result.stderr and "The workspace was not changed." in result.stderr
+    assert snapshot(repository) == before
+    assert project_info(repository)["workspace_root"] == str(workspace)

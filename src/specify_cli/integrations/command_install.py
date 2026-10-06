@@ -5,7 +5,7 @@ import os
 
 import typer
 
-from .._console import console
+from ..terminal import console
 from ..integration_runtime import (
     invoke_prefix_for_integration as _invoke_prefix_for_integration,
     invoke_separator_for_integration as _invoke_separator_for_integration,
@@ -18,7 +18,7 @@ from ..integration_state import (
     integration_settings as _integration_settings,
 )
 from ._commands import integration_app
-from ._helpers import _cli_error_detail, _cli_phase_label, _get_speckit_version, _read_integration_json, _refresh_init_options_speckit_version, _remove_integration_json, _resolve_integration_options, _resolve_script_type, _update_init_options_for_integration, _write_integration_json
+from .helpers import _cli_error_detail, _cli_phase_label, _get_speckit_version, read_integration_json, _refresh_init_options_speckit_version, _remove_integration_json, resolve_integration_options_or_exit, _resolve_script_type, update_init_options_for_integration, save_integration_json
 
 
 @integration_app.command("install")
@@ -32,14 +32,14 @@ def integration_install(
     """Install an integration into an existing project."""
     from . import INTEGRATION_REGISTRY, get_integration
     from .manifest import IntegrationManifest
-    from .. import _require_specify_project, _install_shared_infra_or_exit
+    from .. import require_specify_project, install_shared_infra_or_exit
 
     if global_install:
         from .omp.global_commands import run_global_command
         run_global_command(key, "install")
         return
 
-    project_root = _require_specify_project()
+    project_root = require_specify_project()
     integration = get_integration(key)
     if integration is None:
         console.print(f"[red]Error:[/red] Unknown integration '{key}'")
@@ -47,14 +47,14 @@ def integration_install(
         console.print(f"Available integrations: {available}")
         raise typer.Exit(1)
 
-    current = _read_integration_json(project_root)
+    current = read_integration_json(project_root)
     default_key = _default_integration_key(current)
     installed_keys = _installed_integration_keys(current)
 
     probe = IntegrationManifest(key, project_root)
     if key in installed_keys and probe.private and not probe.checkout_manifest_path.exists():
         # Private mode: the project lists the integration, but this checkout lacks its files.
-        from .._private_checkout import attach_integrations, plan_checkout_files, refuse_tracked
+        from ..private_checkout import attach_integrations, plan_checkout_files, refuse_tracked
         version = _get_speckit_version()
         try:
             refuse_tracked(project_root, plan_checkout_files(
@@ -114,11 +114,11 @@ def integration_install(
     # Build parsed options from --integration-options so the integration
     # can determine its effective invoke separator before shared infra
     # is installed.
-    raw_options, parsed_options = _resolve_integration_options(
+    raw_options, parsed_options = resolve_integration_options_or_exit(
         integration, current, key, integration_options
     )
     if probe.private:
-        from .._private_checkout import install_integration, plan_checkout_files, refuse_tracked
+        from ..private_checkout import install_integration, plan_checkout_files, refuse_tracked
         try:
             refuse_tracked(project_root, plan_checkout_files(lambda staged: install_integration(
                 staged, integration, version=_get_speckit_version(), script_type=selected_script,
@@ -129,7 +129,7 @@ def integration_install(
             raise typer.Exit(1)
 
     # Ensure shared infrastructure is present (safe to run unconditionally;
-    # _install_shared_infra merges missing files without overwriting).
+    # install_shared_infra_for_project merges missing files without overwriting).
     infra_integration = integration
     infra_key = key
     infra_parsed = parsed_options
@@ -138,10 +138,10 @@ def integration_install(
         if default_integration is not None:
             infra_integration = default_integration
             infra_key = default_key
-            _, infra_parsed = _resolve_integration_options(
+            _, infra_parsed = resolve_integration_options_or_exit(
                 default_integration, current, default_key, None
             )
-    _install_shared_infra_or_exit(
+    install_shared_infra_or_exit(
         project_root,
         selected_script,
         invoke_separator=_invoke_separator_for_integration(
@@ -188,9 +188,9 @@ def integration_install(
             parsed_options=parsed_options,
             project_root=project_root,
         )
-        _write_integration_json(project_root, new_default, new_installed, settings)
+        save_integration_json(project_root, new_default, new_installed, settings)
         if new_default == integration.key:
-            _update_init_options_for_integration(
+            update_init_options_for_integration(
                 project_root,
                 integration,
                 script_type=selected_script,
@@ -205,8 +205,8 @@ def integration_install(
             integration.teardown(project_root, manifest, force=True)
         except Exception as rollback_err:
             # Suppress so the original setup error remains the primary failure
-            from .. import _print_cli_warning
-            _print_cli_warning(
+            from .. import print_cli_warning
+            print_cli_warning(
                 "rollback",
                 "integration",
                 key,
@@ -214,7 +214,7 @@ def integration_install(
                 continuing="The original install failure is still the primary error.",
             )
         if installed_keys:
-            _write_integration_json(
+            save_integration_json(
                 project_root, default_key, installed_keys, _integration_settings(current)
             )
         else:

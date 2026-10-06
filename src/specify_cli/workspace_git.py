@@ -26,7 +26,7 @@ class WorkspaceGitError(ValueError):
         self.committed = committed
 
 
-def _git(
+def run_git(
     directory: Path, *args: str, write: bool = False, input_text: str | None = None,
     allowed_codes: tuple[int, ...] = (0,),
 ) -> str:
@@ -76,7 +76,7 @@ def preflight_workspace_git(destination: Path) -> None:
             )
     existing = next(parent for parent in (destination, *destination.parents) if parent.exists())
     try:
-        inside = _git(existing, "rev-parse", "--absolute-git-dir")
+        inside = run_git(existing, "rev-parse", "--absolute-git-dir")
     except ValueError as exc:
         if "not a git repository" not in str(exc):
             raise ValueError(
@@ -88,7 +88,7 @@ def preflight_workspace_git(destination: Path) -> None:
     if inside:
         raise ValueError(f"Workspace destination belongs to a Git repository: {existing}. Choose a separate destination.")
     for identity in ("GIT_AUTHOR_IDENT", "GIT_COMMITTER_IDENT"):
-        _git(existing, "var", identity)
+        run_git(existing, "var", identity)
 
 
 # Anchored workspace-relative rules, emitted as `/<rule>` in .gitignore. `*` never crosses `/`.
@@ -107,6 +107,8 @@ _PRIVATE_PATTERNS = (
     ".specify/workflows/.*.failed-*/*", ".specify/workflows/.*.removing-*/*",
     ".specify/workflows/*/.workflow.yml.*.tmp", ".specify/workflows/*/.workflow.yml.*.bak",
     ".specify/.step-install.lock",
+    ".specify/naming-migration.lock", ".specify/naming-recovery-*/*",
+    "specs/.merge-specs.lock", "specs/.merge-specs-recovery-*/*",
     ".specify/workflows/steps/.speckit-step-install-*/*",
     ".specify/workflows/steps/.*.backup-*/*", ".specify/workflows/steps/.*.failed-*/*",
     ".specify/workflows/steps/.step-registry.json.*.tmp",
@@ -238,15 +240,15 @@ def initialize_workspace_git(workspace: Path) -> str:
     git_info = git_dir.stat()
     committed = False
     try:
-        _git(workspace, "init", write=True)
-        actual_root = Path(_git(workspace, "rev-parse", "--show-toplevel")).resolve()
+        run_git(workspace, "init", write=True)
+        actual_root = Path(run_git(workspace, "rev-parse", "--show-toplevel")).resolve()
         if actual_root != workspace.resolve():
             raise ValueError(f"Workspace Git worktree root differs from the owned destination: {actual_root}")
         if additions:
             ignore.write_bytes(updated)
         if ".gitignore" not in eligible:
             eligible.append(".gitignore")
-        ignored = set(_git(
+        ignored = set(run_git(
             workspace, "check-ignore", "--stdin", "-z",
             input_text="".join(name + "\0" for name in eligible), allowed_codes=(0, 1),
         ).split("\0"))
@@ -264,12 +266,12 @@ def initialize_workspace_git(workspace: Path) -> str:
             if not stat.S_ISREG(path.lstat().st_mode):
                 raise ValueError(f"Workspace file changed before staging: {path}")
         paths = "".join(name + "\0" for name in selected)
-        _git(workspace, "--literal-pathspecs", "add", "--pathspec-from-file=-", "--pathspec-file-nul",
-             write=True, input_text=paths)
-        _git(workspace, "--literal-pathspecs", "commit", "--only", "--message=Initialize Spec Kit workspace",
-             "--pathspec-from-file=-", "--pathspec-file-nul", write=True, input_text=paths)
+        run_git(workspace, "--literal-pathspecs", "add", "--pathspec-from-file=-", "--pathspec-file-nul",
+                write=True, input_text=paths)
+        run_git(workspace, "--literal-pathspecs", "commit", "--only", "--message=Initialize Spec Kit workspace",
+                "--pathspec-from-file=-", "--pathspec-file-nul", write=True, input_text=paths)
         committed = True
-        return _git(workspace, "rev-parse", "HEAD")
+        return run_git(workspace, "rev-parse", "HEAD")
     except (OSError, ValueError) as exc:
         try:
             current = git_dir.lstat()

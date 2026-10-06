@@ -596,3 +596,26 @@ def test_in_flight_step_install_transients_stay_out_of_workspace_status(tmp_path
             ".specify/workflows/steps/my-step/step.yml",
             ".specify/workflows/steps/my-step/__init__.py",
         }, status
+
+
+RECOVERY_LEFTOVERS = (
+    ".specify/naming-migration.lock", ".specify/naming-recovery-x/manifest.json",
+    "specs/.merge-specs.lock", "specs/.merge-specs-recovery-x/journal.json",
+)
+
+
+def test_recovery_leftovers_stay_out_of_workspace_history(tmp_path: Path):
+    """Invariant: rename and merge leftovers are never committed, but feature files are."""
+    root = tmp_path / "workspace"
+    for name in (*RECOVERY_LEFTOVERS, "specs/001-x/spec.md"):
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        (root / name).write_text("content")
+    initialize_workspace_git(root)
+
+    def ignored(name: str) -> int:
+        return subprocess.run(["git", "-C", str(root), "check-ignore", "-q", name]).returncode
+
+    assert [ignored(name) for name in RECOVERY_LEFTOVERS] == [0, 0, 0, 0]
+    assert ignored("specs/001-x/spec.md") == 1
+    tracked = subprocess.check_output(["git", "-C", str(root), "ls-files"], text=True).split()
+    assert "specs/001-x/spec.md" in tracked and not set(tracked) & set(RECOVERY_LEFTOVERS)

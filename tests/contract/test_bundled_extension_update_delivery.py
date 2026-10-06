@@ -109,7 +109,7 @@ def test_drifted_extensions_are_covered():
 
 @pytest.mark.parametrize("ext_id", _bundled_ids())
 def test_stale_bundled_install_is_updated_to_catalog_version(tmp_path: Path, ext_id: str):
-    from specify_cli._assets import get_speckit_version
+    from specify_cli.assets import get_speckit_version
     from specify_cli.extensions import ExtensionManager
 
     catalog_version = Version(_catalog_entries()[ext_id]["version"])
@@ -140,7 +140,7 @@ def test_stale_bundled_install_is_updated_to_catalog_version(tmp_path: Path, ext
 def test_current_bundled_install_is_up_to_date(tmp_path: Path, ext_id: str):
     """The bumped catalog must not re-offer an update to an install that
     already carries the bundled version, or every fresh install would loop."""
-    from specify_cli._assets import get_speckit_version
+    from specify_cli.assets import get_speckit_version
     from specify_cli.extensions import ExtensionManager
 
     catalog_version = _catalog_entries()[ext_id]["version"]

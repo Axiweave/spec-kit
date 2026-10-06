@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from rich.markup import escape as _escape_markup
 
-from ..._console import console
+from ...terminal import console
 from .. import BundlerError
 from .._commands import _fail, _user_config_dir
 from ..project import require_project_root

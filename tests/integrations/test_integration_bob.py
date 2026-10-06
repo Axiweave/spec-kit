@@ -402,7 +402,7 @@ class TestBobInitFlowLegacy:
 
         Behavioral guard for the dual-mode contract: with --legacy-commands,
         BobIntegration.is_skills_mode(parsed_options) returns False, so
-        _update_init_options_for_integration must not persist ai_skills=True.
+        update_init_options_for_integration must not persist ai_skills=True.
         (Regression origin: shared code previously probed a bound _skills_mode
         method object, which is always truthy, and wrongly enabled skills for
         legacy projects.)
@@ -548,8 +548,8 @@ class TestBobUseFlowPreservesLegacyLayout:
         (no stored ``legacy_commands``) must not write ``ai_skills=True``.
         """
         from specify_cli import load_init_options
-        from specify_cli.integrations._helpers import (
-            _update_init_options_for_integration,
+        from specify_cli.integrations.helpers import (
+            update_init_options_for_integration,
         )
 
         # Existing Bob 1.x project: legacy commands dir on disk, no ai_skills.
@@ -559,7 +559,7 @@ class TestBobUseFlowPreservesLegacyLayout:
         bob = get_integration("bob")
 
         # Simulate the use/switch path: no parsed options were stored.
-        _update_init_options_for_integration(tmp_path, bob, parsed_options=None)
+        update_init_options_for_integration(tmp_path, bob, parsed_options=None)
 
         opts = load_init_options(tmp_path)
         assert opts.get("ai") == "bob"
@@ -570,14 +570,14 @@ class TestBobUseFlowPreservesLegacyLayout:
     def test_update_init_options_keeps_skills_project_as_skills(self, tmp_path):
         """A ``.bob/skills`` project stays skills on re-activation."""
         from specify_cli import load_init_options
-        from specify_cli.integrations._helpers import (
-            _update_init_options_for_integration,
+        from specify_cli.integrations.helpers import (
+            update_init_options_for_integration,
         )
 
         (tmp_path / ".bob" / "skills" / "speckit-plan").mkdir(parents=True)
         bob = get_integration("bob")
 
-        _update_init_options_for_integration(tmp_path, bob, parsed_options=None)
+        update_init_options_for_integration(tmp_path, bob, parsed_options=None)
 
         opts = load_init_options(tmp_path)
         assert opts.get("ai_skills") is True
@@ -688,7 +688,7 @@ class TestBobCommandRefScopedToActiveAgent:
     def test_legacy_bob_ref_not_rewritten_when_other_agent_active_in_skills(
         self, tmp_path
     ):
-        from specify_cli._init_options import save_init_options
+        from specify_cli.init_options import save_init_options
         from specify_cli.agents import CommandRegistrar
 
         # Legacy Bob layout on disk; skills layout absent.
@@ -728,7 +728,7 @@ class TestBobCommandRefScopedToActiveAgent:
         skills path, so ``register_commands`` only ever emits command-layout
         files for Bob.
         """
-        from specify_cli._init_options import save_init_options
+        from specify_cli.init_options import save_init_options
         from specify_cli.agents import CommandRegistrar
 
         (tmp_path / ".bob" / "skills").mkdir(parents=True)
@@ -759,7 +759,7 @@ class TestBobCommandRefScopedToActiveAgent:
         Even when a ``.bob/skills/`` directory (with managed ``speckit-*``
         skills) coexists, command-layout files must keep ``/speckit.<cmd>``.
         """
-        from specify_cli._init_options import save_init_options
+        from specify_cli.init_options import save_init_options
         from specify_cli.agents import CommandRegistrar
 
         # Both layouts on disk; the active agent is something else entirely.

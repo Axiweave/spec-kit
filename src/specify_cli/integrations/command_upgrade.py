@@ -6,7 +6,7 @@ from pathlib import PurePath
 
 import typer
 
-from .._console import console
+from ..terminal import console
 from ..integration_runtime import (
     invoke_prefix_for_integration as _invoke_prefix_for_integration,
     invoke_separator_for_integration as _invoke_separator_for_integration,
@@ -22,7 +22,7 @@ from ._command_upgrade_layout import (
     _manifest_tracks_skill_layout,
 )
 from ._commands import integration_app
-from ._helpers import _MANIFEST_READ_ERRORS, _SharedTemplateRefreshError, _cli_error_detail, _cli_phase_label, _get_speckit_version, _read_integration_json, _refresh_init_options_speckit_version, _register_extensions_for_agent, _register_presets_for_agent, _resolve_integration_options, _resolve_integration_script_type, _resync_manifest_after_registration, _unregister_enabled_extension_commands_for_agent, _update_init_options_for_integration, _write_integration_json
+from .helpers import _MANIFEST_READ_ERRORS, _SharedTemplateRefreshError, _cli_error_detail, _cli_phase_label, _get_speckit_version, read_integration_json, _refresh_init_options_speckit_version, register_extensions_for_agent, register_presets_for_agent, resolve_integration_options_or_exit, _resolve_integration_script_type, _resync_manifest_after_registration, _unregister_enabled_extension_commands_for_agent, update_init_options_for_integration, save_integration_json
 
 
 @integration_app.command("upgrade")
@@ -40,15 +40,15 @@ def integration_upgrade(
     """
     from . import get_integration
     from .manifest import IntegrationManifest
-    from .. import _require_specify_project, _install_shared_infra_or_exit, _install_shared_infra
+    from .. import require_specify_project, install_shared_infra_or_exit, install_shared_infra_for_project
 
     if global_install:
         from .omp.global_commands import run_global_command
         run_global_command(key, "upgrade")
         return
 
-    project_root = _require_specify_project()
-    current = _read_integration_json(project_root)
+    project_root = require_specify_project()
+    current = read_integration_json(project_root)
     installed_key = _default_integration_key(current)
     installed_keys = _installed_integration_keys(current)
 
@@ -93,7 +93,7 @@ def integration_upgrade(
     # Build parsed options from --integration-options so the integration
     # can determine its effective invoke separator before shared infra
     # is installed.
-    raw_options, parsed_options = _resolve_integration_options(
+    raw_options, parsed_options = resolve_integration_options_or_exit(
         integration, current, key, integration_options
     )
 
@@ -203,10 +203,10 @@ def integration_upgrade(
         if default_integration is not None:
             infra_integration = default_integration
             infra_key = installed_key
-            _, infra_parsed = _resolve_integration_options(
+            _, infra_parsed = resolve_integration_options_or_exit(
                 default_integration, current, installed_key, None
             )
-    _install_shared_infra_or_exit(
+    install_shared_infra_or_exit(
         project_root,
         selected_script,
         force=force,
@@ -224,7 +224,9 @@ def integration_upgrade(
 
     # Phase 1: Install new files (overwrites existing; old-only files remain)
     console.print(f"Upgrading integration: [cyan]{key}[/cyan]")
-    new_manifest = IntegrationManifest(key, project_root, version=_get_speckit_version())
+    new_manifest = IntegrationManifest(
+        key, project_root, version=_get_speckit_version(), installed_at=old_manifest._installed_at
+    )
 
     from ..events import resolve_events
     events_map = resolve_events(
@@ -253,7 +255,7 @@ def integration_upgrade(
         )
         if installed_key == key:
             try:
-                _install_shared_infra(
+                install_shared_infra_for_project(
                     project_root,
                     selected_script,
                     invoke_separator=_invoke_separator_for_integration(
@@ -274,9 +276,9 @@ def integration_upgrade(
                 from .. import ensure_executable_scripts
                 ensure_executable_scripts(project_root)
         new_manifest.save()
-        _write_integration_json(project_root, installed_key, installed_keys, settings)
+        save_integration_json(project_root, installed_key, installed_keys, settings)
         if installed_key == key:
-            _update_init_options_for_integration(
+            update_init_options_for_integration(
                 project_root,
                 integration,
                 script_type=selected_script,
@@ -338,13 +340,13 @@ def integration_upgrade(
     # `use` or `switch` activates and rescaffolds them (#2948). This runs
     # after the core upgrade transaction, so failures remain best-effort.
     if key == installed_key:
-        _register_extensions_for_agent(
+        register_extensions_for_agent(
             project_root,
             key,
             force=True,
             continuing="The integration was upgraded, but installed extensions may need re-registration.",
         )
-        _register_presets_for_agent(
+        register_presets_for_agent(
             project_root,
             key,
             continuing="The integration was upgraded, but installed presets may need re-registration.",

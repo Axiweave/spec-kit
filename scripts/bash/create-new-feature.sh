@@ -133,13 +133,15 @@ get_highest_from_specs() {
     echo "$highest"
 }
 
-# Return success when a spec directory owns the given numeric prefix.
+# Return success when a spec directory other than the optional own name owns
+# the given numeric prefix. This is also the tie rescan after an exclusive claim.
 spec_prefix_exists() {
     local specs_dir="$1"
     local feature_num="$2"
+    local own="${3:-}"
 
     for spec_path in "$specs_dir/${feature_num}-"*; do
-        [ -d "$spec_path" ] && return 0
+        [ -d "$spec_path" ] && [ "${spec_path##*/}" != "$own" ] && return 0
     done
     return 1
 }
@@ -462,15 +464,6 @@ check_workspace_path "$WORKSPACE_ROOT" "$FEATURE_DIR" || exit 1
 check_workspace_path "$WORKSPACE_ROOT" "$SPEC_FILE" || exit 1
 
 if [ "$DRY_RUN" != true ]; then
-    if [ -d "$FEATURE_DIR" ] && [ "$ALLOW_EXISTING" != true ]; then
-        if [ "$USE_TIMESTAMP" = true ]; then
-            >&2 echo "Error: Feature directory '$FEATURE_DIR' already exists. Rerun to get a new timestamp or use a different --short-name."
-        else
-            >&2 echo "Error: Feature directory '$FEATURE_DIR' already exists. Please use a different feature name or specify a different number with --number."
-        fi
-        exit 1
-    fi
-
     NEEDS_SPEC=false
     SPEC_TEMPLATE_FOUND=false
     SPEC_TEMPLATE_CONTENT=""
@@ -487,7 +480,59 @@ if [ "$DRY_RUN" != true ]; then
         fi
     fi
 
-    mkdir -p "$FEATURE_DIR"
+    # Claim the directory exclusively before any write. An auto-numbered run
+    # loses when any other directory has its prefix, removes its own empty
+    # directory, and retries with a new prefix.
+    AUTO_NUMBERED=false
+    if { [ "$NUMBER_EXPLICIT" != true ] || [ "$USE_TIMESTAMP" = true ]; } && [ "$ALLOW_EXISTING" != true ]; then
+        AUTO_NUMBERED=true
+    fi
+    ATTEMPT=1
+    while true; do
+        if ! mkdir "$FEATURE_DIR" 2>/dev/null; then
+            if [ "$ALLOW_EXISTING" = true ] && [ -d "$FEATURE_DIR" ]; then
+                break
+            fi
+            if [ ! -e "$FEATURE_DIR" ]; then
+                >&2 echo "Error: Cannot create feature directory '$FEATURE_DIR'."
+            elif [ "$USE_TIMESTAMP" = true ]; then
+                >&2 echo "Error: Feature directory '$FEATURE_DIR' already exists. Rerun to get a new timestamp or use a different --short-name."
+            else
+                >&2 echo "Error: Feature directory '$FEATURE_DIR' already exists. Please use a different feature name or specify a different number with --number."
+            fi
+            exit 1
+        fi
+        if [ "$AUTO_NUMBERED" != true ] || ! spec_prefix_exists "$SPECS_DIR" "$FEATURE_NUM" "$BRANCH_NAME"; then
+            break
+        fi
+        rmdir "$FEATURE_DIR"
+        if [ "$ATTEMPT" -ge 20 ]; then
+            echo "ERROR: Could not reserve a feature directory after 20 tries." >&2
+            exit 1
+        fi
+        ATTEMPT=$((ATTEMPT + 1))
+        sleep "$(printf '0.%03d' $((RANDOM % 1000)))"
+        if [ "$USE_TIMESTAMP" = true ]; then
+            LOST_NUM="$FEATURE_NUM"
+            FEATURE_NUM=$(date +%Y%m%d-%H%M%S)
+            while [[ ! "$FEATURE_NUM" > "$LOST_NUM" ]]; do
+                sleep 0.1
+                FEATURE_NUM=$(date +%Y%m%d-%H%M%S)
+            done
+        else
+            HIGHEST=$(get_highest_from_specs "$SPECS_DIR")
+            if [ "$HIGHEST" -eq "$MAX_FEATURE_NUMBER" ]; then
+                echo "Error: feature number must be between 0 and $MAX_FEATURE_NUMBER, got '9223372036854775808'" >&2
+                exit 1
+            fi
+            FEATURE_NUM=$(printf "%03d" "$((HIGHEST + 1))")
+        fi
+        BRANCH_NAME=$(fit_branch_name "$FEATURE_NUM" "$BRANCH_SUFFIX")
+        FEATURE_DIR="$SPECS_DIR/$BRANCH_NAME"
+        SPEC_FILE="$FEATURE_DIR/spec.md"
+        check_workspace_path "$WORKSPACE_ROOT" "$FEATURE_DIR" || exit 1
+        check_workspace_path "$WORKSPACE_ROOT" "$SPEC_FILE" || exit 1
+    done
 
     if [ "$NEEDS_SPEC" = true ]; then
         if [ "$SPEC_TEMPLATE_FOUND" = true ]; then
@@ -506,8 +551,8 @@ if [ "$DRY_RUN" != true ]; then
     fi
 
     # Inform the user how to set feature state in their own shell
-    printf '# To persist: export SPECIFY_FEATURE=%s\n' "$(shell_quote "$BRANCH_NAME")" >&2
-    printf '#              export SPECIFY_FEATURE_DIRECTORY=%s\n' "$(shell_quote "$FEATURE_DIR")" >&2
+    printf '# To select this feature: export SPECIFY_FEATURE_DIRECTORY=%s\n' "$(shell_quote "$FEATURE_DIR")" >&2
+    printf '# Optional label:         export SPECIFY_FEATURE=%s\n' "$(shell_quote "$BRANCH_NAME")" >&2
 fi
 
 if $JSON_MODE; then
@@ -537,7 +582,7 @@ else
     echo "SPEC_FILE: $SPEC_FILE"
     echo "FEATURE_NUM: $FEATURE_NUM"
     if [ "$DRY_RUN" != true ]; then
-        printf '# To persist in your shell: export SPECIFY_FEATURE=%s\n' "$(shell_quote "$BRANCH_NAME")"
-        printf '#                           export SPECIFY_FEATURE_DIRECTORY=%s\n' "$(shell_quote "$FEATURE_DIR")"
+        printf '# To select this feature: export SPECIFY_FEATURE_DIRECTORY=%s\n' "$(shell_quote "$FEATURE_DIR")"
+        printf '# Optional label:         export SPECIFY_FEATURE=%s\n' "$(shell_quote "$BRANCH_NAME")"
     fi
 fi

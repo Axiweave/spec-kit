@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import dataclasses
 import errno
+import hashlib
 import json
 import os
 import random
@@ -134,8 +135,7 @@ def external(isolated):
     put(repo, ".specify/project.json", json.dumps({"schema_version": 1, "project_id": identity, "storage": "external"}))
     put(workspace, ".specify/workspace.json", json.dumps({"schema_version": 1, "project_id": identity}))
     record = put(
-        isolated / "home/data/specify/projects",
-        f"{identity}.json",
+        repo, ".specify/checkout.json",
         json.dumps({"schema_version": 1, "workspace": str(workspace), "active_feature": None}),
     )
     return repo, workspace, record, identity
@@ -435,6 +435,34 @@ def test_public_classifier_preserves_prefix_boundaries(naming, name, expected):
 def test_public_classifier_rejects_unusable_prefixes(naming, name):
     with pytest.raises(ValueError):
         naming.classify_feature_name(name)
+
+
+def test_duplicate_prefixes_group_features_that_share_a_scheme_and_prefix(naming, local):
+    for path in (
+        "specs/008-login",
+        "specs/0008-billing",  # the same number, written wider
+        "specs/team/008-nested",  # the helper numbers across specs/, so nesting does not split a group
+        "specs/009-unique",
+        "specs/20260101-000000-b",
+        "specs/20260101-000000-a",
+        "specs/20260101-000001-c",
+        "specs/custom",
+        "specs/other/custom",
+    ):
+        feature(local, path)
+    (local / "specs/009-no-spec").mkdir()  # not a feature: no specification
+
+    assert naming.duplicate_prefixes(local) == [
+        ["specs/0008-billing", "specs/008-login", "specs/team/008-nested"],
+        ["specs/20260101-000000-a", "specs/20260101-000000-b"],
+    ]
+
+
+def test_duplicate_prefixes_is_empty_without_shared_prefixes(naming, local):
+    assert naming.duplicate_prefixes(local) == []  # no specs/ at all
+    for path in ("specs/001-a", "specs/002-a", "specs/20260101-000000-a", "specs/a", "specs/b/a"):
+        feature(local, path)
+    assert naming.duplicate_prefixes(local) == []
 
 
 @pytest.mark.parametrize("location", ["local", "external"])
@@ -934,6 +962,7 @@ def test_two_worktrees_share_one_feature_set_and_only_one_migration_applies(nami
     repo, workspace, record, identity = external
     second = repo.parent / "second worktree"
     put(second, ".specify/project.json", (repo / ".specify/project.json").read_bytes())
+    put(second, ".specify/checkout.json", record.read_bytes())
     feature(workspace, "specs/001-a")
     feature(workspace, "specs/002-b")
 
@@ -954,6 +983,7 @@ def test_a_second_migration_is_refused_while_the_first_runs_and_the_workspace_is
     repo, workspace, record, identity = external
     second = repo.parent / "second worktree"
     put(second, ".specify/project.json", (repo / ".specify/project.json").read_bytes())
+    put(second, ".specify/checkout.json", record.read_bytes())
     feature(workspace, "specs/001-a")
     feature(workspace, "specs/002-b")
     first, other = prepare(naming, repo, "timestamp"), prepare(naming, second, "timestamp")
@@ -1045,7 +1075,7 @@ def test_lock_release_failure_reports_remaining_work_without_reversing_applied_c
         ("remove-lock", str(lock), str(lock))
     ]
     recovery = Path(result.recovery["directory"])
-    assert recovery.is_dir() and not recovery.is_relative_to(local)
+    assert recovery.parent == local.resolve() / ".specify" and recovery.name.startswith("naming-recovery-")
     assert json.loads((recovery / "manifest.json").read_text())["remaining_operations"] == [dict(row) for row in operations]
     monkeypatch.setattr(os, "unlink", real_unlink)
     os.unlink(operations[0]["from"])
@@ -1275,7 +1305,7 @@ def test_failed_restoration_retains_original_bytes_and_lists_the_remaining_renam
 
     assert result.status == "recovery_required" and result.recovery is not None
     directory = Path(result.recovery["directory"])
-    assert directory.is_absolute() and directory.is_dir() and not directory.is_relative_to(local)
+    assert directory.parent == local.resolve() / ".specify" and directory.name.startswith("naming-recovery-")
     assert stat.S_IMODE(directory.stat().st_mode) & 0o077 == 0
     operations = result.recovery["remaining_operations"]
     assert [(o["from"], o["to"]) for o in operations] == [(str(new_a), str(old_a))]
@@ -1284,6 +1314,7 @@ def test_failed_restoration_retains_original_bytes_and_lists_the_remaining_renam
     assert new_a.is_dir() and not old_a.exists()
     armed["on"] = False
     os.rename(new_a, old_a)  # performing the reported operation completes the recovery
+    shutil.rmtree(directory)
     assert tree(local) == before
 
 
@@ -1307,6 +1338,7 @@ def test_failed_restoration_retains_original_bytes_and_lists_the_remaining_copy(
     assert Path(operations[0]["from"]).read_bytes() == original
     armed["on"] = False
     shutil.copyfile(operations[0]["from"], operations[0]["to"])  # performing the reported operation
+    shutil.rmtree(directory)
     assert tree(local) == before
 
 
@@ -1544,3 +1576,53 @@ def test_lock_cleanup_preserves_a_refused_or_restored_transaction(naming, local,
         if result is not None and result.recovery is not None:
             shutil.rmtree(result.recovery["directory"])
     assert tree(local) == before
+
+
+# --- Recovery data that survives a forced stop ------------------------------------------------
+
+
+def test_rename_backup_and_lock_stay_in_the_workspace_and_name_their_owner(naming, external, monkeypatch):
+    repo, workspace, record, identity = external
+    feature(workspace, "specs/001-a", {"plan.md": "see [b](../002-b/spec.md)\n"})
+    feature(workspace, "specs/002-b")
+    put(workspace, ".specify/init-options.json", '{"feature_numbering": "sequential"}\n')
+    preview = prepare(naming, repo, "timestamp")
+    seen = {}
+    real_replace = os.replace
+
+    def replace(src, dst, *args, **kwargs):
+        if Path(dst).name == "init-options.json":  # the preference write is the last step
+            [folder] = (workspace / ".specify").glob("naming-recovery-*")
+            seen.update(
+                folder=folder,
+                lock=json.loads((workspace / ".specify/naming-migration.lock").read_text()),
+                manifest=json.loads((folder / "manifest.json").read_text()),
+                done={path.name for path in (folder / "done").iterdir()},
+            )
+        return real_replace(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(os, "replace", replace)
+    assert naming.apply_naming_migration(preview).status == "applied"
+
+    manifest = seen["manifest"]
+    assert seen["folder"].parent == workspace.resolve() / ".specify"
+    assert seen["lock"] == {"operation": "naming", "pid": os.getpid()} and manifest["pid"] == os.getpid()
+    for entry in manifest["files"]:
+        assert entry["new_sha256"] == hashlib.sha256(Path(entry["new_path"]).read_bytes()).hexdigest()
+    # Every step before the preference write ran and left its marker.
+    assert seen["done"] == {f"rename-{index}" for index in range(len(manifest["renames"]))} | {
+        f"file-{index}" for index in range(len(manifest["files"]) - 1)
+    }
+    assert not list((workspace / ".specify").glob("naming-recovery-*"))
+    assert not (workspace / ".specify/naming-migration.lock").exists()
+    assert not list(repo.rglob("naming-recovery-*"))
+
+
+def test_a_leftover_recovery_folder_is_not_part_of_the_rename_inventory(naming, local):
+    transaction_project(local)
+    clean = prepare(naming, local, "timestamp")
+    leftover = put(local, ".specify/naming-recovery-old/manifest.json", '{"pid": 1}')
+
+    assert prepare(naming, local, "timestamp") == clean
+    assert naming.apply_naming_migration(clean).status == "applied"
+    assert leftover.read_bytes() == b'{"pid": 1}'

@@ -2647,7 +2647,7 @@ class TestGenericIntegration:
     ):
         """Skills register under the persisted generic directory, never .agents/skills."""
         from specify_cli import resolve_active_skills_dir
-        from specify_cli._init_options import save_init_options
+        from specify_cli.init_options import save_init_options
 
         write_integration_json(
             tmp_path, version="1.0.0", integration_key="generic",

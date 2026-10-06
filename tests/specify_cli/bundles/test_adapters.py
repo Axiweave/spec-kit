@@ -252,7 +252,7 @@ def test_builtin_catalog_falls_back_to_snapshot_on_availability_error(
     monkeypatch, tmp_path, builtin_id, snapshot_name, expected_url
 ):
     _write_snapshot(tmp_path, snapshot_name)
-    monkeypatch.setattr(adapters, "_locate_core_pack", lambda: tmp_path)
+    monkeypatch.setattr(adapters, "locate_core_pack", lambda: tmp_path)
 
     def fail_http_get_json(source_id, url):
         raise adapters._CatalogUnavailable("repository unavailable")
@@ -271,7 +271,7 @@ def test_builtin_catalog_validation_error_is_not_masked_by_snapshot(
     monkeypatch, tmp_path, builtin_id, snapshot_name, expected_url
 ):
     _write_snapshot(tmp_path, snapshot_name)
-    monkeypatch.setattr(adapters, "_locate_core_pack", lambda: tmp_path)
+    monkeypatch.setattr(adapters, "locate_core_pack", lambda: tmp_path)
 
     def fail_http_get_json(source_id, url):
         raise BundlerError("Invalid catalog payload")
@@ -295,7 +295,7 @@ def test_builtin_catalog_uses_core_pack_snapshot_offline_quietly(
     monkeypatch, tmp_path, builtin_id, snapshot_name, expected_url
 ):
     _write_snapshot(tmp_path, snapshot_name)
-    monkeypatch.setattr(adapters, "_locate_core_pack", lambda: tmp_path)
+    monkeypatch.setattr(adapters, "locate_core_pack", lambda: tmp_path)
 
     fetcher = adapters.make_catalog_fetcher(allow_network=False)
     with warnings.catch_warnings(record=True) as caught:
@@ -315,7 +315,7 @@ def test_builtin_community_catalog_falls_back_for_transient_http_failures(
     catalog_path.write_text(
         '{"schema_version":"1.0","bundles":{}}', encoding="utf-8"
     )
-    monkeypatch.setattr(adapters, "_locate_core_pack", lambda: tmp_path)
+    monkeypatch.setattr(adapters, "locate_core_pack", lambda: tmp_path)
 
     def fail(url, timeout=10, extra_headers=None, redirect_validator=None):
         raise urllib.error.HTTPError(url, status_code, "transient", {}, None)
@@ -335,7 +335,7 @@ def test_builtin_community_catalog_falls_back_for_transport_errors(monkeypatch, 
     catalog_path.write_text(
         '{"schema_version":"1.0","bundles":{}}', encoding="utf-8"
     )
-    monkeypatch.setattr(adapters, "_locate_core_pack", lambda: tmp_path)
+    monkeypatch.setattr(adapters, "locate_core_pack", lambda: tmp_path)
 
     def fail(url, timeout=10, extra_headers=None, redirect_validator=None):
         raise urllib.error.URLError("network unreachable")
@@ -374,7 +374,7 @@ def test_builtin_community_catalog_does_not_fall_back_for_redirect_policy_errors
     catalog_path.write_text(
         '{"schema_version":"1.0","bundles":{}}', encoding="utf-8"
     )
-    monkeypatch.setattr(adapters, "_locate_core_pack", lambda: tmp_path)
+    monkeypatch.setattr(adapters, "locate_core_pack", lambda: tmp_path)
 
     def redirect_into_policy_violation(
         url, timeout=10, extra_headers=None, redirect_validator=None
@@ -411,7 +411,7 @@ def test_builtin_community_catalog_falls_back_for_incomplete_read(
     catalog_path.write_text(
         '{"schema_version":"1.0","bundles":{}}', encoding="utf-8"
     )
-    monkeypatch.setattr(adapters, "_locate_core_pack", lambda: tmp_path)
+    monkeypatch.setattr(adapters, "locate_core_pack", lambda: tmp_path)
 
     class _TruncatedResponse:
         def __enter__(self) -> Self:
@@ -461,7 +461,7 @@ def test_builtin_community_catalog_does_not_fall_back_for_cert_verification_erro
     catalog_path.write_text(
         '{"schema_version":"1.0","bundles":{}}', encoding="utf-8"
     )
-    monkeypatch.setattr(adapters, "_locate_core_pack", lambda: tmp_path)
+    monkeypatch.setattr(adapters, "locate_core_pack", lambda: tmp_path)
 
     def fail(url, timeout=10, extra_headers=None, redirect_validator=None):
         raise error

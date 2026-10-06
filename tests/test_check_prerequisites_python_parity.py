@@ -564,6 +564,40 @@ def test_python_negative_errors_are_stderr_only(
     assert py.stdout.strip() == ""
 
 
+NO_FEATURE_SELECTED = (
+    "ERROR: Feature directory not found: no feature is selected. "
+    "Set SPECIFY_FEATURE_DIRECTORY=specs/<feature> for this command. "
+    "This project uses feature_selection context, so scripts ignore the saved feature."
+)
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        pytest.param(_bash_cmd, marks=requires_bash, id="bash"),
+        pytest.param(_py_cmd, id="python"),
+        pytest.param(
+            _ps_cmd,
+            marks=pytest.mark.skipif(not (HAS_PWSH or _WINDOWS_POWERSHELL), reason="no PowerShell available"),
+            id="powershell",
+        ),
+    ],
+)
+@pytest.mark.parametrize("mode", ["context", "automatic"])
+def test_no_feature_error_names_context_mode(prereq_repo: Path, cmd, mode: str) -> None:
+    (prereq_repo / "specs" / "001-my-feature").mkdir(parents=True)
+    if mode == "context":
+        _write_feature_json(prereq_repo)  # saved, yet context mode must ignore it
+    set_feature_selection(prereq_repo, mode)
+
+    result = _run(cmd(prereq_repo, "--json"), prereq_repo)
+
+    assert result.returncode == 1
+    assert result.stdout.strip() == ""
+    assert "Feature directory not found" in result.stderr
+    assert (NO_FEATURE_SELECTED in result.stderr) == (mode == "context")
+
+
 def test_python_branch_falls_back_to_feature_dir_basename(prereq_repo: Path) -> None:
     (prereq_repo / "specs" / "001-my-feature").mkdir(parents=True)
     _write_feature_json(prereq_repo)

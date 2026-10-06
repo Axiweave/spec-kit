@@ -1,7 +1,7 @@
 """Contract tests: every bundled preset must ship inside the wheel's core_pack.
 
 ``specify preset add <id>`` resolves a bundled preset via
-``specify_cli._assets._locate_bundled_preset``, which checks the wheel's
+``specify_cli.assets._locate_bundled_preset``, which checks the wheel's
 ``specify_cli/core_pack/presets/<id>/`` directory first. Any preset marked
 ``bundled: true`` in ``presets/catalog.json`` must therefore be force-included
 at build time; otherwise the released wheel advertises a bundled preset it does

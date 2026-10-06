@@ -3,7 +3,7 @@
 PR #2892 taught the shell resolver (`get_repo_root` / `Get-RepoRoot`) to honor
 SPECIFY_INIT_DIR, so the core slash-command scripts can target a member project
 from a monorepo root. This extends the same validation rules to the Python CLI's
-project resolution — `_require_specify_project()` (the chokepoint for every
+project resolution — `require_specify_project()` (the chokepoint for every
 project-scoped subcommand) and the `workflow run <file>` standalone-YAML path —
 so those can target a member project without `cd` too.
 
@@ -49,7 +49,7 @@ def _workflow_yaml(wf_id):
     )
 
 
-# ── chokepoint: _require_specify_project() via `workflow list` ───────────────
+# ── chokepoint: require_specify_project() via `workflow list` ───────────────
 # `workflow list` is the lightest subcommand routed through the chokepoint: it
 # resolves the project, then reads <project>/.specify/workflows/. An empty
 # project prints "No workflows installed"; a failed resolution prints the error

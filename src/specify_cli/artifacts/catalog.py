@@ -80,14 +80,14 @@ def locate_shared_asset_dir(subdir: str) -> Path | None:
     if subdir not in {"commands", "scripts", "templates"}:
         return None
 
-    from .._assets import _locate_core_pack, _repo_root
+    from ..assets import locate_core_pack, source_repo_root
 
-    core_pack = _locate_core_pack()
+    core_pack = locate_core_pack()
     bundled = core_pack / subdir if core_pack is not None else None
     source = (
-        _repo_root() / "templates" / "commands"
+        source_repo_root() / "templates" / "commands"
         if subdir == "commands"
-        else _repo_root() / subdir
+        else source_repo_root() / subdir
     )
     for candidate in (bundled, source):
         if candidate is not None and candidate.is_dir():
@@ -1038,7 +1038,7 @@ class ArtifactCatalog:
 
     def _selected_core_script_paths(self) -> dict[str, Path]:
         """Return built-in scripts selected by the project's existing runtime policy."""
-        from .._init_options import load_init_options
+        from ..init_options import load_init_options
         from ..agents import CommandRegistrar
         from ..integrations.base import IntegrationBase
 

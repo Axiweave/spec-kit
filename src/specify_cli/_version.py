@@ -5,7 +5,7 @@ release tag. This module preserves the established ``specify_cli._version``
 import and monkeypatch surface while ``specify_cli.selfs`` owns the
 ``specify self`` command adapters.
 
-Dependencies: stdlib + packaging + ._console + ._download_security only
+Dependencies: stdlib + packaging + .terminal + .download_security only
 (keeping this layer thin and circular-import-safe).
 """
 from __future__ import annotations
@@ -28,8 +28,8 @@ from pathlib import Path
 
 import typer
 from packaging.version import InvalidVersion, Version
-from ._download_security import MAX_JSON_METADATA_BYTES, read_response_limited
-from ._console import console
+from .download_security import MAX_JSON_METADATA_BYTES, read_response_limited
+from .terminal import console
 
 _GITHUB_REPO = "Axiweave/spec-kit"
 _GITHUB_REPO_URL = f"https://github.com/{_GITHUB_REPO}"

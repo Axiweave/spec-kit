@@ -470,12 +470,12 @@ def test_bash_command_hint_preserves_hyphens_inside_segments(tasks_repo: Path) -
 
 @requires_bash
 def test_installed_bash_formatter_uses_dollar_prefix(tmp_path: Path) -> None:
-    from specify_cli import _install_shared_infra
+    from specify_cli import install_shared_infra_for_project
 
     project = tmp_path / "bash-dollar-prefix"
     project.mkdir()
     (project / ".specify").mkdir()
-    _install_shared_infra(
+    install_shared_infra_for_project(
         project, "sh", invoke_separator="-", invoke_prefix="$"
     )
     _write_integration_state(project, "codex", "-")
@@ -488,12 +488,12 @@ def test_installed_bash_formatter_uses_dollar_prefix(tmp_path: Path) -> None:
 
 @requires_bash
 def test_installed_bash_formatter_uses_skill_colon_prefix(tmp_path: Path) -> None:
-    from specify_cli import _install_shared_infra
+    from specify_cli import install_shared_infra_for_project
 
     project = tmp_path / "bash-skill-colon-prefix"
     project.mkdir()
     (project / ".specify").mkdir()
-    _install_shared_infra(
+    install_shared_infra_for_project(
         project, "sh", invoke_separator="-", invoke_prefix="/skill:"
     )
     _write_integration_state(project, "kimi", "-")
@@ -852,12 +852,12 @@ def test_powershell_command_hint_normalizes_mixed_separators(
 
 @pytest.mark.skipif(not (HAS_PWSH or _WINDOWS_POWERSHELL), reason="no PowerShell available")
 def test_installed_powershell_formatter_uses_dollar_prefix(tmp_path: Path) -> None:
-    from specify_cli import _install_shared_infra
+    from specify_cli import install_shared_infra_for_project
 
     project = tmp_path / "powershell-dollar-prefix"
     project.mkdir()
     (project / ".specify").mkdir()
-    _install_shared_infra(
+    install_shared_infra_for_project(
         project, "ps", invoke_separator="-", invoke_prefix="$"
     )
     _write_integration_state(project, "codex", "-")

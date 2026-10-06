@@ -98,7 +98,7 @@ def project_dir(tmp_path):
 
 def test_extension_update_corrupted_config_root(project_dir, monkeypatch):
     """Regression: extension update must handle corrupted extensions.yml (root is scalar)."""
-    # chdir into project_dir so _require_specify_project() succeeds
+    # chdir into project_dir so require_specify_project() succeeds
     monkeypatch.chdir(project_dir)
 
     # Corrupt extensions.yml

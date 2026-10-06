@@ -9,8 +9,7 @@ from specify_cli.integrations.manifest import IntegrationManifest
 
 
 @pytest.fixture
-def external_project(tmp_path, monkeypatch):
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+def external_project(tmp_path):
     repo, workspace = tmp_path / "repo", tmp_path / "workspace"
     (repo / ".specify").mkdir(parents=True)
     (workspace / ".specify").mkdir(parents=True)
@@ -21,8 +20,7 @@ def external_project(tmp_path, monkeypatch):
     (workspace / ".specify/workspace.json").write_text(json.dumps({
         "schema_version": 1, "project_id": identity,
     }), encoding="utf-8")
-    record = tmp_path / "data/specify/projects" / f"{identity}.json"
-    record.parent.mkdir(parents=True)
+    record = repo / ".specify/checkout.json"
     record.write_text(json.dumps({
         "schema_version": 1, "workspace": str(workspace), "active_feature": None,
     }), encoding="utf-8")
@@ -48,7 +46,7 @@ def test_mixed_root_manifest_round_trip_and_uninstall_preserve_edits_and_identit
     assert {line for line in (repo / ".gitignore").read_text().splitlines() if line} == {
         "/.agent/commands/speckit.plan.md",
     }
-    assert sorted(p.name for p in (repo / ".specify").iterdir()) == ["project.json"]
+    assert sorted(p.name for p in (repo / ".specify").iterdir()) == ["checkout.json", "project.json"]
 
     loaded = IntegrationManifest.load("test", repo)
     assert loaded.version == "1.2"
@@ -268,7 +266,8 @@ def private_checkouts(external_project, tmp_path):
     (workspace / ".specify/workspace.json").write_text(json.dumps({**identity, "private": True}))
     other = tmp_path / "other"
     (other / ".specify").mkdir(parents=True)
-    (other / ".specify/project.json").write_bytes((repo / ".specify/project.json").read_bytes())
+    for name in ("project.json", "checkout.json"):
+        (other / ".specify" / name).write_bytes((repo / ".specify" / name).read_bytes())
     for checkout in (repo, other):
         subprocess.run(["git", "init", "-q", str(checkout)], check=True)
     return repo, other, workspace

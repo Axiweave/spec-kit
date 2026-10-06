@@ -10,7 +10,7 @@ import re
 from pathlib import Path
 
 
-def _locate_core_pack() -> Path | None:
+def locate_core_pack() -> Path | None:
     """Return the filesystem path to the bundled core_pack directory, or None.
 
     Only present in wheel installs: hatchling's force-include copies
@@ -27,7 +27,7 @@ def _locate_core_pack() -> Path | None:
     return None
 
 
-def _repo_root() -> Path:
+def source_repo_root() -> Path:
     """Return the source checkout root used for editable installs."""
     return Path(__file__).parent.parent.parent
 
@@ -41,14 +41,14 @@ def locate_bundled_extension(extension_id: str) -> Path | None:
     if not re.match(r'^[a-z0-9-]+$', extension_id):
         return None
 
-    core = _locate_core_pack()
+    core = locate_core_pack()
     if core is not None:
         candidate = core / "extensions" / extension_id
         if (candidate / "extension.yml").is_file():
             return candidate
 
     # Source-checkout / editable install: look relative to repo root
-    candidate = _repo_root() / "extensions" / extension_id
+    candidate = source_repo_root() / "extensions" / extension_id
     if (candidate / "extension.yml").is_file():
         return candidate
 
@@ -64,14 +64,14 @@ def _locate_bundled_workflow(workflow_id: str) -> Path | None:
     if not re.match(r'^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$', workflow_id):
         return None
 
-    core = _locate_core_pack()
+    core = locate_core_pack()
     if core is not None:
         candidate = core / "workflows" / workflow_id
         if (candidate / "workflow.yml").is_file():
             return candidate
 
     # Source-checkout / editable install: look relative to repo root
-    candidate = _repo_root() / "workflows" / workflow_id
+    candidate = source_repo_root() / "workflows" / workflow_id
     if (candidate / "workflow.yml").is_file():
         return candidate
 
@@ -87,14 +87,14 @@ def _locate_bundled_preset(preset_id: str) -> Path | None:
     if not re.match(r'^[a-z0-9-]+$', preset_id):
         return None
 
-    core = _locate_core_pack()
+    core = locate_core_pack()
     if core is not None:
         candidate = core / "presets" / preset_id
         if (candidate / "preset.yml").is_file():
             return candidate
 
     # Source-checkout / editable install: look relative to repo root
-    candidate = _repo_root() / "presets" / preset_id
+    candidate = source_repo_root() / "presets" / preset_id
     if (candidate / "preset.yml").is_file():
         return candidate
 
@@ -109,7 +109,7 @@ def get_speckit_version() -> str:
         # Fallback: try reading from pyproject.toml
         try:
             import tomllib
-            pyproject_path = _repo_root() / "pyproject.toml"
+            pyproject_path = source_repo_root() / "pyproject.toml"
             if pyproject_path.exists():
                 with open(pyproject_path, "rb") as f:
                     data = tomllib.load(f)

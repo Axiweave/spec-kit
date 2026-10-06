@@ -275,7 +275,7 @@ class TestExtensionManifest:
 
         The fallback set happens to equal the real command stems today, so an
         equality check against the live tree cannot tell a working loader apart
-        from a dead one. Point ``_repo_root`` at a temp tree with *different*
+        from a dead one. Point ``source_repo_root`` at a temp tree with *different*
         command names: the old off-by-one path math read nothing and returned
         the baked-in fallback; the fixed loader returns the temp stems.
         """
@@ -293,8 +293,8 @@ class TestExtensionManifest:
             (commands / "notacommand.txt").write_text("skip me", encoding="utf-8")
 
             # No wheel bundle in this scenario; force the source-checkout path.
-            monkeypatch.setattr(ext, "_locate_core_pack", lambda: None)
-            monkeypatch.setattr(ext, "_repo_root", lambda: Path(tmp))
+            monkeypatch.setattr(ext, "locate_core_pack", lambda: None)
+            monkeypatch.setattr(ext, "source_repo_root", lambda: Path(tmp))
 
             result = _load_core_command_names()
 
@@ -313,9 +313,9 @@ class TestExtensionManifest:
             (core_pack / "commands").mkdir(parents=True)
             (core_pack / "commands" / "sprocket.md").write_text("# sprocket", encoding="utf-8")
 
-            monkeypatch.setattr(ext, "_locate_core_pack", lambda: core_pack)
+            monkeypatch.setattr(ext, "locate_core_pack", lambda: core_pack)
             # Source fallback should be ignored while the bundle resolves.
-            monkeypatch.setattr(ext, "_repo_root", lambda: Path(tmp) / "nonexistent")
+            monkeypatch.setattr(ext, "source_repo_root", lambda: Path(tmp) / "nonexistent")
 
             result = _load_core_command_names()
 
@@ -331,8 +331,8 @@ class TestExtensionManifest:
         import specify_cli.extensions as ext
 
         with tempfile.TemporaryDirectory() as tmp:
-            monkeypatch.setattr(ext, "_locate_core_pack", lambda: None)
-            monkeypatch.setattr(ext, "_repo_root", lambda: Path(tmp) / "nonexistent")
+            monkeypatch.setattr(ext, "locate_core_pack", lambda: None)
+            monkeypatch.setattr(ext, "source_repo_root", lambda: Path(tmp) / "nonexistent")
 
             assert _load_core_command_names() == _FALLBACK_CORE_COMMAND_NAMES
 
@@ -6443,7 +6443,7 @@ class TestExtensionCatalog:
     ):
         """Package bounds fail before checksum verification or disk writes."""
         from unittest.mock import patch
-        from specify_cli._download_security import (
+        from specify_cli.download_security import (
             read_response_limited as real_read_response_limited,
         )
 

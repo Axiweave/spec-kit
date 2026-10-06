@@ -21,7 +21,7 @@ from types import MappingProxyType
 from typing import Any
 from uuid import UUID, uuid4
 
-from specify_cli.workspace import find_repository, project_record_path, workspace_root_for
+from specify_cli.workspace import checkout_record_path, find_repository, workspace_root_for
 
 from .naming import classify_feature_name
 
@@ -536,9 +536,7 @@ def _resolve(selection: Mapping, role: str) -> SpecSet:
         locator = capture(repository / ".specify/project.json", repository)
         workspace = _path(workspace_root_for(repository), "workspace")
         if locator.availability != "missing":
-            identity = _object(locator).get("project_id")
-            record = project_record_path(identity)
-            capture(record, record.parent)
+            capture(checkout_record_path(repository), repository)
             capture(workspace / ".specify/workspace.json", workspace)
         root = _path(workspace / "specs", "specification root")
         if role == "destination":
@@ -1942,7 +1940,7 @@ def apply_spec_merge(preview: SpecMergePreview) -> MergeResult:
     descriptors = {}
     journal = {
         "snapshot_digest": preview.snapshot_digest, "proposal_digest": preview.proposal_digest,
-        "operations": [], "remaining_operations": [],
+        "pid": os.getpid(), "operations": [], "remaining_operations": [],
     }
     result = None
     content_started = False
@@ -1958,7 +1956,7 @@ def apply_spec_merge(preview: SpecMergePreview) -> MergeResult:
         with stream:
             lock_info = os.fstat(descriptor)
             lock_identity = (lock_info.st_dev, lock_info.st_ino)
-            stream.write(b'{"operation":"merge-specs"}\n')
+            stream.write(json.dumps({"operation": "merge-specs", "pid": os.getpid()}).encode() + b"\n")
         info = lock.lstat()
         if (info.st_dev, info.st_ino) != lock_identity:
             raise ValueError("The lock ownership changed. Preserve the current lock and inspect it.")
@@ -2099,7 +2097,11 @@ def apply_spec_merge(preview: SpecMergePreview) -> MergeResult:
                 if lock_identity is None:
                     raise ValueError("The lock identity is unverified. Preserve the lock and inspect it before cleanup.")
                 info = lock.lstat()
-                if (info.st_dev, info.st_ino) != lock_identity or not b'{"operation":"merge-specs"}\n'.startswith(lock.read_bytes()):
+                try:
+                    owner = json.loads(lock.read_bytes())
+                except ValueError:
+                    owner = None
+                if (info.st_dev, info.st_ino) != lock_identity or not isinstance(owner, dict) or owner.get("operation") != "merge-specs":
                     raise ValueError("An unexpected writer changed the lock. Preserve it before cleanup.")
                 action = "remove-lock"
                 os.unlink(lock)
@@ -2125,6 +2127,7 @@ def apply_spec_merge(preview: SpecMergePreview) -> MergeResult:
             )
         if recovery_owned and result_known and recovery.exists():
             journal["remaining_operations"] = remaining
+            journal["data_outcome"] = result.data_outcome  # recover never reverses an applied merge
             with contextlib.suppress(OSError, ValueError):
                 _journal_write(recovery, journal, recovery_identity)
     return result

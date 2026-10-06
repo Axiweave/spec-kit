@@ -102,6 +102,7 @@ class TestListArtifactsContract:
 
         assert {row.name for row in scripts} == {
             "check-prerequisites",
+            "create-new-feature",
             "resolve-template",
             "setup-plan",
             "setup-tasks",

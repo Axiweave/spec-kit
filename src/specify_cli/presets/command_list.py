@@ -5,7 +5,7 @@ from __future__ import annotations
 import typer
 from rich.markup import escape as _escape_markup
 
-from .._console import console
+from ..terminal import console
 from .._installed_list_json import (
     InstalledListJSONCommand,
     emit_json,
@@ -23,7 +23,7 @@ def preset_list(
     ),
 ):
     """List installed presets."""
-    from .. import _require_specify_project
+    from .. import require_specify_project
     from . import PresetManager
 
     if json_output:
@@ -42,7 +42,7 @@ def preset_list(
         except Exception as error:  # noqa: BLE001 - emit the JSON error contract
             emit_json_error(error)
 
-    project_root = _require_specify_project()
+    project_root = require_specify_project()
     manager = PresetManager(project_root)
     installed = manager.list_installed()
 

@@ -205,7 +205,9 @@ def test_sh_rendering_unchanged(name: str):
     content = (TEMPLATES_DIR / name).read_text(encoding="utf-8")
     result = IntegrationBase.process_template(content, "agent", "sh")
     assert "{SCRIPT}" not in result
-    assert "scripts/python" not in result
+    # Prose may name the Python helpers; only the py: invocation must stay out.
+    assert Path(_py_script(name)).name not in result
+    assert "scripts/bash/" in result
 
 
 def test_install_shared_infra_copies_python_scripts(tmp_path):

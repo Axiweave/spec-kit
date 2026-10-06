@@ -5,13 +5,13 @@ from __future__ import annotations
 import typer
 from rich.table import Table
 
-from .._console import console
+from ..terminal import console
 from ..integration_state import (
     default_integration_key as _default_integration_key,
     installed_integration_keys as _installed_integration_keys,
 )
 from ._commands import integration_app
-from ._helpers import _read_integration_json
+from .helpers import read_integration_json
 
 
 @integration_app.command("list")
@@ -20,10 +20,10 @@ def integration_list(
 ):
     """List available integrations and installed status."""
     from . import INTEGRATION_REGISTRY
-    from .. import _require_specify_project
+    from .. import require_specify_project
 
-    project_root = _require_specify_project()
-    current = _read_integration_json(project_root)
+    project_root = require_specify_project()
+    current = read_integration_json(project_root)
     default_key = _default_integration_key(current)
     installed_keys = set(_installed_integration_keys(current))
 

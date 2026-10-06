@@ -17,7 +17,7 @@ from .integration_state import (
     try_read_integration_json_with_raw,
 )
 from .integrations import INTEGRATION_REGISTRY
-from .integrations.manifest import IntegrationManifest, _manifest_path_label
+from .integrations.manifest import IntegrationManifest, manifest_path_label
 
 _MANIFEST_READ_ERRORS = (ValueError, OSError)
 _MANIFEST_KEY_RE = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -515,7 +515,7 @@ def build_integration_status_report(project_root: Path) -> dict[str, Any]:
         manifest_path = IntegrationManifest(
             key, project_root_resolved, resolve_project_root=False
         ).manifest_path
-        manifest_label = _manifest_path_label(project_root_resolved, manifest_path)
+        manifest_label = manifest_path_label(project_root_resolved, manifest_path)
         try:
             manifest = IntegrationManifest.load(
                 key,

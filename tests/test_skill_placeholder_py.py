@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from specify_cli._init_options import save_init_options
+from specify_cli.init_options import save_init_options
 from specify_cli.agents import CommandRegistrar
 
 FRONTMATTER = {
@@ -89,13 +89,13 @@ def test_missing_py_variant_falls_back_to_available_script(tmp_path, monkeypatch
 
 
 def test_py_install_includes_python_and_fallback_scripts(tmp_path, monkeypatch):
-    from specify_cli import _install_shared_infra
+    from specify_cli import install_shared_infra_for_project
 
     monkeypatch.setattr(
         "specify_cli.integrations.base.shutil.which",
         lambda name: "/usr/bin/python3" if name == "python3" else None,
     )
-    _install_shared_infra(tmp_path, "py", force=True)
+    install_shared_infra_for_project(tmp_path, "py", force=True)
 
     assert (tmp_path / ".specify/scripts/python/setup_plan.py").is_file()
     assert (tmp_path / ".specify/scripts/python/setup_tasks.py").is_file()
@@ -121,7 +121,7 @@ def test_py_install_includes_python_and_fallback_scripts(tmp_path, monkeypatch):
 def test_py_rejects_one_sided_opposite_platform_fallback(
     tmp_path, monkeypatch
 ):
-    from specify_cli import _install_shared_infra
+    from specify_cli import install_shared_infra_for_project
     from specify_cli import shared_infra
 
     class WindowsOs:
@@ -134,7 +134,7 @@ def test_py_rejects_one_sided_opposite_platform_fallback(
     monkeypatch.setattr(
         "specify_cli.integrations.base.platform.system", lambda: "Windows"
     )
-    _install_shared_infra(tmp_path, "py", force=True)
+    install_shared_infra_for_project(tmp_path, "py", force=True)
 
     save_init_options(tmp_path, {"script": "py"})
     frontmatter = {

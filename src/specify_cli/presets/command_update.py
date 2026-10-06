@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import typer
 
-from .._console import console
+from ..terminal import console
 from . import _commands
 from ._commands import preset_app
 

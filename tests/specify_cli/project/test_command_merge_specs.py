@@ -585,3 +585,86 @@ def test_created_directory_identity_failure_reports_nonzero_pending_inspection(c
     recovery = Path(outcome["recovery_directory"])
     journal = json.loads((recovery / "journal.json").read_text())
     assert journal["remaining_operations"] == outcome["remaining_operations"]
+
+
+def test_team_cycle_conflict_then_stale_apply(tmp_path, monkeypatch):
+    """FR-026 / quickstart Q7: two external workspaces of one project, one shared feature."""
+    import subprocess
+
+    from specify_cli import app
+    from specify_cli.workspace import resolve_project
+
+    for name in tuple(os.environ):
+        if name.startswith("SPECIFY_"):
+            monkeypatch.delenv(name, raising=False)
+    home = tmp_path / "home"
+    home.mkdir()
+    for name, value in {"HOME": home, "USERPROFILE": home, "XDG_CONFIG_HOME": home / ".config",
+                        "XDG_DATA_HOME": home / ".local/share"}.items():
+        monkeypatch.setenv(name, str(value))
+    run = lambda *args, input=None: CliRunner().invoke(app, list(args), input=input)  # noqa: E731
+    git = ["git", "-c", "user.name=a", "-c", "user.email=a@b", "-c", "commit.gpgsign=false"]
+    source, destination = tmp_path / "src", tmp_path / "dst"
+    subprocess.run([*git, "init", "-q", str(source)], check=True)
+    monkeypatch.chdir(source)
+    init = run(
+        "init", "--here", "--force", "--storage", "external", "--workspace", str(tmp_path / "src-ws"),
+        "--integration", "claude", "--script", "sh", "--ignore-agent-tools", "--offline", "--non-interactive",
+    )
+    assert init.exit_code == 0, init.output
+    # The second teammate clones the committed repository and specs workspace, then links them.
+    for repository in (source, tmp_path / "src-ws"):
+        subprocess.run([*git, "-C", str(repository), "add", "-A"], check=True)
+        subprocess.run([*git, "-C", str(repository), "commit", "-qm", "init", "--allow-empty"], check=True)
+    subprocess.run([*git, "clone", "-q", str(source), str(destination)], check=True)
+    subprocess.run([*git, "clone", "-q", str(tmp_path / "src-ws"), str(tmp_path / "dst-ws")], check=True)
+    monkeypatch.chdir(destination)
+    link = run("project", "link", str(tmp_path / "dst-ws"))
+    assert link.exit_code == 0, link.output
+    projects = {side: resolve_project(tmp_path / side) for side in ("src", "dst")}
+    assert projects["src"].project_id == projects["dst"].project_id
+    assert projects["dst"].workspace_root == (tmp_path / "dst-ws").resolve()
+    specs = {side: project.workspace_root / "specs" for side, project in projects.items()}
+    source_spec = put(specs["src"], "001-x/spec.md", b"# Source\n")
+    destination_spec = put(specs["dst"], "001-x/spec.md", b"# Destination\n")
+    merge = lambda *args, input=None: run("project", "merge-specs", *args, input=input)  # noqa: E731
+    flags = ("--source", str(tmp_path / "src"), "--source-kind", "repository",
+             "--destination", str(tmp_path / "dst"), "--destination-kind", "repository", "--json")
+
+    def decisions(content=None):
+        inspected = merge(*flags)
+        assert inspected.exit_code == 0, inspected.output
+        inspection = document(inspected)
+        return {
+            "selections": inspection["selections"], "snapshot_digest": inspection["snapshot_digest"],
+            "relationship": {"relationship": "same_project", "evidence": "Two workspaces of one project."},
+            "correspondences": [{"source_feature": "001-x", "destination_feature": "001-x",
+                                 "relation": "revision", "evidence": "Same feature edited in both."}],
+            "artifact_decisions": [] if content is None else [{
+                "path": "001-x/spec.md", "resolution": "replace", "mode": 0o644, "mtime_ns": 0,
+                "content": base64.b64encode(content).decode("ascii"),
+            }],
+            "dependent_features": [],
+        }
+
+    unresolved = merge("--proposal", "-", "--json", input=json.dumps(decisions()))
+    assert unresolved.exit_code == 1, unresolved.output
+    assert len(document(unresolved)["conflicts"]) == 1
+    assert "001-x/spec.md: These artifact bytes differ." in unresolved.stderr
+    assert destination_spec.read_bytes() == b"# Destination\n"
+
+    applied = merge("--apply", "--json",
+                    input=json.dumps(preview(merge, decisions(b"# Combined\n"))["replay_inputs"]))
+    assert applied.exit_code == 0, applied.output
+    assert {key: document(applied)[key] for key in ("transfer", "data_outcome")} == {
+        "transfer": "completed", "data_outcome": "applied",
+    }
+    assert destination_spec.read_bytes() == b"# Combined\n"
+
+    replay = preview(merge, decisions(b"# Combined again\n"))["replay_inputs"]
+    source_spec.write_bytes(b"# Source v2\n")
+    before = state(specs["dst"])
+    stale = merge("--apply", "--json", input=json.dumps(replay))
+    assert stale.exit_code == 1, stale.output
+    assert "The original snapshot is stale" in stale.stderr
+    assert state(specs["dst"]) == before

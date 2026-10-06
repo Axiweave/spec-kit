@@ -6,7 +6,7 @@ import os
 import typer
 from rich.markup import escape as _rich_escape
 
-from ..._console import console
+from ...terminal import console
 from . import catalog_app
 
 
@@ -14,9 +14,9 @@ from . import catalog_app
 def integration_catalog_list():
     """List configured integration catalog sources."""
     from .. import IntegrationCatalog, IntegrationCatalogError
-    from ... import _require_specify_project
+    from ... import require_specify_project
 
-    project_root = _require_specify_project()
+    project_root = require_specify_project()
     catalog = IntegrationCatalog(project_root)
     env_override = os.environ.get("SPECKIT_INTEGRATION_CATALOG_URL", "").strip()
 

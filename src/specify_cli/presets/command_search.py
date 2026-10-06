@@ -5,7 +5,7 @@ from __future__ import annotations
 import typer
 from rich.markup import escape as _escape_markup
 
-from .._console import console
+from ..terminal import console
 from ._commands import preset_app
 
 
@@ -16,10 +16,10 @@ def preset_search(
     author: str = typer.Option(None, "--author", help="Filter by author"),
 ):
     """Search for presets in the catalog."""
-    from .. import _require_specify_project
+    from .. import require_specify_project
     from . import PresetCatalog, PresetError
 
-    project_root = _require_specify_project()
+    project_root = require_specify_project()
     catalog = PresetCatalog(project_root)
 
     try:

@@ -49,8 +49,7 @@ def external_project(tmp_path, monkeypatch):
     (workspace / ".specify/workspace.json").write_text(
         json.dumps({"schema_version": 1, "project_id": PROJECT_ID}), encoding="utf-8"
     )
-    record = Path(os.environ["XDG_DATA_HOME"]) / "specify/projects" / f"{PROJECT_ID}.json"
-    record.parent.mkdir(parents=True)
+    record = repository / ".specify/checkout.json"
     record.write_text(
         json.dumps({"schema_version": 1, "workspace": str(workspace), "active_feature": None}),
         encoding="utf-8",

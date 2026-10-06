@@ -1,7 +1,7 @@
 """Contract tests: every bundled workflow must ship inside the wheel's core_pack.
 
 ``specify workflow add <id>`` (and the bundler's workflow primitive) resolve a
-bundled workflow via ``specify_cli._assets._locate_bundled_workflow``, which
+bundled workflow via ``specify_cli.assets._locate_bundled_workflow``, which
 checks the wheel's ``specify_cli/core_pack/workflows/<id>/`` directory first.
 Any workflow marked ``bundled: true`` in ``workflows/catalog.json`` must
 therefore be force-included at build time; otherwise the released wheel

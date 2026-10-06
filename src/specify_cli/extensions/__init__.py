@@ -31,8 +31,8 @@ import yaml
 from packaging import version as pkg_version
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 
-from .. import _locate_core_pack, _repo_root
-from .._download_security import (
+from .. import locate_core_pack, source_repo_root
+from ..download_security import (
     archive_format_from_name,
     archive_suffix,
     MAX_JSON_CATALOG_BYTES,
@@ -42,8 +42,8 @@ from .._download_security import (
     read_response_limited,
     safe_extract_archive,
 )
-from .._init_options import is_ai_skills_enabled
-from .._invocation_style import is_dollar_skills_agent, is_slash_skills_agent
+from ..init_options import is_ai_skills_enabled
+from ..invocation_style import is_dollar_skills_agent, is_slash_skills_agent
 from .._utils import dump_frontmatter, relative_extension_path_violation, version_satisfies
 from .._version import _GITHUB_SOURCE_URL
 from ..catalogs import CatalogEntry as BaseCatalogEntry
@@ -94,8 +94,8 @@ def _load_core_command_names() -> frozenset[str]:
     the source checkout when running from the repository. If neither is
     available, use the baked-in fallback set so validation still works.
 
-    Path resolution is delegated to the canonical ``_assets`` resolvers
-    (``_locate_core_pack`` / ``_repo_root``) — the same ones the presets and
+    Path resolution is delegated to the canonical ``assets`` resolvers
+    (``locate_core_pack`` / ``source_repo_root``) — the same ones the presets and
     bundle loaders use — rather than bespoke ``Path(__file__)`` arithmetic.
     Hand-counted ``.parent`` chains silently broke discovery once already: the
     #3014 move of this module from ``specify_cli/extensions.py`` to
@@ -105,12 +105,12 @@ def _load_core_command_names() -> frozenset[str]:
     resolvers are anchored to the package root, so discovery survives future
     module moves.
     """
-    core_pack = _locate_core_pack()
+    core_pack = locate_core_pack()
     candidate_dirs = [
         # Wheel install: force-include maps templates/commands → core_pack/commands.
         core_pack / "commands" if core_pack is not None else None,
         # Source checkout / editable install: repo-root templates/commands.
-        _repo_root() / "templates" / "commands",
+        source_repo_root() / "templates" / "commands",
     ]
 
     for commands_dir in candidate_dirs:
@@ -1493,7 +1493,7 @@ class ExtensionManager:
         """
         from .. import (
             _get_skills_dir as resolve_configured_skills_dir,
-            _print_cli_warning,
+            print_cli_warning,
             load_init_options,
             resolve_active_skills_dir,
         )
@@ -1504,7 +1504,7 @@ class ExtensionManager:
                 if not skills_dir.is_dir():
                     raise NotADirectoryError(f"{skills_dir} is not a directory")
             except (OSError, ValueError) as exc:
-                _print_cli_warning(
+                print_cli_warning(
                     "resolve",
                     "skills directory",
                     str(skills_dir),
@@ -1532,10 +1532,10 @@ class ExtensionManager:
             configured_skills_dir = resolve_configured_skills_dir(
                 self.project_root, selected_ai
             )
-            from ..shared_infra import _validate_safe_shared_directory
+            from ..shared_infra import validate_safe_shared_directory
 
             try:
-                _validate_safe_shared_directory(
+                validate_safe_shared_directory(
                     self.project_root, configured_skills_dir
                 )
             except (OSError, ValueError):
@@ -1552,7 +1552,7 @@ class ExtensionManager:
         try:
             skills_dir = resolve_active_skills_dir(self.project_root)
         except (ValueError, OSError) as exc:
-            _print_cli_warning(
+            print_cli_warning(
                 "resolve",
                 "skills directory",
                 None,
@@ -1584,7 +1584,7 @@ class ExtensionManager:
         is absent. An empty set means registration must fail closed.
         """
         from .. import load_init_options
-        from .._init_options import (
+        from ..init_options import (
             MISSING_INIT_OPTIONS_FILE,
             resolve_active_agent_for_registration,
         )
@@ -1977,7 +1977,7 @@ class ExtensionManager:
         else:
             candidate_dirs = {}
 
-        from ..shared_infra import _validate_safe_shared_directory
+        from ..shared_infra import validate_safe_shared_directory
 
         owned_dirs: List[Path] = []
         seen_dirs: set[Path] = set()
@@ -1988,7 +1988,7 @@ class ExtensionManager:
                 # appear contained within itself. Explicit configured roots can
                 # legitimately be global (for example Hermes), while fallback
                 # roots remain restricted to this project.
-                _validate_safe_shared_directory(trusted_root, skills_candidate)
+                validate_safe_shared_directory(trusted_root, skills_candidate)
             except (OSError, ValueError):
                 continue
             if not skills_candidate.is_dir():
@@ -2000,7 +2000,7 @@ class ExtensionManager:
                     continue
                 skill_subdir = skills_candidate / skill_name
                 try:
-                    _validate_safe_shared_directory(trusted_root, skill_subdir)
+                    validate_safe_shared_directory(trusted_root, skill_subdir)
                     resolved_skill_dir = skill_subdir.resolve()
                 except (OSError, ValueError):
                     continue
@@ -2095,7 +2095,7 @@ class ExtensionManager:
     ) -> Dict[str, str]:
         """Record generic-owned output by path and hash for safe later removal."""
         from ..integrations.generic import registration_directory
-        from ..shared_infra import _validate_safe_shared_directory
+        from ..shared_infra import validate_safe_shared_directory
 
         if not registered_commands.get("generic") and not registered_skills:
             return previous or {}
@@ -2108,7 +2108,7 @@ class ExtensionManager:
         hashes = dict(previous or {})
         for path in paths:
             try:
-                _validate_safe_shared_directory(root, path.parent)
+                validate_safe_shared_directory(root, path.parent)
             except (OSError, ValueError):
                 continue
             if not path.is_file():
@@ -2125,7 +2125,7 @@ class ExtensionManager:
     ) -> Dict[Path, tuple[bytes | None, str | None, bool]]:
         """Remember owned outputs and absent candidates for generic rollback."""
         from ..integrations.generic import registration_directory
-        from ..shared_infra import _validate_safe_shared_directory
+        from ..shared_infra import validate_safe_shared_directory
 
         root = self.project_root.resolve()
         output_dir = (
@@ -2161,7 +2161,7 @@ class ExtensionManager:
         snapshot: Dict[Path, tuple[bytes | None, str | None, bool]] = {}
         for path in paths:
             try:
-                _validate_safe_shared_directory(root, path.parent)
+                validate_safe_shared_directory(root, path.parent)
             except (OSError, ValueError):
                 # An unsafe candidate is not owned; do not block the other layout.
                 continue
@@ -2186,8 +2186,8 @@ class ExtensionManager:
     ) -> None:
         """Restore prior owned files and remove only outputs absent before refresh."""
         from ..shared_infra import (
-            _ensure_safe_shared_directory,
-            _validate_safe_shared_directory,
+            ensure_safe_shared_directory,
+            validate_safe_shared_directory,
         )
 
         root = self.project_root.resolve()
@@ -2195,7 +2195,7 @@ class ExtensionManager:
         errors = []
         for path, (content, link, parent_existed) in snapshot.items():
             try:
-                _validate_safe_shared_directory(root, path.parent)
+                validate_safe_shared_directory(root, path.parent)
                 if path.is_symlink():
                     if content is None or not path.resolve().is_relative_to(source):
                         raise ValueError("unexpected symlink at output path")
@@ -2216,7 +2216,7 @@ class ExtensionManager:
                         except OSError:
                             pass
                 else:
-                    _ensure_safe_shared_directory(root, path.parent)
+                    ensure_safe_shared_directory(root, path.parent)
                     if link is not None:
                         if path.is_file():
                             path.unlink()
@@ -2234,7 +2234,7 @@ class ExtensionManager:
     ) -> List[str]:
         """Keep customized or untracked generic artifacts out of cleanup."""
         from ..integrations.generic import registration_directory
-        from ..shared_infra import _validate_safe_shared_directory
+        from ..shared_infra import validate_safe_shared_directory
 
         hashes = metadata.get("generic_artifact_hashes", {})
         if not isinstance(hashes, dict):
@@ -2245,7 +2245,7 @@ class ExtensionManager:
         for name in names:
             path = output_dir / name / "SKILL.md" if skills else output_dir / f"{name}.md"
             try:
-                _validate_safe_shared_directory(root, path.parent)
+                validate_safe_shared_directory(root, path.parent)
             except (OSError, ValueError):
                 continue
             if not path.is_file():
@@ -2289,7 +2289,7 @@ class ExtensionManager:
         self, extension_id: str, metadata: Dict[str, Any], *, skills: bool = True
     ) -> None:
         """Clean recorded generic paths even after the configured directory moves."""
-        from ..shared_infra import _validate_safe_shared_directory
+        from ..shared_infra import validate_safe_shared_directory
 
         manifest = self.get_extension(extension_id)
         registered = metadata.get("registered_commands", {})
@@ -2329,7 +2329,7 @@ class ExtensionManager:
                 continue
             path = root / name
             try:
-                _validate_safe_shared_directory(root, path.parent)
+                validate_safe_shared_directory(root, path.parent)
             except (OSError, ValueError):
                 continue
             if not path.is_file():
@@ -2441,7 +2441,7 @@ class ExtensionManager:
         if not skill_names:
             return []
 
-        from ..shared_infra import _validate_safe_shared_directory
+        from ..shared_infra import validate_safe_shared_directory
 
         marker = f"extension:{extension_id}"
         owned: set = set()
@@ -2461,7 +2461,7 @@ class ExtensionManager:
             # rejecting it, letting a marker-matching SKILL.md outside the
             # project be falsely attributed.
             try:
-                _validate_safe_shared_directory(trusted_root, skills_candidate)
+                validate_safe_shared_directory(trusted_root, skills_candidate)
             except (ValueError, OSError):
                 continue
             for skill_name in skill_names:
@@ -2479,7 +2479,7 @@ class ExtensionManager:
                 # resolve()+relative_to() containment check alone would
                 # not catch (#2948).
                 try:
-                    _validate_safe_shared_directory(trusted_root, skill_subdir)
+                    validate_safe_shared_directory(trusted_root, skill_subdir)
                 except (ValueError, OSError):
                     continue
                 if not skill_subdir.is_dir():
@@ -3161,10 +3161,10 @@ class ExtensionManager:
         def _restore_custom_payload_entry(
             target: Path, content: bytes, preserved_mode: int
         ) -> None:
-            from ..shared_infra import _validate_safe_shared_directory
+            from ..shared_infra import validate_safe_shared_directory
 
             try:
-                _validate_safe_shared_directory(self.workspace_root, target.parent)
+                validate_safe_shared_directory(self.workspace_root, target.parent)
                 if target.is_symlink():
                     raise ValidationError(
                         f"Refusing to restore preserved content over symlinked "
@@ -3228,14 +3228,14 @@ class ExtensionManager:
         # until after registry.add() succeeds (see post-commit cleanup below).
 
         def rollback_generic_registration() -> None:
-            from ..shared_infra import _validate_safe_shared_directory
+            from ..shared_infra import validate_safe_shared_directory
 
             root = self.project_root.resolve()
             installed_root = dest_dir.resolve()
             for name in names:
                 path = output_dir / name / "SKILL.md" if skills else output_dir / f"{name}.md"
                 try:
-                    _validate_safe_shared_directory(root, path.parent)
+                    validate_safe_shared_directory(root, path.parent)
                 except (OSError, ValueError):
                     continue
                 if path.is_symlink():
@@ -3420,9 +3420,9 @@ class ExtensionManager:
                 try:
                     shutil.rmtree(backup_config_dir)
                 except OSError as exc:
-                    from .. import _print_cli_warning
+                    from .. import print_cli_warning
 
-                    _print_cli_warning(
+                    print_cli_warning(
                         "remove", "configuration backup", str(backup_config_dir),
                         exc, continuing="The extension was installed; the backup remains.",
                     )
@@ -4288,9 +4288,9 @@ class ExtensionManager:
                         # find those command files.
                         if agent_name == "generic":
                             raise
-                        from .. import _print_cli_warning
+                        from .. import print_cli_warning
 
-                        _print_cli_warning(
+                        print_cli_warning(
                             "register extension skills for",
                             "extension",
                             ext_id,
@@ -4477,7 +4477,7 @@ class ExtensionManager:
             except Exception as ext_err:
                 # Best-effort per extension: warn and move on so a single bad
                 # extension cannot silently drop the others. See #2950.
-                from .. import _print_cli_warning
+                from .. import print_cli_warning
 
                 if generic_snapshot is not None:
                     rollback_errors = []
@@ -4496,7 +4496,7 @@ class ExtensionManager:
                         ext_err = ExtensionError(
                             f"{ext_err}; rollback failed: {'; '.join(rollback_errors)}"
                         )
-                _print_cli_warning(
+                print_cli_warning(
                     "register extension artifacts for",
                     "extension",
                     ext_id,

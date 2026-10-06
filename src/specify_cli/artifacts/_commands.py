@@ -29,7 +29,7 @@ artifact_app = typer.Typer(
 def _resolve_project_root() -> Path:
     """Return the project root without emitting Rich output on failure.
 
-    Delegates to :func:`specify_cli._require_specify_project` — the same
+    Delegates to :func:`specify_cli.require_specify_project` — the same
     resolution chokepoint every other project-scoped subcommand (``preset``,
     ``extension``, ``workflow``, ...) uses, including its ``SPECIFY_INIT_DIR``
     override handling. That helper prints Rich error output and raises
@@ -39,11 +39,11 @@ def _resolve_project_root() -> Path:
     failure is re-raised as the module-local :class:`NotASpecKitProjectError`
     for the shared error handler to serialize instead.
     """
-    from .. import _require_specify_project  # lazy: avoids circular import
+    from .. import require_specify_project  # lazy: avoids circular import
 
     with contextlib.redirect_stderr(io.StringIO()):
         try:
-            return _require_specify_project()
+            return require_specify_project()
         except typer.Exit:
             raise NotASpecKitProjectError() from None
 

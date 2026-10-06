@@ -65,6 +65,21 @@ and review the result before continuing. These are agent skills, not terminal
 commands. Other agents and modes may use
 [different invocation syntax](https://github.github.io/spec-kit/reference/integrations.html#command-invocation).
 
+### Store specs outside the repository
+
+Spec Kit can keep specs, plans, and tasks in a separate workspace folder.
+The code repository then holds only a small locator file, `.specify/project.json`.
+Each clone or worktree links to the workspace with one command:
+
+```bash
+specify init my-project --integration copilot --workspace ~/speckit-specs/my-project
+# In another clone or worktree of the same repository:
+specify project link ~/speckit-specs/my-project
+```
+
+To share one workspace with a team through Git, see
+[Shared Workspaces](./docs/guides/shared-workspaces.md).
+
 <a id="-what-is-spec-driven-development"></a>
 <a id="sdd-quickstart"></a>
 

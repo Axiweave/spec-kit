@@ -10,7 +10,7 @@ import typer
 import yaml
 from rich.markup import escape as _escape_markup
 
-from ..._console import console, err_console
+from ...terminal import console, err_console
 from ...extensions import normalize_priority
 from .. import _commands as cli
 from . import WorkflowResolver

@@ -10,7 +10,7 @@ from unittest.mock import ANY, MagicMock
 import pytest
 import yaml
 
-from specify_cli._console import console
+from specify_cli.terminal import console
 from specify_cli.presets import (
     PresetCatalog,
     PresetCompatibilityError,
@@ -233,7 +233,7 @@ class TestPresetAdd:
             captured.update(priority=priority, catalog_name=catalog_name)
             return SimpleNamespace(name="Catalog Preset", version="1.0.0")
 
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         monkeypatch.setattr("specify_cli.get_speckit_version", lambda: "1.0.0")
         monkeypatch.setattr(
             PresetCatalog,
@@ -262,7 +262,7 @@ class TestPresetAdd:
         manifest = SimpleNamespace(name="Test Preset", version="1.0.0")
         warning = MagicMock()
         monkeypatch.setattr(
-            "specify_cli._require_specify_project", lambda: project_dir
+            "specify_cli.require_specify_project", lambda: project_dir
         )
         monkeypatch.setattr("specify_cli.get_speckit_version", lambda: "1.0.0")
         monkeypatch.setattr(
@@ -304,7 +304,7 @@ class TestPresetAdd:
             def geturl(self):
                 return "http://example.com/preset.zip"
 
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         monkeypatch.setattr("specify_cli.get_speckit_version", lambda: "0.6.0")
 
         def fake_open_url(
@@ -547,7 +547,7 @@ class TestPresetAdd:
             def geturl(self):
                 return "https:///preset.zip"
 
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         monkeypatch.setattr("specify_cli.get_speckit_version", lambda: "0.6.0")
         monkeypatch.setattr(
             "specify_cli.authentication.http.open_url",
@@ -607,7 +607,7 @@ class TestPresetAdd:
             installed["priority"] = priority
             return SimpleNamespace(name="Test Preset", version="1.0.0")
 
-        monkeypatch.setattr("specify_cli._require_specify_project", lambda: project_dir)
+        monkeypatch.setattr("specify_cli.require_specify_project", lambda: project_dir)
         monkeypatch.setattr("specify_cli.get_speckit_version", lambda: "0.6.0")
         monkeypatch.setattr(
             "specify_cli.authentication.http.open_url",
@@ -637,7 +637,7 @@ class TestPresetAdd:
         """An oversized direct download fails before preset installation."""
         import typer
 
-        from specify_cli._download_security import (
+        from specify_cli.download_security import (
             read_response_limited as real_read_response_limited,
         )
         from specify_cli.presets import _commands as preset_commands
@@ -668,7 +668,7 @@ class TestPresetAdd:
             read_with_tiny_limit,
         )
         monkeypatch.setattr(
-            "specify_cli._require_specify_project",
+            "specify_cli.require_specify_project",
             lambda: project_dir,
         )
         monkeypatch.setattr("specify_cli.get_speckit_version", lambda: "0.6.0")

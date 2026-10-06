@@ -6,7 +6,7 @@ import typer
 import yaml
 from rich.markup import escape as _escape_markup
 
-from ..._console import console
+from ...terminal import console
 from ...workspace import workspace_root_for
 from . import catalog_app
 
@@ -28,10 +28,10 @@ def preset_catalog_add(
     ),
 ):
     """Add a catalog to .specify/preset-catalogs.yml."""
-    from ... import _display_project_path, _require_specify_project
+    from ... import _display_project_path, require_specify_project
     from .. import PresetCatalog, PresetValidationError
 
-    project_root = _require_specify_project()
+    project_root = require_specify_project()
     specify_dir = workspace_root_for(project_root) / ".specify"
 
     # Validate URL

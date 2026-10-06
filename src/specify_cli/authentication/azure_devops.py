@@ -9,7 +9,7 @@ import shutil
 import subprocess
 from typing import TYPE_CHECKING
 
-from .._download_security import MAX_JSON_METADATA_BYTES, read_response_limited
+from ..download_security import MAX_JSON_METADATA_BYTES, read_response_limited
 from .base import AuthProvider
 
 if TYPE_CHECKING:

@@ -7,7 +7,7 @@ import re
 import typer
 from rich.markup import escape as _escape_markup
 
-from .._console import console
+from ..terminal import console
 from ._commands import preset_app
 
 
@@ -18,7 +18,7 @@ def preset_resolve(
     ),
 ):
     """Show which template will be resolved for a given name."""
-    from .. import _require_specify_project
+    from .. import require_specify_project
     from . import PresetResolver
 
     is_command = "." in template_name
@@ -36,7 +36,7 @@ def preset_resolve(
         )
         raise typer.Exit(1)
 
-    project_root = _require_specify_project()
+    project_root = require_specify_project()
     resolver = PresetResolver(project_root)
     template_type = "command" if is_command else "template"
 

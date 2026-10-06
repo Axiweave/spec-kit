@@ -8,7 +8,7 @@ if TYPE_CHECKING:
     from ..agents import CommandRegistrar
 
 
-from .._init_options import (
+from ..init_options import (
     MISSING_INIT_OPTIONS_FILE,
     is_ai_skills_enabled,
     load_init_options,
@@ -531,9 +531,9 @@ class _PresetCommandMethods:
                         )
                     )
             except Exception as pack_err:
-                from .. import _print_cli_warning
+                from .. import print_cli_warning
 
-                _print_cli_warning(
+                print_cli_warning(
                     "register preset artifacts for",
                     "preset",
                     pack_id,

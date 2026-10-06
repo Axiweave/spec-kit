@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import typer
 
-from .._console import console
+from ..terminal import console
 from ._commands import preset_app
 
 
@@ -13,10 +13,10 @@ def preset_remove(
     preset_id: str = typer.Argument(..., help="Preset ID to remove"),
 ):
     """Remove an installed preset."""
-    from .. import _require_specify_project
+    from .. import require_specify_project
     from . import PresetManager
 
-    project_root = _require_specify_project()
+    project_root = require_specify_project()
     manager = PresetManager(project_root)
 
     if not manager.registry.is_installed(preset_id):

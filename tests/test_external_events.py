@@ -38,7 +38,6 @@ def write_json(path, value):
 def external_project(tmp_path, monkeypatch):
     repository = tmp_path / "code repo"
     workspace = tmp_path / "editor's workspace"
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     monkeypatch.delenv("SPECIFY_INIT_DIR", raising=False)
     write_json(repository / ".specify/project.json", {
         "schema_version": 1, "project_id": PROJECT_ID, "storage": "external",
@@ -46,7 +45,7 @@ def external_project(tmp_path, monkeypatch):
     write_json(workspace / ".specify/workspace.json", {
         "schema_version": 1, "project_id": PROJECT_ID,
     })
-    record = tmp_path / "data/specify/projects" / f"{PROJECT_ID}.json"
+    record = repository / ".specify/checkout.json"
     write_json(record, {"schema_version": 1, "workspace": str(workspace), "active_feature": None})
     write_json(workspace / ".specify/init-options.json", {"script": "py"})
     monkeypatch.chdir(repository)

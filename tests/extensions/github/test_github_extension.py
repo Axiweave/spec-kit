@@ -565,7 +565,7 @@ class TestCommandBody:
         Regression: Command Code was omitted, so its users were pointed at a
         syntax their agent does not use.
         """
-        from specify_cli._invocation_style import DOLLAR_SKILLS_AGENTS
+        from specify_cli.invocation_style import DOLLAR_SKILLS_AGENTS
 
         readme = (EXT_DIR / "README.md").read_text(encoding="utf-8")
         note = next(

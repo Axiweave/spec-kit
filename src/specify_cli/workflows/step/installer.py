@@ -82,7 +82,7 @@ class StepInstallError(Exception):
 @contextlib.contextmanager
 def _step_install_transaction(project_root: Path):
     """Serialize step directory and registry mutations (install and remove)."""
-    from ...shared_infra import _exclusive_project_lock
+    from ...shared_infra import exclusive_project_lock
 
     # Only acquisition failures are reported as lock errors; exceptions raised
     # by the caller's critical section propagate unchanged. The message is
@@ -91,7 +91,7 @@ def _step_install_transaction(project_root: Path):
     with contextlib.ExitStack() as stack:
         try:
             stack.enter_context(
-                _exclusive_project_lock(
+                exclusive_project_lock(
                     Path(project_root), ".step-install.lock", context="step"
                 )
             )

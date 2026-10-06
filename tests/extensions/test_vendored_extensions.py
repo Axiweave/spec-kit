@@ -106,7 +106,7 @@ def test_provenance_note_matches_vendored_manifest(ext_id: str):
 
 
 def test_newer_community_release_does_not_replace_vendored_copy(tmp_path: Path):
-    from specify_cli._assets import get_speckit_version
+    from specify_cli.assets import get_speckit_version
 
     project = _project(tmp_path)
     ExtensionManager(project).install_from_directory(

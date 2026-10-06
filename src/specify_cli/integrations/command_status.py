@@ -7,7 +7,7 @@ from typing import Any
 import typer
 from rich.markup import escape as _rich_escape
 
-from .._console import console
+from ..terminal import console
 from ._commands import integration_app
 
 
@@ -76,10 +76,10 @@ def integration_status(
     ),
 ):
     """Report the current project's integration status without changing files."""
-    from .. import _require_specify_project
+    from .. import require_specify_project
     from ..integration_status import build_integration_status_report
 
-    project_root = _require_specify_project()
+    project_root = require_specify_project()
     report = build_integration_status_report(project_root)
 
     if json_output:

@@ -44,7 +44,7 @@ def _validate_mode_options(parsed_options: dict[str, Any] | None) -> None:
     """
     opts = parsed_options or {}
     if opts.get("skills") and opts.get("legacy_commands"):
-        from ..._console import console
+        from ...terminal import console
 
         console.print(
             "[red]Error:[/red] --skills and --legacy-commands are mutually "

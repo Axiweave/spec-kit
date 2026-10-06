@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
-from .._download_security import (
+from ..download_security import (
     archive_format_from_name,
     archive_suffix,
     build_safe_download_path,

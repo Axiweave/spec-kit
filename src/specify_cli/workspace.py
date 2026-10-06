@@ -6,7 +6,6 @@ import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from uuid import UUID
 
 
 def user_data_dir() -> Path:
@@ -61,13 +60,9 @@ def atomic_json(path: Path, data: dict, *, exclusive: bool = False) -> None:
             os.unlink(name)
 
 
-def project_record_path(project_id: str) -> Path:
-    try:
-        if str(UUID(project_id)) != project_id:
-            raise ValueError("Use a canonical UUID")
-    except (ValueError, TypeError, AttributeError) as exc:
-        raise ValueError(f"Invalid project ID: {project_id}") from exc
-    return confined(user_data_dir(), f"projects/{project_id}.json")
+def checkout_record_path(repository: Path) -> Path:
+    """Return this checkout's machine record: its workspace path and active feature."""
+    return repository / ".specify/checkout.json"
 
 
 def _version(data: dict, path: Path) -> None:
@@ -78,7 +73,7 @@ def _version(data: dict, path: Path) -> None:
 def verify_workspace(workspace: Path, project_id: str) -> Path:
     workspace = workspace.expanduser().resolve()
     if not workspace.is_dir():
-        raise ValueError(f"Workspace is unavailable: {workspace}. Use specify project link to relink it.")
+        raise ValueError(f"Workspace is unavailable: {workspace}")
     identity_path = confined(workspace, ".specify/workspace.json")
     identity = read_json(identity_path)
     _version(identity, identity_path)
@@ -141,9 +136,9 @@ def find_repository(start: Path | None = None) -> Path:
     raise ProjectNotFoundError(f"No Spec Kit project found from {current}")
 
 
-def resolve_project(start: Path | None = None) -> Project:
+def resolve_project(start: Path | None = None, *, select_feature: bool = True) -> Project:
     """Resolve both roots and this call's feature: the env override, else the saved one in automatic mode."""
-    return _load_project(find_repository(start))
+    return _load_project(find_repository(start), select_feature=select_feature)
 
 
 def workspace_root_for(repository: Path) -> Path:
@@ -178,7 +173,7 @@ def _load_project(repository: Path, *, select_feature: bool = True) -> Project:
         project_id = locator.get("project_id")
         if not isinstance(project_id, str):
             raise ValueError(f"Invalid project ID: {locator_path}")
-        record_path = project_record_path(project_id)
+        record_path = checkout_record_path(repository)
         if not record_path.is_file():
             raise ValueError(f"Missing workspace mapping for {repository}. Use specify project link PATH.")
         record = read_json(record_path)
@@ -186,7 +181,12 @@ def _load_project(repository: Path, *, select_feature: bool = True) -> Project:
         value = record.get("workspace")
         if not isinstance(value, str) or not Path(value).is_absolute():
             raise ValueError(f"Workspace must be an absolute path: {record_path}")
-        workspace = verify_workspace(Path(value), project_id)
+        try:
+            workspace = verify_workspace(Path(value), project_id)
+        except ValueError as exc:
+            raise ValueError(
+                f"{exc}. Run specify project unlink to detach this checkout, or specify project link <backup>."
+            ) from exc
         if select_feature and feature_selection_mode(workspace) == "automatic":
             saved = record.get("active_feature")
             if saved is not None and (not isinstance(saved, str) or not saved or Path(saved).is_absolute()):
@@ -211,7 +211,7 @@ def _load_project(repository: Path, *, select_feature: bool = True) -> Project:
 def save_active_feature(project: Project, feature: Path) -> None:
     if project.project_id:
         selected = confined(project.workspace_root, feature)
-        record_path = project_record_path(project.project_id)
+        record_path = checkout_record_path(project.repository_root)
         record = read_json(record_path)
         record["active_feature"] = selected.relative_to(project.workspace_root).as_posix()
         atomic_json(record_path, record)

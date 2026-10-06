@@ -18,8 +18,8 @@ import typer
 import yaml
 from rich.markup import escape as _escape_markup
 
-from .._console import console, err_console
-from .._download_security import (
+from ..terminal import console, err_console
+from ..download_security import (
     archive_format_from_content_type,
     archive_format_from_name,
     archive_suffix as archive_suffix,
@@ -723,9 +723,9 @@ def _stage_workflow_file(
 @contextlib.contextmanager
 def _workflow_install_transaction(project_root: Path):
     """Serialize workflow file swaps with their registry updates."""
-    from ..shared_infra import _exclusive_project_lock
+    from ..shared_infra import exclusive_project_lock
 
-    with _exclusive_project_lock(
+    with exclusive_project_lock(
         project_root, ".workflow-install.lock", context="workflow install"
     ):
         yield
@@ -1137,9 +1137,9 @@ def _install_workflow_package(
 
 
 # Root helper re-fetched at call time so test monkeypatching of
-# `specify_cli._require_specify_project` keeps working after the move.
+# `specify_cli.require_specify_project` keeps working after the move.
 def _require_specify_project(*args, **kwargs):
-    from .. import _require_specify_project as _f
+    from .. import require_specify_project as _f
 
     try:
         project_root = workspace_root_for(_f(*args, **kwargs))

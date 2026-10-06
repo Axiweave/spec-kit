@@ -10,7 +10,7 @@ from typing import Any
 import yaml
 from packaging import version as pkg_version
 
-from .._download_security import safe_extract_archive
+from ..download_security import safe_extract_archive
 
 
 @dataclass(frozen=True)

@@ -14,9 +14,10 @@ from uuid import uuid4
 import typer
 from rich.markup import escape as _escape_markup
 
-from .._console import console
-from .._init_options import is_ai_skills_enabled
+from ..terminal import console
+from ..init_options import is_ai_skills_enabled
 from . import _commands
+from . import install
 from ._command_update_artifacts import preflight_update_archive
 from ._command_update_discovery import discover_updates
 
@@ -902,7 +903,7 @@ def run_update_command(extension: str | None) -> None:
         # changed event declarations would otherwise leave native configs
         # stale until a manual integration upgrade.
         if updated_extensions:
-            _commands._refresh_events_and_warn(project_root)
+            install.refresh_events_and_warn(project_root)
 
     except ValidationError as e:
         console.print(f"\n[red]Validation Error:[/red] {_escape_markup(str(e))}")

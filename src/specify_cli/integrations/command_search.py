@@ -7,10 +7,10 @@ from typing import Optional
 import typer
 from rich.markup import escape as _rich_escape
 
-from .._console import console
+from ..terminal import console
 from ..integration_state import default_integration_key as _default_integration_key
 from ._commands import integration_app
-from ._helpers import _read_integration_json
+from .helpers import read_integration_json
 
 
 @integration_app.command("search")
@@ -26,10 +26,10 @@ def integration_search(
         IntegrationCatalogError,
         IntegrationValidationError,
     )
-    from .. import _require_specify_project
+    from .. import require_specify_project
 
-    project_root = _require_specify_project()
-    integration_config = _read_integration_json(project_root)
+    project_root = require_specify_project()
+    integration_config = read_integration_json(project_root)
     installed_key = _default_integration_key(integration_config)
     catalog = IntegrationCatalog(project_root)
 

@@ -72,11 +72,13 @@ An unavailable or foreign workspace produces an error instead of a repository-lo
 Run `specify project info --json` from the code repository to inspect its effective roots and active feature.
 Git and workflow shell commands keep the code repository as their working directory.
 In `context` mode, scripts use an explicit feature path for that invocation and keep saved selection unchanged.
-In `automatic` mode, external scripts use the machine-local record and local scripts use `.specify/feature.json`.
+In `automatic` mode, external scripts use the checkout record and local scripts use `.specify/feature.json`.
 In external mode, feature overrides must remain inside the selected workspace.
 
-Machine records use `$XDG_DATA_HOME/specify/projects/`, or `~/.local/share/specify/projects/` on Unix when unset.
-Windows uses the per-user local application-data directory when XDG is unset.
+Each checkout keeps its own record in `<checkout>/.specify/checkout.json`.
+The record holds the workspace path and the active feature of that checkout only.
+Linked worktrees and clones on one machine therefore keep separate selections.
+Do not copy the record to another machine. Run `specify project link` there instead.
 Create a separate workspace backup. External storage does not provide synchronization or erase earlier Git history.
 
 ### Private mode
@@ -133,7 +135,14 @@ Later commands do not commit, configure remotes, or synchronize changes.
 Use ordinary Git commands to review, commit, and share workspace changes.
 To track a later edit to an ignored generated file, use an explicit `git add -f <path>`.
 After a clone, run `specify project link <workspace>` from the matching code repository.
-Restore generated helpers and packages explicitly through their existing install or upgrade commands.
+Link restores missing agent commands, helpers, templates, and the missing files of packages bundled with the CLI.
+A bundled file comes back only when its bytes match the recorded producer hash.
+Link keeps existing and modified files and does not download.
+For each other package with missing files, link prints `Missing package files: <id>` and the repair command.
+The repair command is `specify extension add <id> --force`, `specify preset update <id>`, `specify workflow add <id>`, or `specify workflow step add <id> --force`.
+
+When link appends `/.specify/checkout.json` or another missing line to the root `.gitignore`, it prints `Updated: .gitignore. Commit it so other checkouts get the ignore line.`
+When link writes a new locator, it prints `Locator written: .specify/project.json. Commit it so teammates can link.`
 
 If the initial commit fails, setup removes only Git metadata that it owns when safe.
 Migration retains local recovery files until the initial commit succeeds.
@@ -185,6 +194,16 @@ Concurrent worktrees can use different features without changing shared selectio
 Feature creation selects the new feature, and later helpers can recover it from the saved state.
 `SPECIFY_FEATURE_NO_PERSIST=1` still prevents automatic writes.
 
+In `automatic` mode, select a feature for the current checkout:
+
+```bash
+specify project select specs/20261006-101500-login
+```
+
+The path is relative to the workspace for external storage and to the repository for local storage.
+The command refuses a path outside that root, a missing directory, and a symlink.
+In `context` mode it exits 1 and tells you to pass `SPECIFY_FEATURE_DIRECTORY` or set `feature_selection` to `automatic`.
+
 ```bash
 # Set a default for new projects
 specify config set feature_selection context
@@ -209,6 +228,16 @@ No special `feature.json` value or new selection file is required.
 
 Feature creation reads `feature_numbering` from the workspace's `.specify/init-options.json`, not from current personal defaults.
 An explicit per-feature number or timestamp choice overrides that saved mode without changing it.
+
+A new external project uses `timestamp` unless `--feature-numbering` or a personal default says otherwise.
+Timestamps keep the names of separate clones apart. A new local project keeps `sequential`.
+
+The `create-new-feature` helper reserves the feature directory with an exclusive create.
+Two parallel runs on one workspace folder never get the same directory.
+An automatic number that another run took moves to the next number, for up to 20 tries.
+An exact name that already exists fails with the "already exists" error.
+Separate clones can still create the same sequential prefix.
+`specify project info` lists such groups under `Duplicate feature prefixes:` with the rename hint.
 
 The Git extension uses this precedence:
 
@@ -259,17 +288,15 @@ An affected running workflow blocks application.
 Other worktrees retain their own native context files.
 Review caller notices for external scripts, notes, and conversations.
 
-After a handled data-transaction failure, the command restores completed changes or retains private original backups.
-If restoration or lock removal fails, the result lists the recovery directory and exact remaining operations.
-Complete those operations before another migration.
+The command keeps its lock in `<workspace>/.specify/naming-migration.lock` and its backup in `<workspace>/.specify/naming-recovery-*`.
+Both name the owner process, and the backup records the progress of each rename.
+After success, the command removes both.
 
-If lock removal fails, the report distinguishes completed application, rejection, and complete rollback.
-If application completed, preserve its changes.
-If the command rejected or completely rolled back the attempt, no migration data changes remain.
-The recovery directory can contain only lock-cleanup instructions when no original backups were needed.
-
-Stop every writer before you remove the reported lock.
-The command does not guarantee recovery after power loss or forced termination.
+If a rename stops before it finishes, run `specify project recover` from the code repository.
+It lists every leftover lock and recovery folder with its owner, and exits 1 when leftovers exist.
+`specify project recover --apply` restores the files from the backup when the owner process has stopped.
+It refuses a running owner, an owner it cannot confirm, and a file that changed after the stop.
+For an unconfirmed owner, stop every writer and then delete the lock by hand.
 
 ### Merge specification artifacts
 
@@ -465,14 +492,13 @@ Do not assume that cleanup-only recovery contains original backups.
 Continue read-only reconciliation after applied data with cleanup failure.
 Report incomplete review and blocked readiness until cleanup and a new reconciliation finish.
 
-If interruption prevents an application result, the helper retains the recovery journal and payloads.
-It does not claim automatic restoration.
-Inspect the retained resources before another merge.
+If interruption prevents an application result, the helper keeps the recovery journal and payloads.
+The lock and the journal name the owner process.
+Run `specify project recover` to list them and `specify project recover --apply` to restore the destination after the owner stops.
 
 Follow the result's exact remaining operations before another transfer or a clean readiness claim.
 Stop every writer before removing a reported lock.
-The command provides no automatic recovery guarantee after power loss or forced termination.
-There is no separate merge recovery or status command.
+The command provides no automatic recovery guarantee after power loss.
 
 ### Move an existing local project
 
@@ -504,12 +530,37 @@ Save helper edits separately before you restore managed helpers and retry.
 After staging, a refusal leaves the local project usable and retains the verified staged copy.
 Inspect that copy before retrying with an empty destination.
 Cutover failures restore local state and report recovery paths.
+Ctrl-C during the cutover also rolls back and exits 130.
 If recovery itself fails, keep both copies and the reported recovery directory.
+`specify project recover` lists a leftover `.specify-move-*` folder but does not change it.
 
 Migration refuses source symlinks and saved active features outside the repository before staging.
 Replace source symlinks with local copies before migration.
 For an outside feature, copy it into the repository and update local `.specify/feature.json` to select that copy.
 Projects that remain local retain their existing absolute feature overrides.
+
+### Return to local storage
+
+```bash
+specify project move --to-local
+```
+
+The command copies `.specify/` and `specs/` from the workspace into the code repository and verifies each copied file.
+It writes `.specify/feature.json` from the saved feature and removes the workspace note from native command files.
+It then removes the locator and the checkout record.
+It never writes to the workspace, so teammates can keep using it.
+It refuses when the repository already has `specs/` or other `.specify/` content.
+An error or Ctrl-C rolls back every change. Ctrl-C exits 130.
+
+When the workspace is lost, detach the checkout and start again with local storage:
+
+```bash
+specify project unlink
+specify init --here --storage local
+```
+
+`unlink` removes only `.specify/checkout.json` and `.specify/project.json` from this checkout. It never reads the workspace.
+When Git tracks the locator, it warns that a commit of the deletion detaches every teammate's checkout.
 
 ### Relink a workspace
 
@@ -519,13 +570,14 @@ specify project info --json
 ```
 
 Run these commands from the code repository after a clone, rename, or machine change.
-The link command verifies the workspace identity before it updates the machine-local record.
+The link command verifies the workspace identity before it updates the checkout record.
 It does not change the shared locator or read personal setup defaults.
-A new machine record has no active feature. Select a feature explicitly before a feature-dependent command.
+A new checkout record has no active feature. In `automatic` mode, link prints `Next: specify project select <feature>`.
 
-In a private-mode project, `link` also attaches a new checkout, such as a linked worktree or a second clone, that has no locator.
-It writes the locator and the machine record, and installs every integration that the workspace lists.
+`link` also attaches a new checkout that has no locator, such as a linked worktree or a second clone, in private and non-private mode.
+It takes the project ID from the workspace and writes the locator and the checkout record.
 In a checkout that already has a locator, `link` installs missing integrations, reinstalls integrations with a different version, and removes integrations that the workspace no longer lists.
+Link never changes another checkout. It keeps modified files, names each one, and prints `Repair: specify integration upgrade <key> --force`.
 
 ### Shared OMP commands
 
@@ -553,7 +605,7 @@ Other integrations do not support `--global` or `--global-commands`.
 | `SPECIFY_INIT_DIR` | Select the code repository explicitly, including from a monorepo root. Relative values resolve from cwd. The directory must contain `.specify/`. Invalid values fail without fallback. Without the override, core scripts and project CLI commands search upward from cwd. |
 | `SPECIFY_FEATURE_DIRECTORY` | Override saved feature selection. Relative paths join the workspace. External selections must stay inside that workspace. Local mode does not confine the value: a relative path such as `../shared-feature` or an absolute path can select a directory outside the project. |
 | `SPECIFY_FEATURE` | Override the reported feature label, independently of Git. This does not select a feature directory. Use `SPECIFY_FEATURE_DIRECTORY` or saved feature selection for that purpose. |
-| `SPECIFY_FEATURE_NO_PERSIST` | Set to `1` or `true` to prevent scripts from saving active-feature changes. Applies to local `.specify/feature.json` and external machine-local records. Use it for independent concurrent selections. |
+| `SPECIFY_FEATURE_NO_PERSIST` | Set to `1` or `true` to prevent scripts from saving active-feature changes. Applies to local `.specify/feature.json` and external checkout records. |
 
 > **Three resolution axes.** `SPECIFY_INIT_DIR` selects the code repository. Its storage locator selects the workspace. Explicit or saved feature selection selects the feature. Local projects use the repository as their workspace. A local feature defaults to `specs/`, but an explicit selection may live outside the project.
 >

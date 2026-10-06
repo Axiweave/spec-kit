@@ -64,7 +64,7 @@ def test_catalog_package_preserves_domain_import_compatibility():
 
 
 def test_version_lookup_remains_late_bound_through_commands_module(monkeypatch):
-    from specify_cli.integrations._helpers import _get_speckit_version
+    from specify_cli.integrations.helpers import _get_speckit_version
 
     monkeypatch.setattr(_commands, "get_speckit_version", lambda: "9.8.7-test")
 
@@ -74,14 +74,14 @@ def test_version_lookup_remains_late_bound_through_commands_module(monkeypatch):
 class TestParseIntegrationOptionsEqualsForm:
     def test_equals_form_parsed(self):
         """--commands-dir=./x should be parsed the same as --commands-dir ./x."""
-        from specify_cli.integrations._commands import _parse_integration_options
+        from specify_cli.integrations._commands import parse_integration_options_or_exit
         from specify_cli.integrations import get_integration
 
         integration = get_integration("generic")
         assert integration is not None
 
-        result_space = _parse_integration_options(integration, "--commands-dir ./mydir")
-        result_equals = _parse_integration_options(integration, "--commands-dir=./mydir")
+        result_space = parse_integration_options_or_exit(integration, "--commands-dir ./mydir")
+        result_equals = parse_integration_options_or_exit(integration, "--commands-dir=./mydir")
         assert result_space is not None
         assert result_equals is not None
         assert result_space["commands_dir"] == "./mydir"
@@ -97,14 +97,14 @@ class TestParseIntegrationOptionsEqualsForm:
         """
         import typer
 
-        from specify_cli.integrations._commands import _parse_integration_options
+        from specify_cli.integrations._commands import parse_integration_options_or_exit
         from specify_cli.integrations import get_integration
 
         integration = get_integration("generic")
         assert integration is not None
 
         with pytest.raises(typer.Exit) as excinfo:
-            _parse_integration_options(integration, '--commands-dir "foo')
+            parse_integration_options_or_exit(integration, '--commands-dir "foo')
         assert excinfo.value.exit_code == 1
         assert "Error: Could not parse integration options: No closing quotation." in capsys.readouterr().out
 
@@ -118,7 +118,7 @@ class TestParseIntegrationOptionsEqualsForm:
         instead of the intended typer.Exit(1). The token must be escaped."""
         import typer
 
-        from specify_cli.integrations._commands import _parse_integration_options
+        from specify_cli.integrations._commands import parse_integration_options_or_exit
         from specify_cli.integrations import get_integration
 
         integration = get_integration("generic")
@@ -126,11 +126,11 @@ class TestParseIntegrationOptionsEqualsForm:
 
         # Unexpected value token carrying markup.
         with pytest.raises(typer.Exit):
-            _parse_integration_options(integration, "[/red]foo")
+            parse_integration_options_or_exit(integration, "[/red]foo")
 
         # Unknown option token carrying markup.
         with pytest.raises(typer.Exit):
-            _parse_integration_options(integration, "--[/red]bad")
+            parse_integration_options_or_exit(integration, "--[/red]bad")
 
 
 @pytest.mark.parametrize(

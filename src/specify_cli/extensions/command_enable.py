@@ -8,8 +8,9 @@ from __future__ import annotations
 import typer
 from rich.markup import escape as _escape_markup
 
-from .._console import console
+from ..terminal import console
 from . import _commands
+from . import install
 
 
 @_commands.extension_app.command("enable")
@@ -55,7 +56,7 @@ def extension_enable(
             if manifest.commands:
                 manager.register_enabled_extensions_for_agent("generic")
                 refreshed = manager.registry.get(extension_id) or {}
-                from .._init_options import is_ai_skills_enabled
+                from ..init_options import is_ai_skills_enabled
 
                 skills = is_ai_skills_enabled(init_options)
                 expected = (
@@ -95,7 +96,7 @@ def extension_enable(
 
     # #1: regenerate native event config so the enabled extension's events
     # are re-emitted in installed integrations.
-    _commands._refresh_events_and_warn(project_root)
+    install.refresh_events_and_warn(project_root)
 
     # Scaffold config templates on enable
     try:

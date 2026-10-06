@@ -496,14 +496,14 @@ def test_info_versions_uses_first_resolved_catalog_snapshot(tmp_path, monkeypatc
 
 
 def test_info_versions_preserves_catalog_failure(tmp_path, monkeypatch):
-    from specify_cli.extensions import _commands
+    from specify_cli.extensions import install
 
     project = tmp_path / "project"
     (project / ".specify").mkdir(parents=True)
     monkeypatch.chdir(project)
     monkeypatch.setattr(
-        _commands,
-        "_resolve_catalog_extension",
+        install,
+        "resolve_catalog_extension",
         lambda *_args: (None, ExtensionError("catalog fetch failed")),
     )
 
@@ -563,7 +563,7 @@ def test_exact_cli_install_refuses_discovery_only_catalog(tmp_path, monkeypatch)
 def test_exact_cli_does_not_bypass_discovery_policy_via_bundled_copy(
     tmp_path, monkeypatch
 ):
-    from specify_cli._assets import locate_bundled_extension
+    from specify_cli.assets import locate_bundled_extension
 
     bundled = locate_bundled_extension("agent-context")
     assert bundled is not None
@@ -596,7 +596,7 @@ def test_exact_cli_does_not_bypass_discovery_policy_via_bundled_copy(
 def test_exact_cli_bundled_version_must_match_packaged_manifest(
     tmp_path, monkeypatch, version_case
 ):
-    from specify_cli._assets import locate_bundled_extension
+    from specify_cli.assets import locate_bundled_extension
 
     bundled = locate_bundled_extension("agent-context")
     assert bundled is not None

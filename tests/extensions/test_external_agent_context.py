@@ -67,7 +67,7 @@ def project(tmp_path, variant, request):
     write_json(workspace / ".specify/workspace.json", {
         "schema_version": 1, "project_id": project_id,
     })
-    record = tmp_path / "data/specify/projects" / f"{project_id}.json"
+    record = repo / ".specify/checkout.json"
     write_json(record, {
         "schema_version": 1, "workspace": str(workspace.resolve()),
         "active_feature": "specs/007-selected",

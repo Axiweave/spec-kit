@@ -3,6 +3,8 @@
 import re
 from pathlib import Path
 
+import yaml
+
 REPO_ROOT = Path(__file__).parent.parent
 SPECIFY_TEMPLATE = REPO_ROOT / "templates" / "commands" / "specify.md"
 MAIN_LIST_START = "Given that feature description, do this:"
@@ -37,3 +39,18 @@ def test_main_execution_list_is_sequential():
 
     assert ordinals, "Could not find the main execution list in specify.md"
     assert ordinals == list(range(1, 9))
+
+
+def test_specify_creates_features_through_the_helper_script():
+    """The agent path runs the create helper instead of a racy manual mkdir."""
+    text = SPECIFY_TEMPLATE.read_text(encoding="utf-8")
+    _, front_matter, body = text.split("---\n", 2)
+    scripts = yaml.safe_load(front_matter)["scripts"]
+
+    assert scripts == {
+        "sh": "scripts/bash/create-new-feature.sh --json",
+        "ps": "scripts/powershell/create-new-feature.ps1 -Json",
+        "py": "scripts/python/create_new_feature.py --json",
+    }
+    assert "{SCRIPT}" in body
+    assert "mkdir -p" not in text

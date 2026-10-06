@@ -9,6 +9,7 @@ import typer
 from rich.markup import escape as _escape_markup
 
 from . import _commands
+from . import install
 
 
 @_commands.extension_app.command("info")
@@ -34,7 +35,7 @@ def extension_info(
     # If we resolved an installed extension by display name, use its ID for catalog lookup
     # to ensure we get the correct catalog entry (not a different extension with same name)
     lookup_key = resolved_installed_id if resolved_installed_id else extension
-    ext_info, catalog_error = _commands._resolve_catalog_extension(
+    ext_info, catalog_error = install.resolve_catalog_extension(
         lookup_key, catalog, "info"
     )
     # Direct compatibility callers receive Typer's OptionInfo default rather

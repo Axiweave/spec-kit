@@ -326,7 +326,9 @@ A no-operation application creates no temporary resources and changes no artifac
 - On stale input, unresolved conflict, unsafe path, or occupied resources, report `refused` and request new inspection/approval.
 - Do not claim a refusal changed data or created original backups.
 - Existing `.merge-specs.lock` or `.merge-specs-recovery-*` entries block transfer and naming migration.
-- Do not remove existing resources merely because their names match this namespace.
+- Do not remove existing resources by hand merely because their names match this namespace.
+- Tell the user to run `specify project recover` to list leftover locks and recovery folders, with each owner process state.
+- `specify project recover --apply` restores and removes only the leftovers whose owner process stopped.
 - Do not choose replacement resources after approval.
 - On complete restoration after handled failure, report transfer `failed`, data `completely restored`, and review `not performed`.
 - On incomplete restoration, report transfer `failed`, data `recovery required`, and review `incomplete review`.
@@ -345,7 +347,7 @@ A no-operation application creates no temporary resources and changes no artifac
 Recovery uses `journal.json`, indexed `originals/000000.bin`, and indexed `staged/000000.bin` beneath the disclosed directory.
 Recovery resources are not feature directories, transferred artifacts, executable instructions, or permanent reports.
 The helper's restoration guarantee covers handled failures only.
-Do not promise automatic recovery after power loss or forced termination.
+After a forced stop or a Ctrl-C during application, the journal stays behind: point the user to `specify project recover`.
 
 **Complete only when:**
 

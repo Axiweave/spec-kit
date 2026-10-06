@@ -10,8 +10,8 @@ if TYPE_CHECKING:
     from ..agents import CommandRegistrar
 
 
-from .._init_options import is_ai_skills_enabled
-from .._invocation_style import get_invocation_prefix
+from ..init_options import is_ai_skills_enabled
+from ..invocation_style import get_invocation_prefix
 from .._utils import dump_frontmatter
 from ..integrations.base import IntegrationBase
 from ._manager_commands import _substitute_core_template
@@ -242,7 +242,7 @@ class _PresetSkillMethods:
                 try:
                     from .. import SKILL_DESCRIPTIONS
                     from ..agents import CommandRegistrar
-                    from ..shared_infra import _write_shared_text
+                    from ..shared_infra import write_shared_text
                     registrar = CommandRegistrar()
                     content = top_layer["path"].read_text(encoding="utf-8")
                     fm, body = registrar.parse_frontmatter(content)
@@ -298,7 +298,7 @@ class _PresetSkillMethods:
                                     skill_content
                                 )
                             )
-                        _write_shared_text(
+                        write_shared_text(
                             skills_dir,
                             skill_subdir / "SKILL.md",
                             skill_content,
@@ -451,18 +451,18 @@ class _PresetSkillMethods:
         that callers can fall back gracefully.
         """
         from .. import (
-            _print_cli_warning,
+            print_cli_warning,
             load_init_options,
             resolve_active_skills_dir,
         )
-        from ..shared_infra import _ensure_safe_shared_directory
+        from ..shared_infra import ensure_safe_shared_directory
         opts = load_init_options(self.project_root)
         if isinstance(opts, dict) and opts.get("ai") == "generic":
             return None
         try:
             skills_dir = resolve_active_skills_dir(self.project_root)
         except (ValueError, OSError) as exc:
-            _print_cli_warning(
+            print_cli_warning(
                 "resolve", "skills directory", None, exc,
                 continuing="Continuing without skill registration.",
             )
@@ -480,7 +480,7 @@ class _PresetSkillMethods:
 
         validation_root = self._skills_validation_root(agent_skills_dir)
         if validation_root is None:
-            _print_cli_warning(
+            print_cli_warning(
                 "resolve",
                 "skills directory",
                 str(agent_skills_dir),
@@ -489,13 +489,13 @@ class _PresetSkillMethods:
             )
             return None
         try:
-            _ensure_safe_shared_directory(
+            ensure_safe_shared_directory(
                 validation_root,
                 agent_skills_dir,
                 context="preset skills directory",
             )
         except (ValueError, OSError) as exc:
-            _print_cli_warning(
+            print_cli_warning(
                 "resolve", "skills directory", str(agent_skills_dir), exc,
                 continuing="Continuing without skill registration.",
             )
@@ -677,7 +677,7 @@ class _PresetSkillMethods:
         from .. import SKILL_DESCRIPTIONS, load_init_options
         from ..agents import CommandRegistrar
         from ..integrations import get_integration
-        from ..shared_infra import _write_shared_text
+        from ..shared_infra import write_shared_text
 
         init_opts = load_init_options(self.project_root)
         if not isinstance(init_opts, dict):
@@ -822,7 +822,7 @@ class _PresetSkillMethods:
                     )
 
                 skill_file = skill_subdir / "SKILL.md"
-                _write_shared_text(
+                write_shared_text(
                     skills_dir, skill_file, skill_content
                 )
                 written.append(target_skill_name)
@@ -994,7 +994,7 @@ class _PresetSkillMethods:
         skipped rather than raising.
         """
         from ..agents import CommandRegistrar
-        from ..shared_infra import _ensure_safe_shared_directory
+        from ..shared_infra import ensure_safe_shared_directory
 
         if agent_name not in CommandRegistrar.AGENT_CONFIGS:
             return None
@@ -1003,7 +1003,7 @@ class _PresetSkillMethods:
         if validation_root is None:
             return None
         try:
-            _ensure_safe_shared_directory(
+            ensure_safe_shared_directory(
                 validation_root, skills_dir,
                 create=False, context="preset skills directory",
             )
@@ -1065,8 +1065,8 @@ class _PresetSkillMethods:
         Hermes; project-local callers default to ``self.project_root``.
         """
         from ..shared_infra import (
-            _ensure_safe_shared_directory,
-            _validate_safe_shared_directory,
+            ensure_safe_shared_directory,
+            validate_safe_shared_directory,
         )
 
         validation_root = skills_root or self.project_root
@@ -1074,12 +1074,12 @@ class _PresetSkillMethods:
             return False
         try:
             if create:
-                _ensure_safe_shared_directory(
+                ensure_safe_shared_directory(
                     validation_root, skill_subdir,
                     create=True, context="preset skill directory",
                 )
             else:
-                _validate_safe_shared_directory(
+                validate_safe_shared_directory(
                     validation_root, skill_subdir
                 )
         except (ValueError, OSError):
@@ -1334,7 +1334,7 @@ class _PresetSkillMethods:
         from .. import SKILL_DESCRIPTIONS
         from ..agents import CommandRegistrar
         from ..integrations import get_integration
-        from ..shared_infra import _write_shared_text
+        from ..shared_infra import write_shared_text
 
         # Locate core command templates from the project's installed templates
         core_templates_dir = self.workspace_root / ".specify" / "templates" / "commands"
@@ -1422,13 +1422,13 @@ class _PresetSkillMethods:
                 and restore_from_bundled_core
                 and extension_restore is None
             ):
-                from .. import _locate_core_pack, _repo_root
+                from .. import locate_core_pack, source_repo_root
 
-                _core_pack = _locate_core_pack()
+                _core_pack = locate_core_pack()
                 if _core_pack is not None:
                     core_file = _core_pack / "commands" / f"{short_name}.md"
                 else:
-                    core_file = _repo_root() / "templates" / "commands" / f"{short_name}.md"
+                    core_file = source_repo_root() / "templates" / "commands" / f"{short_name}.md"
             if not core_file.exists():
                 core_file = None
 
@@ -1483,7 +1483,7 @@ class _PresetSkillMethods:
                     skill_content = integration.post_process_skill_content(
                         skill_content
                     )
-                _write_shared_text(skills_dir, skill_file, skill_content)
+                write_shared_text(skills_dir, skill_file, skill_content)
                 mutated_names.append(skill_name)
                 continue
 
@@ -1542,7 +1542,7 @@ class _PresetSkillMethods:
                     skill_content = integration.post_process_skill_content(
                         skill_content
                     )
-                _write_shared_text(skills_dir, skill_file, skill_content)
+                write_shared_text(skills_dir, skill_file, skill_content)
                 mutated_names.append(skill_name)
             else:
                 # No core or extension template — remove the skill entirely

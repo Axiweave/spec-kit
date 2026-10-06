@@ -6,7 +6,8 @@ from contextlib import contextmanager, suppress
 from pathlib import Path
 from uuid import uuid4
 
-from .workspace import Project, _load_project, atomic_json, project_record_path, read_json
+from .integrations.manifest import append_gitignore
+from .workspace import Project, _load_project, atomic_json, checkout_record_path, read_json
 
 
 def _validate_directory(path: Path) -> None:
@@ -35,9 +36,9 @@ def select_storage(
     if locator.exists() or locator.is_symlink():
         project = _load_project(repository, select_feature=False)
         if storage == "local":
-            raise ValueError("This project uses external storage. Use specify project move to change storage.")
+            raise ValueError("This project uses external storage. Use specify project move --to-local to change storage.")
         if workspace is not None and workspace.expanduser().resolve() != project.workspace_root:
-            raise ValueError("--workspace cannot replace an existing project workspace. Use specify project link or move.")
+            raise ValueError("--workspace cannot replace an existing project workspace. Use specify project link PATH to relink it.")
         if repository.is_relative_to(project.workspace_root) or project.workspace_root.is_relative_to(repository):
             raise ValueError(f"Workspace must not overlap the repository: {project.workspace_root}")
         _validate_directory(project.workspace_root / ".specify")
@@ -48,7 +49,7 @@ def select_storage(
     if workspace is None and storage != "external":
         return Project(repository, repository, None, None)
     if metadata.is_symlink() or (metadata.exists() and (not metadata.is_dir() or any(metadata.iterdir()))):
-        raise ValueError("The repository has local Spec Kit assets. Use specify project move instead of init.")
+        raise ValueError("The repository has local Spec Kit assets. Use specify project move WORKSPACE instead of init.")
     project_id = str(uuid4())
     if workspace is None:
         root = storage_root.expanduser() if storage_root is not None else Path.home() / "speckit-specs"
@@ -64,7 +65,6 @@ def select_storage(
         raise ValueError(f"Workspace must not overlap the repository: {workspace}")
     if workspace.exists() and any(workspace.iterdir()):
         raise ValueError(f"Workspace is occupied. Choose an empty directory: {workspace}")
-    _validate_directory(project_record_path(project_id).parent)
     return Project(repository, workspace, project_id, None)
 
 
@@ -85,7 +85,7 @@ def claim_storage(project: Project, *, private: bool = False) -> Iterator[None]:
     _validate_directory(locator.parent)
     if workspace.exists() and any(workspace.iterdir()):
         raise ValueError(f"Workspace is occupied. Choose an empty directory: {workspace}")
-    record = project_record_path(project.project_id)
+    record = checkout_record_path(project.repository_root)
     claimed: list[tuple[Path, dict]] = []
     directories: list[Path] = []
     try:
@@ -113,6 +113,8 @@ def claim_storage(project: Project, *, private: bool = False) -> Iterator[None]:
         ):
             atomic_json(path, data, exclusive=True)
             claimed.append((path, data))
+        if not private:
+            append_gitignore(project.repository_root, ".specify/checkout.json")
         yield
     except BaseException as exc:
         # A caller that already made history durable (see WorkspaceGitError.committed)

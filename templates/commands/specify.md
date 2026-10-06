@@ -8,6 +8,10 @@ handoffs:
     agent: speckit.clarify
     prompt: Clarify specification requirements
     send: true
+scripts:
+  sh: scripts/bash/create-new-feature.sh --json
+  ps: scripts/powershell/create-new-feature.ps1 -Json
+  py: scripts/python/create_new_feature.py --json
 ---
 
 ## User Input
@@ -81,22 +85,12 @@ Given that feature description, do this:
 
    Specs live under the workspace's `specs/` directory unless the user explicitly provides `SPECIFY_FEATURE_DIRECTORY`.
 
-   **Resolution order for `SPECIFY_FEATURE_DIRECTORY`**:
-   1. Resolve an explicit `SPECIFY_FEATURE_DIRECTORY` against the workspace. Preserve absolute local-mode overrides. External overrides must stay inside the workspace.
-   2. Otherwise, auto-generate it under `specs/`:
-      - An explicit per-feature number or timestamp choice overrides the saved project mode. If both are explicit, use the timestamp choice.
-      - Otherwise, read `feature_numbering` from the workspace's `.specify/init-options.json`.
-      - If `"timestamp"`: prefix is `YYYYMMDD-HHMMSS` (current timestamp).
-      - If `"sequential"` or absent: prefix is `NNN`, the next number from existing feature directories. Ignore timestamp-prefixed directories.
-      - If another value is present, stop and report an invalid project numbering mode.
-      - Construct the directory name: `<prefix>-<short-name>` (e.g., `003-user-auth` or `20260319-143022-user-auth`)
-      - Set `SPECIFY_FEATURE_DIRECTORY` to `specs/<directory-name>`
-
-   **Create the directory and spec file**:
+   **If the user explicitly provided `SPECIFY_FEATURE_DIRECTORY`** (the only manual path):
+   - Resolve it against the workspace. Preserve absolute local-mode overrides. External overrides must stay inside the workspace.
    - Validate the feature path through the installed common helper listed below before writing files.
      For that invocation only, set `SPECIFY_FEATURE_NO_PERSIST=1`.
      Use the helper's resolved feature path. Stop if workspace or path validation fails.
-   - `mkdir -p SPECIFY_FEATURE_DIRECTORY`
+   - Create the `SPECIFY_FEATURE_DIRECTORY` directory if it does not exist
    - Resolve the active `spec-template` through the Spec Kit preset/template resolution stack (equivalent to `specify preset resolve spec-template`)
    - Copy the resolved `spec-template` file to `SPECIFY_FEATURE_DIRECTORY/spec.md` as the starting point
    - Set `SPEC_FILE` to `SPECIFY_FEATURE_DIRECTORY/spec.md`
@@ -112,6 +106,14 @@ Given that feature description, do this:
      - Python: load the workspace's `.specify/scripts/python/common.py`, then call `get_feature_paths()`.
      If persistence is enabled, verify `specify project info --json` reports the new feature.
      Otherwise, verify the saved feature selection remains unchanged.
+
+   **Otherwise, create the feature with the helper script**:
+   - Run `{SCRIPT}` once from the code repository root. Add the short name from step 1 and the feature description: `--short-name <name> "<description>"` (PowerShell: `-ShortName <name> "<description>"`).
+   - Add `--timestamp` (PowerShell: `-Timestamp`) or `--number N` (PowerShell: `-Number N`) only when the user asked for one. Do not compute a number yourself.
+   - For single quotes in args like "I'm Groot", use escape syntax: e.g 'I'\''m Groot' (or double-quote if possible: "I'm Groot").
+   - Parse `SPEC_FILE` and `FEATURE_NUM` from the JSON output. Set `SPECIFY_FEATURE_DIRECTORY` to the directory that contains `SPEC_FILE`.
+   - The helper picks the prefix from the project numbering mode, reserves the directory, copies the resolved `spec-template`, and applies the `feature_selection` rule. In `context` mode, carry the new feature path in conversation context for the next command.
+   - If the helper fails, stop and report its error. Do not create the directory yourself.
 
    **IMPORTANT**:
    - You must only create one feature per `__SPECKIT_COMMAND_SPECIFY__` invocation

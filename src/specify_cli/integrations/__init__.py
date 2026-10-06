@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 import yaml
 from packaging import version as pkg_version
 
-from .._download_security import MAX_JSON_METADATA_BYTES, read_response_limited
+from ..download_security import MAX_JSON_METADATA_BYTES, read_response_limited
 from ..catalogs import CatalogEntry, CatalogStackBase
 from ..workspace import workspace_root_for
 

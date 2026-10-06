@@ -201,7 +201,7 @@ def test_forge_extension_info_hyphenates_command_names(
 
     from rich.console import Console
 
-    from specify_cli.extensions import _commands
+    from specify_cli.extensions import _commands, install
 
     init_options = project_dir / ".specify" / "init-options.json"
     init_options.write_text(json.dumps({"ai": "forge", "script": "sh"}))
@@ -215,7 +215,7 @@ def test_forge_extension_info_hyphenates_command_names(
     # the local manifest's Commands section) and avoid any network catalog
     # lookup.
     monkeypatch.setattr(
-        _commands, "_resolve_catalog_extension", lambda *a, **k: (None, None)
+        install, "resolve_catalog_extension", lambda *a, **k: (None, None)
     )
 
     # Call the handler directly against a plain captured Console. (Driving it

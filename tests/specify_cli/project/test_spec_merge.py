@@ -43,7 +43,6 @@ def merge():
 
 @pytest.fixture
 def isolated(tmp_path, monkeypatch):
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     monkeypatch.delenv("SPECIFY_INIT_DIR", raising=False)
     monkeypatch.delenv("SPECIFY_FEATURE_DIRECTORY", raising=False)
     return tmp_path
@@ -62,7 +61,7 @@ def external(root: Path, name: str, workspace: Path, identity: str):
     repo = root / name
     put(repo, ".specify/project.json", json.dumps({"schema_version": 1, "project_id": identity, "storage": "external"}))
     put(workspace, ".specify/workspace.json", json.dumps({"schema_version": 1, "project_id": identity}))
-    put(root / "data/specify/projects", f"{identity}.json", json.dumps({"schema_version": 1, "workspace": str(workspace), "active_feature": "specs/999-do-not-select", "private": "context-secret"}))
+    put(repo, ".specify/checkout.json", json.dumps({"schema_version": 1, "workspace": str(workspace), "active_feature": "specs/999-do-not-select", "private": "context-secret"}))
     put(workspace, ".specify/init-options.json", '{"feature_numbering": "timestamp"}')
     put(workspace, ".specify/memory/constitution.md", "Destination principles")
     put(workspace, "specs/001-feature/spec.md", "# Specification")
@@ -2227,7 +2226,7 @@ def test_lock_initialization_closes_descriptor_and_reports_only_owned_cleanup(me
     retained_before = state(destination / "002-retained")
     real_open, real_fstat, real_fdopen = os.open, os.fstat, os.fdopen
     held = {}
-    lock_bytes = b'{"operation":"merge-specs"}\n'
+    lock_bytes = json.dumps({"operation": "merge-specs", "pid": os.getpid()}).encode() + b"\n"
 
     def open_lock(path, flags, *args, **kwargs):
         descriptor = real_open(path, flags, *args, **kwargs)
@@ -2281,23 +2280,57 @@ def test_lock_initialization_closes_descriptor_and_reports_only_owned_cleanup(me
     assert state(destination / "002-retained") == retained_before
     assert not (destination / "001-feature").exists()
     assert not list(destination.glob(".merge-specs-recovery-*"))
-    if failure == "write":
-        assert not lock.exists()
-        assert result["remaining_operations"] == []
-        assert not result["cleanup_required"]
-    else:
-        assert lock.read_bytes() == (lock_bytes if failure == "replacement" else b"")
-        assert result["cleanup_required"] is True
-        assert [(row["operation"], row["path"]) for row in result["remaining_operations"]] == [
-            ("inspect-lock", str(lock)),
-        ]
-        inventory = merge.inspect_spec_sets(raw(None, destination)).to_json()
-        assert inventory["destination"]["pending_resources"] == [".merge-specs.lock"]
-        assert inventory["review"] == "incomplete_review"
-        lock.unlink()  # The fixture owner clears only this verified disposable lock.
+    # A lock without a merge-specs JSON payload, or with another identity, stays for inspection.
+    assert lock.read_bytes() == (lock_bytes if failure == "replacement" else b"")
+    assert result["cleanup_required"] is True
+    assert [(row["operation"], row["path"]) for row in result["remaining_operations"]] == [
+        ("inspect-lock", str(lock)),
+    ]
+    inventory = merge.inspect_spec_sets(raw(None, destination)).to_json()
+    assert inventory["destination"]["pending_resources"] == [".merge-specs.lock"]
+    assert inventory["review"] == "incomplete_review"
+    lock.unlink()  # The fixture owner clears only this verified disposable lock.
     fresh = preview_for(merge, source, destination, [{"source_feature": "001-feature", "relation": "independent"}])
     assert merge.apply_spec_merge(fresh).data_outcome == "applied"
     assert (destination / "001-feature/spec.md").read_bytes() == b"# Source\n"
+
+
+@pytest.mark.parametrize(("rewrite", "kept"), [
+    (None, False),
+    (b'{"pid": 1, "operation": "merge-specs"}', False),
+    (b'{"operation": "naming", "pid": 1}', True),
+    (b"Another merge attempt owns this lock.\n", True),
+])
+def test_lock_and_journal_name_the_owner_and_cleanup_reads_the_lock_as_json(merge, isolated, monkeypatch, rewrite, kept):
+    source, destination = isolated / "source", isolated / "destination"
+    put(source, "001-feature/spec.md", "# Source\n")
+    put(destination, "002-retained/spec.md", "# Retained\n")
+    preview = preview_for(merge, source, destination, [{"source_feature": "001-feature", "relation": "independent"}])
+    lock = destination / ".merge-specs.lock"
+    seen = {}
+    real_replace = os.replace
+
+    def replace(source_path, destination_path):
+        if not seen:
+            seen["lock"] = json.loads(lock.read_bytes())
+            seen["journal"] = json.loads(next(destination.glob(".merge-specs-recovery-*/journal.json")).read_text())
+            if rewrite is not None:
+                with lock.open("r+b") as stream:  # Another writer changes the content, not the file identity.
+                    stream.truncate(0)
+                    stream.write(rewrite)
+        return real_replace(source_path, destination_path)
+
+    monkeypatch.setattr(os, "replace", replace)
+    result = merge.apply_spec_merge(preview).to_json()
+
+    assert seen["lock"] == {"operation": "merge-specs", "pid": os.getpid()}
+    assert seen["journal"]["pid"] == os.getpid()
+    assert result["data_outcome"] == "applied"
+    assert lock.exists() is kept
+    if kept:
+        assert lock.read_bytes() == rewrite
+        assert [row["operation"] for row in result["remaining_operations"]] == ["inspect-lock"]
+
 
 
 def test_recovery_replacement_after_rollback_staging_preserves_foreign_payloads(merge, isolated, monkeypatch):

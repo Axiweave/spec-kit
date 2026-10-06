@@ -6,7 +6,7 @@ import typer
 import yaml
 from rich.markup import escape as _escape_markup
 
-from ..._console import console
+from ...terminal import console
 from ...workspace import workspace_root_for
 from . import catalog_app
 
@@ -16,9 +16,9 @@ def preset_catalog_remove(
     name: str = typer.Argument(help="Catalog name to remove"),
 ):
     """Remove a catalog from .specify/preset-catalogs.yml."""
-    from ... import _require_specify_project
+    from ... import require_specify_project
 
-    project_root = _require_specify_project()
+    project_root = require_specify_project()
     specify_dir = workspace_root_for(project_root) / ".specify"
 
     config_path = specify_dir / "preset-catalogs.yml"

@@ -6,7 +6,7 @@ from typing import Optional
 import typer
 from rich.markup import escape as _rich_escape
 
-from ..._console import console
+from ...terminal import console
 from . import catalog_app
 
 
@@ -23,9 +23,9 @@ def integration_catalog_add(
 ):
     """Add an integration catalog source to the project config."""
     from .. import IntegrationCatalog, IntegrationCatalogError
-    from ... import _require_specify_project
+    from ... import require_specify_project
 
-    project_root = _require_specify_project()
+    project_root = require_specify_project()
     catalog = IntegrationCatalog(project_root)
 
     # Normalize once here so the success message reflects what was actually

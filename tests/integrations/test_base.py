@@ -286,7 +286,7 @@ class TestBuildCommandInvocation:
 
     def test_get_invocation_prefix_skill_colon(self):
         """get_invocation_prefix returns '/skill:' for Kimi in skills mode."""
-        from specify_cli._invocation_style import get_invocation_prefix
+        from specify_cli.invocation_style import get_invocation_prefix
 
         assert get_invocation_prefix("kimi", True) == "/skill:"
         assert get_invocation_prefix("kimi", False) == "/"

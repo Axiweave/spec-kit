@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from .._download_security import MAX_DOWNLOAD_BYTES, read_response_limited
+from ..download_security import MAX_DOWNLOAD_BYTES, read_response_limited
 from . import BundlerError
 
 # ZIP magic-byte signatures cover local headers, empty archives, and spanning markers.
@@ -34,7 +34,7 @@ def _local_manifest_source(arg: str):
     if candidate.suffix == ".zip":
         import yaml as _yaml
 
-        from .._download_security import open_zip_bounded, read_zip_member_limited
+        from ..download_security import open_zip_bounded, read_zip_member_limited
 
         with open_zip_bounded(candidate, error_type=BundlerError) as archive:
             try:

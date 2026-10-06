@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import typer
 
-from .._console import console
+from ..terminal import console
 from .._utils import _display_project_path
 from ..integration_state import default_integration_key as _default_integration_key, installed_integration_keys as _installed_integration_keys, integration_settings as _integration_settings
 from ._commands import integration_app
-from ._helpers import _MANIFEST_READ_ERRORS, _clear_init_options_for_integration, _read_integration_json, _remove_integration_json, _resolve_integration_options, _set_default_integration_or_exit, _write_integration_json
+from .helpers import _MANIFEST_READ_ERRORS, clear_init_options_for_integration, read_integration_json, _remove_integration_json, resolve_integration_options_or_exit, _set_default_integration_or_exit, save_integration_json
 
 
 @integration_app.command("uninstall")
@@ -23,21 +23,21 @@ def integration_uninstall(
     """Uninstall an integration, safely preserving modified files."""
     from . import get_integration
     from .manifest import IntegrationManifest
-    from .. import _require_specify_project
+    from .. import require_specify_project
 
     if global_install:
         from .omp.global_commands import run_global_command
         run_global_command(key, "uninstall")
         return
 
-    project_root = _require_specify_project()
+    project_root = require_specify_project()
     from ..workspace import is_private, workspace_root_for
     workspace = workspace_root_for(project_root)
     private = workspace != project_root and is_private(workspace)
     if project and not private:
         console.print("[red]Error:[/red] --project applies only to private mode.")
         raise typer.Exit(1)
-    current = _read_integration_json(project_root)
+    current = read_integration_json(project_root)
     default_key = _default_integration_key(current)
     installed_keys = _installed_integration_keys(current)
 
@@ -53,7 +53,7 @@ def integration_uninstall(
 
     integration = get_integration(key)
     if private and not project:
-        from .._private_checkout import remove_checkout_integration
+        from ..private_checkout import remove_checkout_integration
         try:
             removed, skipped = remove_checkout_integration(project_root, key, force=force)
         except _MANIFEST_READ_ERRORS as exc:
@@ -74,7 +74,7 @@ def integration_uninstall(
         new_default = default_key if default_key != key else (remaining[0] if remaining else None)
         if remaining:
             if default_key == key and new_default and (new_integration := get_integration(new_default)):
-                raw_options, parsed_options = _resolve_integration_options(
+                raw_options, parsed_options = resolve_integration_options_or_exit(
                     new_integration, current, new_default, None
                 )
                 _set_default_integration_or_exit(
@@ -87,13 +87,13 @@ def integration_uninstall(
                     parsed_options=parsed_options,
                 )
             else:
-                _write_integration_json(
+                save_integration_json(
                     project_root, new_default, remaining, _integration_settings(current)
                 )
         else:
             _remove_integration_json(project_root)
         if default_key == key:
-            _clear_init_options_for_integration(project_root, key)
+            clear_init_options_for_integration(project_root, key)
         raise typer.Exit(0)
 
     try:
@@ -122,7 +122,7 @@ def integration_uninstall(
     new_default = default_key if default_key != key else (remaining[0] if remaining else None)
     if remaining:
         if default_key == key and new_default and (new_integration := get_integration(new_default)):
-            raw_options, parsed_options = _resolve_integration_options(
+            raw_options, parsed_options = resolve_integration_options_or_exit(
                 new_integration, current, new_default, None
             )
             _set_default_integration_or_exit(
@@ -135,14 +135,14 @@ def integration_uninstall(
                 parsed_options=parsed_options,
             )
         else:
-            _write_integration_json(
+            save_integration_json(
                 project_root, new_default, remaining, _integration_settings(current)
             )
     else:
         _remove_integration_json(project_root)
 
     if default_key == key:
-        _clear_init_options_for_integration(project_root, key)
+        clear_init_options_for_integration(project_root, key)
 
     name = (integration.config or {}).get("name", key) if integration else key
     console.print(f"\n[green]✓[/green] Integration '{name}' uninstalled")

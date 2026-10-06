@@ -51,6 +51,18 @@ cd my-project
 
 ここから**プロジェクトディレクトリでコーディングエージェントを起動し**、下記のいずれかのプロセスを選んでください。各 `/speckit-*` **スキルはエージェントのチャット内で**、1つずつ呼び出し、結果を確認してから次に進んでください。これらはターミナルコマンドではなく、エージェントのスキルです。エージェントやモードによっては、[異なる呼び出し方](https://github.github.io/spec-kit/reference/integrations.html#command-invocation)を使う場合があります。
 
+### 仕様をリポジトリの外に保存する
+
+Spec Kitは、仕様・計画・タスクを別のワークスペースフォルダーに保存できます。その場合、コードリポジトリには小さなロケーターファイル `.specify/project.json` だけが残ります。各クローンやワークツリーは、1つのコマンドでワークスペースにリンクします:
+
+```bash
+specify init my-project --integration copilot --workspace ~/speckit-specs/my-project
+# 同じリポジトリの別のクローンまたはワークツリーで:
+specify project link ~/speckit-specs/my-project
+```
+
+Gitを使って1つのワークスペースをチームで共有する方法は、[共有ワークスペース](./docs/guides/shared-workspaces.md)を参照してください。
+
 <a id="-仕様駆動開発とは"></a>
 <a id="sdd-クイックスタート"></a>
 

@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch
 
 
 # ---------------------------------------------------------------------------
-# _console.py — Live in the select_with_arrows helper
+# terminal.py — Live in the select_with_arrows helper
 # ---------------------------------------------------------------------------
 
 
@@ -38,11 +38,11 @@ def _invoke_select_with_arrows(platform: str) -> bool:
 
     with (
         patch("sys.platform", platform),
-        patch("specify_cli._console.Live", side_effect=fake_live),
-        patch("specify_cli._console.readchar.readkey", return_value=readchar.key.ENTER),
+        patch("specify_cli.terminal.Live", side_effect=fake_live),
+        patch("specify_cli.terminal.readchar.readkey", return_value=readchar.key.ENTER),
         patch("sys.stdin.isatty", return_value=True),
     ):
-        from specify_cli._console import select_with_arrows
+        from specify_cli.terminal import select_with_arrows
 
         select_with_arrows({"a": "Option A", "b": "Option B"}, "Pick one", "a")
 
@@ -63,7 +63,7 @@ class TestSelectWithArrowsLiveTransient:
 
 
 # ---------------------------------------------------------------------------
-# _console.py — verify source contains the platform guard (regression check)
+# terminal.py — verify source contains the platform guard (regression check)
 # ---------------------------------------------------------------------------
 
 
@@ -74,11 +74,11 @@ class TestConsoleSourceContainsPlatformGuard:
     _GUARD_RE = r"_transient\s*=\s*sys\.platform\s*!=\s*['\"]win32['\"].*Live\(.*transient\s*=\s*_transient"
 
     def test_console_has_win32_guard(self):
-        """_console.py must assign _transient from platform check and pass it to Live."""
+        """terminal.py must assign _transient from platform check and pass it to Live."""
         import re
         from pathlib import Path
 
-        console_src = Path(__file__).resolve().parent.parent / "src" / "specify_cli" / "_console.py"
+        console_src = Path(__file__).resolve().parent.parent / "src" / "specify_cli" / "terminal.py"
         content = console_src.read_text(encoding="utf-8")
         assert re.search(self._GUARD_RE, content, re.DOTALL)
         assert re.search(r"transient\s*=\s*_transient", content)
