@@ -16,6 +16,7 @@
 
 ### Added
 
+- Vendor the community extensions `memory` by Andrey Zaytsev, `archive` by Stanislav Deviatov, and `brownfield` by Quratulain-bilal as bundled extensions. `specify extension add <id>` installs them with no network access. Each copy keeps its MIT license and an `UPSTREAM.md` note. See [Third-Party Notices](THIRD_PARTY_NOTICES.md).
 - Add private mode for external storage: `specify init --storage external --private`. Spec Kit hides its files in the code checkout with a managed block in the local Git exclude file, writes no `.gitignore` entries, and refuses to change tracked files. `specify project link` attaches linked worktrees and clones without a locator. In private mode, `integration uninstall` removes only the current checkout's files. `--project` also removes the shared state. Only Claude Code and Copilot get native hooks, through local settings files.
 - Add `/speckit.merge` for reviewed artifact transfer and read-only reconciliation. Use `specify project merge-specs` for immutable previews and approved compact replay. Preserve opaque content and current delivery state. Report consistency findings, incomplete planning, and exact recovery actions without certifying implementation.
 - Preserve explicit command invocation Booleans across native skills, Generic, Hermes, presets, and extensions. Keep the merge workflow user-only by default.

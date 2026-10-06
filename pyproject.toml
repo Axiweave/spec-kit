@@ -45,6 +45,10 @@ packages = ["src/specify_cli"]
 "extensions/assess" = "specify_cli/core_pack/extensions/assess"
 "extensions/bug" = "specify_cli/core_pack/extensions/bug"
 "extensions/github" = "specify_cli/core_pack/extensions/github"
+# Vendored community extensions (see THIRD_PARTY_NOTICES.md)
+"extensions/archive" = "specify_cli/core_pack/extensions/archive"
+"extensions/brownfield" = "specify_cli/core_pack/extensions/brownfield"
+"extensions/memory" = "specify_cli/core_pack/extensions/memory"
 # Bundled workflows (`specify init` installs only `speckit`; `bugfix`/`assess` are opt-in via first-party bundles)
 "workflows/speckit" = "specify_cli/core_pack/workflows/speckit"
 "workflows/bugfix" = "specify_cli/core_pack/workflows/bugfix"

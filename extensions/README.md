@@ -81,6 +81,31 @@ See the [Community Extensions](https://github.github.io/spec-kit/community/exten
 For the raw catalog data, see [`catalog.community.json`](catalog.community.json).
 
 
+## Vendored Community Extensions
+
+Spec Kit ships copies of these community extensions. Install them by name, with no network access:
+
+- `memory`: recalls prior specs and decisions from configured memory tools before `specify` and `plan`.
+- `archive`: archives a merged feature into the project memory under `.specify/memory/`.
+- `brownfield`: scans an existing codebase and brings it into Spec-Driven Development.
+
+```bash
+specify extension add memory
+```
+
+See [Third-Party Notices](../THIRD_PARTY_NOTICES.md) for the authors and licenses. Each folder has an `UPSTREAM.md` note with the upstream commit.
+
+An add by name always installs the vendored copy. The community catalog allows discovery only, so `specify extension update` does not replace the vendored copy with a newer community release. To replace an earlier community install with the vendored copy, run `specify extension add <id> --force`. To use a community release instead, install it with `--from <url>`.
+
+To refresh a vendored extension:
+
+1. Clone the new upstream release tag.
+2. Replace the files in `extensions/<id>/` with all files that Git tracks at that tag, except `tests/` and `.gitattributes`.
+3. Update `UPSTREAM.md` and the version in `catalog.json` together.
+4. Compare the folder with upstream. Only `UPSTREAM.md` may differ.
+
+Any fork edit to a vendored extension must bump the version in `extension.yml` and `catalog.json` together, for example `0.3.0+axiweave.1`.
+
 ## Adding Your Extension
 
 ### Submission Process

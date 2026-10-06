@@ -17,6 +17,21 @@
         "core"
       ]
     },
+    "archive": {
+      "name": "Archive Extension",
+      "id": "archive",
+      "version": "1.4.0",
+      "description": "Archive merged features into main project memory, resolving gaps and conflicts.",
+      "author": "Stanislav Deviatov",
+      "repository": "https://github.com/stn1slv/spec-kit-archive",
+      "bundled": true,
+      "tags": [
+        "archive",
+        "memory",
+        "merge",
+        "changelog"
+      ]
+    },
     "assess": {
       "name": "Idea Assessment Pipeline",
       "id": "assess",
@@ -31,6 +46,22 @@
         "triage",
         "product",
         "workflow"
+      ]
+    },
+    "brownfield": {
+      "name": "Brownfield Bootstrap",
+      "id": "brownfield",
+      "version": "1.0.0",
+      "description": "Bootstrap spec-kit for existing codebases — auto-discover architecture and adopt SDD incrementally",
+      "author": "Quratulain-bilal",
+      "repository": "https://github.com/Quratulain-bilal/spec-kit-brownfield",
+      "bundled": true,
+      "tags": [
+        "brownfield",
+        "bootstrap",
+        "existing-project",
+        "migration",
+        "onboarding"
       ]
     },
     "bug": {
@@ -75,6 +106,21 @@
         "github",
         "issues",
         "integration"
+      ]
+    },
+    "memory": {
+      "name": "Spec Kit Memory",
+      "id": "memory",
+      "version": "0.3.0",
+      "description": "Recall prior specs and decisions from configurable memory tools (memsearch, etc.) before SDLC stages",
+      "author": "Andrey Zaytsev",
+      "repository": "https://github.com/zaytsevand/spec-kit-memory",
+      "bundled": true,
+      "tags": [
+        "memory",
+        "recall",
+        "research",
+        "memsearch"
       ]
     }
   }

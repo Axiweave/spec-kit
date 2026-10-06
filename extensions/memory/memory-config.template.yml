@@ -1,0 +1,54 @@
+# Spec Kit Memory — configuration
+#
+# Installed to: .specify/extensions/memory/memory-config.yml
+# Edit this file to control WHICH memory tools recall invokes and AT WHICH stages.
+# (The hook points themselves are declared in the extension manifest.)
+
+# ── Memory tools ────────────────────────────────────────────────────────────
+# The list of commands recall invokes. Each entry is a slash-command / skill the
+# AI agent can execute (e.g. a Claude Code skill in `plugin:skill` form, or any
+# registered speckit command). They run in listed order and their results are
+# merged into a single "Prior art" summary handed to the calling stage.
+#
+# `command` is required. `query` is optional — omit it to let recall derive the
+# query from the current feature (branch + spec.md topic); set it to force a
+# fixed search string. `description` is for humans only.
+memory_tools:
+  - command: "memsearch:memory-recall"
+    description: "Semantic recall over past sessions, specs and decisions"
+    # query: "<optional fixed search string; default = feature topic>"
+
+  # Add more memory tools here — each is invoked in turn, e.g.:
+  # - command: "some-plugin:notes-search"
+  #   description: "Search engineering notes"
+
+# ── Keywords ──────────────────────────────────────────────────────────────────
+# Recall distills a set of keywords from the feature, clusters them into thematic
+# GROUPS, and runs one search per group (results merged). `keywords` below are
+# optional seed terms that are always included (under `config` / `auto+config`).
+keywords: []
+  # - "authentication"
+  # - "session token"
+
+# ── Stages ──────────────────────────────────────────────────────────────────
+# Gates whether recall actually runs for a stage whose hook fired. Looks up the
+# event key (before_plan / before_specify / ...) and falls back to `default`.
+stages:
+  default: true
+  before_specify: true    # PRIMARY recall point — prior art before writing the spec
+  before_plan: true       # research phase — recall prior specs before planning
+
+# ── Behaviour ─────────────────────────────────────────────────────────────────
+settings:
+  read_only: true         # recall must never write specs or code
+  fail_open: true         # if no tool is configured / nothing is found, continue (never block)
+  max_findings: 8         # cap the prior-art summary
+  keyword_source: "auto+config"   # auto | config | auto+config
+  max_keyword_groups: 4           # number of keyword groups → number of recall passes
+  max_keywords_per_group: 5
+
+  # speckit.memory.list-related-specs (after_plan): writes a list of related specs
+  # into the feature's research.md. Compact entries: "- [NNN] slug".
+  related_specs_enabled: true
+  related_specs_heading: "Related specs (from memory)"
+  related_specs_max: 20

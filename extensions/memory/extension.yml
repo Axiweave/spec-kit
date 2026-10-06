@@ -1,0 +1,65 @@
+schema_version: "1.0"
+
+extension:
+  id: "memory"
+  name: "Spec Kit Memory"
+  version: "0.3.0"
+  description: "Recall prior specs and decisions from configurable memory tools (memsearch, etc.) before SDLC stages"
+  author: "Andrey Zaytsev"
+  repository: "https://github.com/zaytsevand/spec-kit-memory"
+  license: "MIT"
+
+requires:
+  speckit_version: ">=0.2.0"
+
+provides:
+  commands:
+    - name: "speckit.memory.recall"
+      file: "commands/recall.md"
+      description: "Recall prior specs/decisions relevant to the current feature via the configured memory tools"
+    - name: "speckit.memory.list-related-specs"
+      file: "commands/list-related-specs.md"
+      description: "Recall related specs from memory and write a '## Related specs' section into research.md"
+
+  config:
+    - name: "memory-config.yml"
+      template: "memory-config.template.yml"
+      description: "Which memory tools to invoke, and at which stages recall runs"
+      required: false
+
+# When recall fires. The config file (stages.*) gates whether it actually runs
+# for a given stage; these declarations only wire the hook points.
+hooks:
+  before_specify:
+    command: "speckit.memory.recall"
+    optional: false        # auto-runs — the PRIMARY recall point (prior art before the spec)
+    priority: 5
+    description: "Recall prior art before specification (primary recall point)"
+  before_plan:
+    command: "speckit.memory.recall"
+    optional: false        # auto-runs (with auto_execute_hooks) just before Phase 0 research
+    priority: 5            # ahead of git auto-commit (priority 10)
+    description: "Recall prior art before planning (feeds Phase 0 research)"
+  after_plan:
+    command: "speckit.memory.list-related-specs"
+    optional: false        # auto-runs after research.md exists; writes the Related-specs section
+    priority: 5            # ahead of git auto-commit (priority 10)
+    description: "List related specs (from memory) into research.md"
+
+tags:
+  - "memory"
+  - "recall"
+  - "research"
+  - "memsearch"
+
+config:
+  defaults:
+    read_only: true
+    fail_open: true
+    max_findings: 8
+    keyword_source: "auto+config"
+    max_keyword_groups: 4
+    max_keywords_per_group: 5
+    related_specs_enabled: true
+    related_specs_heading: "Related specs (from memory)"
+    related_specs_max: 20
