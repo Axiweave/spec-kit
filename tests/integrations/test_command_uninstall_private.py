@@ -105,6 +105,29 @@ def test_default_uninstall_without_checkout_files_succeeds(checkouts, monkeypatc
     assert _listed(workspace) == ["claude"]
     assert _clean(main, worktree)
 
+def test_default_uninstall_keeps_dispatcher_and_other_checkout_hooks(checkouts, monkeypatch):
+    main, worktree, workspace = checkouts
+    (workspace / ".specify/integration-events.yml").write_text(
+        "integrations:\n  claude:\n    events:\n      stop:\n        command: speckit.plan\n", encoding="utf-8",
+    )
+    for checkout in (main, worktree):
+        assert _run(monkeypatch, checkout, "integration", "uninstall", "claude")[0] == 0
+        code, output = _run(monkeypatch, checkout, "integration", "install", "claude")
+        assert code == 0, output
+    hooks = main / ".claude/settings.local.json"
+    dispatcher = workspace / ".specify/events.py"
+    assert "Stop" in json.loads(hooks.read_text(encoding="utf-8"))["hooks"]
+    assert (worktree / ".claude/settings.local.json").is_file()
+    hooks_before, dispatcher_before = hooks.read_bytes(), dispatcher.read_bytes()
+
+    code, output = _run(monkeypatch, worktree, "integration", "uninstall", "claude")
+
+    assert code == 0, output
+    assert not (worktree / ".claude/settings.local.json").exists()
+    assert dispatcher.read_bytes() == dispatcher_before
+    assert hooks.read_bytes() == hooks_before
+    assert _clean(main, worktree)
+
 def test_project_uninstall_removes_shared_state_and_link_cleans_other_checkout(checkouts, monkeypatch):
     main, worktree, workspace = checkouts
     code, output = _run(monkeypatch, worktree, "integration", "uninstall", "claude", "--project")

@@ -135,6 +135,25 @@ class TestHermesIntegration(SkillsIntegrationTests):
         # Local marker should be gone
         assert not (tmp_path / ".hermes" / "skills").exists()
 
+    def test_checkout_only_teardown_keeps_home_skills(self, tmp_path, monkeypatch):
+        """Other checkouts share the home skills, so only a full teardown removes them."""
+        home = _fake_home(tmp_path)
+        monkeypatch.setattr(Path, "home", lambda: home)
+        i = get_integration(self.KEY)
+        m = IntegrationManifest(self.KEY, tmp_path)
+        skills = [f for f in i.install(tmp_path, m) if f.name == "SKILL.md"]
+        m.save()
+        assert skills
+
+        m.checkout_only = True
+        i.teardown(tmp_path, m)
+        assert not (tmp_path / ".hermes").exists()
+        assert all(f.exists() for f in skills)
+
+        m = IntegrationManifest(self.KEY, tmp_path)
+        i.teardown(tmp_path, m)
+        assert not any(f.exists() for f in skills)
+
     def test_modified_file_survives_uninstall(self, tmp_path, monkeypatch):
         """User edits survive reinstall, upgrade, and default uninstall."""
         home = _fake_home(tmp_path)
