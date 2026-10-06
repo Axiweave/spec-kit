@@ -61,24 +61,24 @@ def regenerate_exclude_block(checkout: Path) -> None:
         raise ValueError(f"Refusing a symlinked exclude file: {path}")
     text = path.read_bytes().decode("utf-8") if path.exists() else ""
     newline = "\r\n" if "\r\n" in text else "\n"
-    kept, inside = [], False
-    for line in text.splitlines():
-        if line == BEGIN:
-            inside = True
-        elif line == END:
+    before, after, inside, found = [], [], False, False
+    for line in text.splitlines(keepends=True):
+        bare = line.rstrip("\r\n")
+        if bare == BEGIN:
+            inside = found = True
+        elif bare == END:
             inside = False
         elif not inside:
-            kept.append(line)
+            (after if found else before).append(line)
     rules: set[str] = set()
     for root in _worktrees(checkout):
         if (root / ".specify/project.json").is_file():
             rules.add(LOCATOR_RULE)
             rules.update(_rule(key) for key in checkout_manifest_keys(root))
-    while kept and not kept[-1]:
-        kept.pop()
-    if rules:
-        kept += [BEGIN, *sorted(rules), END]
-    content = newline.join(kept) + newline if kept else ""
+    block = "".join(f"{line}{newline}" for line in (BEGIN, *sorted(rules), END)) if rules else ""
+    if block and before and not before[-1].endswith("\n"):
+        before[-1] += newline
+    content = "".join(before) + block + "".join(after)
     if content != text:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8", newline="")

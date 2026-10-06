@@ -130,6 +130,25 @@ def test_regeneration_is_idempotent_and_keeps_user_lines_and_crlf(tmp_path: Path
     assert path.read_bytes() == b"# user\r\n/x.md\r\n"
 
 
+@pytest.mark.parametrize("user", [b"", b"\n\n", b"# a\n\n", b"# no newline", b"# a\n\n\n# b\n"])
+def test_outside_block_bytes_survive_add_rebuild_and_remove(tmp_path: Path, user: bytes):
+    main = _repo(tmp_path / "main")
+    path = exclude_path(main)
+    path.write_bytes(user)
+    _attach(main, files=["x.md"])
+    regenerate_exclude_block(main)
+    text = path.read_bytes()
+    start = text.index(BEGIN.encode())
+    path.write_bytes(text[:start] + b"# mid\n\n" + text[start:] + b"\n# after\n")
+    regenerate_exclude_block(main)
+    rebuilt = path.read_bytes()
+    assert rebuilt.startswith(text[:start] + b"# mid\n\n" + BEGIN.encode())
+    assert rebuilt.endswith(END.encode() + b"\n\n# after\n")
+    (main / ".specify/project.json").unlink()
+    regenerate_exclude_block(main)
+    expected = (user + b"\n" if user and not user.endswith(b"\n") else user) + b"# mid\n\n\n# after\n"
+    assert path.read_bytes() == expected
+
 def test_missing_info_directory_is_created(tmp_path: Path):
     main = _repo(tmp_path / "main")
     path = exclude_path(main)

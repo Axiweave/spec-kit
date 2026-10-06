@@ -87,11 +87,23 @@ def test_default_uninstall_removes_only_this_checkout(checkouts, monkeypatch):
     assert _files(main) == main_before
     assert _files(workspace / ".specify") == shared_before
     assert _listed(workspace) == ["claude"]
-    assert "/.claude/settings.local.json\n" in exclude.read_text(encoding="utf-8").split("# BEGIN")[0]
+    before, _, rest = exclude.read_text(encoding="utf-8").partition("# BEGIN")
+    assert "/.claude/settings.local.json\n" in before + rest.partition("# END Spec Kit private mode\n")[2]
     assert _clean(main, worktree)
     code, output = _run(monkeypatch, main, "integration", "list")
     assert code == 0 and "claude" in output
 
+
+def test_default_uninstall_without_checkout_files_succeeds(checkouts, monkeypatch):
+    main, worktree, workspace = checkouts
+    assert _run(monkeypatch, worktree, "integration", "uninstall", "claude")[0] == 0
+
+    code, output = _run(monkeypatch, worktree, "integration", "uninstall", "claude")
+
+    assert code == 0, output
+    assert "Removed claude from this checkout." in output
+    assert _listed(workspace) == ["claude"]
+    assert _clean(main, worktree)
 
 def test_project_uninstall_removes_shared_state_and_link_cleans_other_checkout(checkouts, monkeypatch):
     main, worktree, workspace = checkouts

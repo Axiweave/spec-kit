@@ -277,9 +277,11 @@ class HermesIntegration(SkillsIntegration):
         local_skills_dir = manifest.file_path(".hermes/skills")
 
         removed, skipped = manifest.uninstall(project_root, force=force)
-        global_removed, global_skipped = global_manifest.uninstall(force=force)
-        removed.extend(global_removed)
-        skipped.extend(global_skipped)
+        if not manifest.checkout_only:
+            # Other checkouts on this machine share the home skills.
+            global_removed, global_skipped = global_manifest.uninstall(force=force)
+            removed.extend(global_removed)
+            skipped.extend(global_skipped)
 
         if local_skills_dir.is_dir() and not any(local_skills_dir.iterdir()):
             local_skills_dir.rmdir()
