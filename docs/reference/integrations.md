@@ -207,12 +207,24 @@ specify integration uninstall [<key>]
 | Option    | Description                                         |
 | --------- | --------------------------------------------------- |
 | `--force` | Remove files even if they have been modified         |
+| `--project` | Private mode only: also remove the integration from the project |
 
 Uninstalls the current integration (or the specified one). Spec Kit tracks every file created during install along with a SHA-256 hash of the original content:
 
 - **Unmodified files** are removed automatically.
 - **Modified files** (where you've made manual edits) are preserved so your customizations are not lost.
 - Use `--force` to remove all integration files regardless of modifications.
+
+### Private mode
+
+In a private-mode project, each checkout has its own manifest for its agent files.
+The default `uninstall` removes only this checkout's files. The project still lists the integration, and other checkouts keep their files.
+`uninstall --project` also removes the shared workspace state. Then run `specify project link <workspace>` in each other checkout to remove its files.
+In default mode, `--project` is an error.
+
+`install`, `switch`, `use`, and `upgrade` change only this checkout's files. `switch` keeps the old integration listed in the project.
+If the project lists an integration that this checkout lacks, `install` adds its files to this checkout.
+Each command updates the managed block in the local Git exclude file. See [Private mode](core.md#private-mode).
 
 ## Switch to a Different Integration
 

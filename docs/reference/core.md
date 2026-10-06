@@ -19,6 +19,7 @@ specify init [<project_name>]
 | `--preset <id>`          | Install a preset during initialization                                   |
 | `--storage local\|external` | Keep Spec Kit assets in the repository or use a separate workspace |
 | `--workspace <path>` | Select an exact external workspace. Conflicts with `--storage local` |
+| `--private` | Hide Spec Kit files from Git in this checkout. Requires `--storage external` and a new workspace |
 | `--global-commands` | Use one shared OMP command set without repository-local command copies |
 | `--feature-numbering sequential\|timestamp` | Save the project's feature-directory numbering mode |
 | `--feature-selection context\|automatic` | Use invocation context (default) or save the selected feature |
@@ -77,6 +78,31 @@ In external mode, feature overrides must remain inside the selected workspace.
 Machine records use `$XDG_DATA_HOME/specify/projects/`, or `~/.local/share/specify/projects/` on Unix when unset.
 Windows uses the per-user local application-data directory when XDG is unset.
 Create a separate workspace backup. External storage does not provide synchronization or erase earlier Git history.
+
+### Private mode
+
+```bash
+specify init --here --integration claude --storage external --private --workspace "$HOME/speckit-specs/my-project"
+```
+
+Use private mode when your team does not use Spec Kit.
+Spec Kit then keeps `git status` clean in the code repository.
+It writes no `.gitignore` entries and changes no tracked file.
+
+Private mode hides the locator and the agent files with a managed block in the local Git exclude file (`git rev-parse --git-path info/exclude`).
+Spec Kit rewrites only the lines between its `BEGIN` and `END` markers. Your own lines stay unchanged.
+Linked worktrees share one exclude file, so the block covers all attached worktrees.
+Outside a Git repository, Spec Kit writes no ignore rules.
+
+You choose private mode when you create the workspace. The workspace saves `"private": true` in `.specify/workspace.json`.
+An existing workspace cannot change its mode.
+
+Before any write, setup does a dry run in a temporary directory.
+If Spec Kit would change a file that Git tracks, setup stops and writes nothing.
+
+Only Claude Code and GitHub Copilot get native hooks in private mode.
+Claude Code uses `.claude/settings.local.json`. Copilot uses its own hook file and skips `.vscode/settings.json`.
+For other integrations, setup skips native hooks and prints a message.
 
 ### Workspace Git history
 
@@ -496,6 +522,10 @@ Run these commands from the code repository after a clone, rename, or machine ch
 The link command verifies the workspace identity before it updates the machine-local record.
 It does not change the shared locator or read personal setup defaults.
 A new machine record has no active feature. Select a feature explicitly before a feature-dependent command.
+
+In a private-mode project, `link` also attaches a new checkout, such as a linked worktree or a second clone, that has no locator.
+It writes the locator and the machine record, and installs every integration that the workspace lists.
+In a checkout that already has a locator, `link` installs missing integrations, reinstalls integrations with a different version, and removes integrations that the workspace no longer lists.
 
 ### Shared OMP commands
 
