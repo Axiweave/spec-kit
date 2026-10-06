@@ -107,6 +107,9 @@ maintenance loop for each model.
 ## Existing-Project Examples
 
 The [community walkthroughs](../community/walkthroughs.md) include brownfield
-examples across .NET, Java, and Go/React codebases. Community extensions for
-architecture discovery and brownfield bootstrapping are listed in the
+examples across .NET, Java, and Go/React codebases. Spec Kit ships the
+community `brownfield` extension, which scans an existing codebase and
+bootstraps Spec-Driven Development. Install it with
+`specify extension add brownfield`. Other community extensions for
+architecture discovery are listed in the
 [extension catalog](../community/extensions.md).

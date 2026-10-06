@@ -67,6 +67,18 @@ ID and version are checked before installation.
 
 > **Note:** All extension commands require a project already initialized with `specify init`.
 
+### Vendored Community Extensions
+
+Spec Kit ships copies of three community extensions: `memory`, `archive`, and `brownfield`. Install them by name. The install needs no network access:
+
+```bash
+specify extension add memory
+specify extension add archive
+specify extension add brownfield
+```
+
+An add by name always installs the vendored copy. `specify extension update` does not replace it with a newer community release. To replace an earlier community install with the vendored copy, run `specify extension add <id> --force`. See [Third-Party Notices](https://github.com/Axiweave/spec-kit/blob/main/THIRD_PARTY_NOTICES.md) for the authors and licenses.
+
 ## Remove an Extension
 
 ```bash
