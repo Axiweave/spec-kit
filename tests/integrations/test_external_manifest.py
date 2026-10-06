@@ -256,3 +256,96 @@ def test_native_writer_validates_before_mutation(
         assert dest.read_bytes() == b"First\nSecond\n"
         assert manifest.check_modified() == []
         assert set(manifest.files) == {relative}
+
+
+@pytest.fixture
+def private_checkouts(external_project, tmp_path):
+    """Two Git checkouts of one private-mode project that share one workspace."""
+    import subprocess
+
+    repo, workspace = external_project
+    identity = json.loads((workspace / ".specify/workspace.json").read_text())
+    (workspace / ".specify/workspace.json").write_text(json.dumps({**identity, "private": True}))
+    other = tmp_path / "other"
+    (other / ".specify").mkdir(parents=True)
+    (other / ".specify/project.json").write_bytes((repo / ".specify/project.json").read_bytes())
+    for checkout in (repo, other):
+        subprocess.run(["git", "init", "-q", str(checkout)], check=True)
+    return repo, other, workspace
+
+
+def _install(checkout, name):
+    manifest = IntegrationManifest("test", checkout, version="1")
+    manifest.record_file(".specify/events.py", "dispatcher")
+    manifest.record_file(f".agent/commands/{name}.md", name)
+    manifest.save()
+    return manifest
+
+
+def _exclude(checkout):
+    return (checkout / ".git/info/exclude").read_text().splitlines()
+
+
+def test_private_save_splits_manifest_by_root_and_hides_checkout_files(private_checkouts):
+    repo, _, workspace = private_checkouts
+    _install(repo, "plan")
+    shared = json.loads((workspace / ".specify/integrations/test.manifest.json").read_text())
+    local = json.loads((repo / ".specify/integrations/test.manifest.json").read_text())
+    assert set(shared["files"]) == {".specify/events.py"}
+    assert set(local["files"]) == {".agent/commands/plan.md"}
+    assert set(IntegrationManifest.load("test", repo).files) == {".specify/events.py", ".agent/commands/plan.md"}
+    assert not (repo / ".gitignore").exists()
+    assert "/.agent/commands/plan.md" in _exclude(repo)
+    assert "/.specify/" in _exclude(repo)
+
+
+def test_private_checkout_uninstall_keeps_shared_state_and_other_checkout(private_checkouts):
+    repo, other, workspace = private_checkouts
+    _install(repo, "plan")
+    _install(other, "tasks")
+    other_before = {p: p.read_bytes() for p in other.rglob("*") if p.is_file() and ".git" not in p.parts}
+    manifest = IntegrationManifest.load("test", repo)
+    manifest.checkout_only = True
+    removed, skipped = manifest.uninstall(repo)
+    assert removed == [repo / ".agent/commands/plan.md"]
+    assert skipped == []
+    assert not (repo / ".specify/integrations/test.manifest.json").exists()
+    assert (workspace / ".specify/events.py").read_text() == "dispatcher"
+    assert (workspace / ".specify/integrations/test.manifest.json").exists()
+    assert {p: p.read_bytes() for p in other.rglob("*") if p.is_file() and ".git" not in p.parts} == other_before
+    assert "/.agent/commands/plan.md" not in _exclude(repo)
+    assert "/.specify/" in _exclude(repo)
+
+
+def test_private_project_uninstall_removes_shared_state_and_other_checkout_reloads(private_checkouts):
+    repo, other, workspace = private_checkouts
+    _install(repo, "plan")
+    _install(other, "tasks")
+    IntegrationManifest.load("test", repo).uninstall(repo)
+    assert not (workspace / ".specify/events.py").exists()
+    assert not (workspace / ".specify/integrations/test.manifest.json").exists()
+    assert not (repo / ".specify/integrations/test.manifest.json").exists()
+    leftover = IntegrationManifest.load("test", other)
+    assert set(leftover.files) == {".agent/commands/tasks.md"}
+    leftover.checkout_only = True
+    removed, _ = leftover.uninstall(other)
+    assert removed == [other / ".agent/commands/tasks.md"]
+    with pytest.raises(FileNotFoundError):
+        IntegrationManifest.load("test", other)
+
+
+def test_exclude_records_paths_without_claiming_them(private_checkouts, external_project, tmp_path):
+    repo, _, workspace = private_checkouts
+    _install(repo, "plan")
+    IntegrationManifest("test", repo).exclude([".agent/commands/ext.md"])
+    local = json.loads((repo / ".specify/integrations/test.manifest.json").read_text())
+    assert set(local["files"]) == {".agent/commands/plan.md"}
+    assert local["excluded"] == [".agent/commands/ext.md"]
+    assert "/.agent/commands/ext.md" in _exclude(repo)
+    assert set(IntegrationManifest.load("test", repo).files) == {".specify/events.py", ".agent/commands/plan.md"}
+
+
+def test_default_mode_exclude_writes_gitignore(external_project):
+    repo, _ = external_project
+    IntegrationManifest("test", repo).exclude([".agent/commands/ext.md"])
+    assert "/.agent/commands/ext.md" in (repo / ".gitignore").read_text().splitlines()

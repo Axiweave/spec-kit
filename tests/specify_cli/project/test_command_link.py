@@ -439,3 +439,110 @@ def test_invalid_mapping_requires_explicit_link_not_personal_defaults(external_p
     assert resolved.exit_code == 0, resolved.output
     assert json.loads(resolved.stdout)["workspace_root"] == str(workspace)
     assert json.loads(record.read_text(encoding="utf-8"))["workspace"] == str(workspace)
+
+
+def _git(directory: Path, *args: str) -> str:
+    return subprocess.run(["git", *args], cwd=directory, check=True, capture_output=True, text=True).stdout
+
+
+def _status(directory: Path) -> str:
+    return _git(directory, "status", "--porcelain", "--untracked-files=all")
+
+
+@pytest.fixture
+def private_project(external_project, tmp_path, monkeypatch):
+    """A committed code repository with a private claude project, plus a worktree and a clone."""
+    for name in ("GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"):
+        monkeypatch.setenv(name, "Team")
+    for name in ("GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"):
+        monkeypatch.setenv(name, "team@example.com")
+    main, workspace = tmp_path / "main", tmp_path / "private workspace"
+    main.mkdir()
+    _git(main, "init", "-q")
+    (main / "README.md").write_text("team\n", encoding="utf-8")
+    _git(main, "add", "-A")
+    _git(main, "commit", "-q", "-m", "team")
+    monkeypatch.chdir(main)
+    result = CliRunner().invoke(app, [
+        "init", "--here", "--force", "--integration", "claude", "--ignore-agent-tools", "--offline",
+        "--non-interactive", "--workspace", str(workspace), "--private", "--script", "sh", "--no-workspace-git",
+    ])
+    assert result.exit_code == 0, result.output
+    _git(main, "worktree", "add", "-q", str(tmp_path / "worktree"))
+    _git(tmp_path, "clone", "-q", str(main), str(tmp_path / "clone"))
+    return main, workspace.resolve(), tmp_path / "worktree", tmp_path / "clone"
+
+
+@pytest.mark.parametrize("checkout", ["worktree", "clone"])
+def test_link_attaches_checkout_to_private_workspace_with_clean_status(private_project, monkeypatch, checkout):
+    main, workspace, worktree, clone = private_project
+    target = worktree if checkout == "worktree" else clone
+    monkeypatch.chdir(target)
+    result = CliRunner().invoke(app, ["project", "link", str(workspace)])
+    assert result.exit_code == 0, result.output
+    assert f"Workspace: {workspace}" in result.output
+    assert (json.loads((target / ".specify/project.json").read_text())["project_id"]
+            == json.loads((main / ".specify/project.json").read_text())["project_id"])
+    assert (target / ".claude/skills/speckit-plan/SKILL.md").is_file()
+    assert _status(target) == "" and _status(main) == ""
+    info = CliRunner().invoke(app, ["project", "info", "--json"])
+    assert json.loads(info.stdout)["workspace_root"] == str(workspace)
+
+
+@pytest.mark.parametrize("fault", ["not-a-workspace", "not-private", "tracked-target"])
+def test_link_attach_refusals_write_nothing(private_project, tmp_path, monkeypatch, fault):
+    _, workspace, _, clone = private_project
+    message = "is not a Spec Kit workspace."
+    if fault == "not-a-workspace":
+        workspace = tmp_path / "nothing"
+        workspace.mkdir()
+    elif fault == "not-private":
+        workspace = tmp_path / "shared workspace"
+        (workspace / ".specify").mkdir(parents=True)
+        (workspace / ".specify/workspace.json").write_text(
+            json.dumps({"schema_version": 1, "project_id": FOREIGN_ID}), encoding="utf-8"
+        )
+        message = "This workspace does not use private mode. Copy the project locator into this checkout"
+    else:
+        (clone / ".claude/skills/speckit-plan").mkdir(parents=True)
+        (clone / ".claude/skills/speckit-plan/SKILL.md").write_text("team\n", encoding="utf-8")
+        _git(clone, "add", "-A")
+        _git(clone, "commit", "-q", "-m", "team skill")
+        message = "Spec Kit would change tracked file .claude/skills/speckit-plan/SKILL.md."
+    before = snapshot(tmp_path)
+    monkeypatch.chdir(clone)
+    result = CliRunner().invoke(app, ["project", "link", str(workspace)])
+    assert result.exit_code == 1
+    assert message in result.output.replace("\n", "")
+    assert snapshot(tmp_path) == before
+
+
+def test_link_reconciles_attached_checkout_with_workspace(private_project, monkeypatch):
+    main, workspace, worktree, _ = private_project
+    monkeypatch.chdir(worktree)
+    assert CliRunner().invoke(app, ["project", "link", str(workspace)]).exit_code == 0
+    state_path = workspace / ".specify/integration.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+
+    state["installed_integrations"] = ["claude", "codex"]
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    assert CliRunner().invoke(app, ["project", "link", str(workspace)]).exit_code == 0
+    assert (worktree / ".specify/integrations/codex.manifest.json").is_file()
+    assert (worktree / ".agents/skills/speckit-plan/SKILL.md").is_file()
+    assert _status(worktree) == "" and _status(main) == ""
+
+    state["installed_integrations"] = ["claude"]
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    assert CliRunner().invoke(app, ["project", "link", str(workspace)]).exit_code == 0
+    assert not (worktree / ".specify/integrations/codex.manifest.json").exists()
+    assert not (worktree / ".agents").exists()
+
+    checkout_manifest = worktree / ".specify/integrations/claude.manifest.json"
+    data = json.loads(checkout_manifest.read_text(encoding="utf-8"))
+    checkout_manifest.write_text(json.dumps({**data, "version": "0.0.0"}), encoding="utf-8")
+    (worktree / ".claude/skills/speckit-plan/SKILL.md").unlink()
+    assert CliRunner().invoke(app, ["project", "link", str(workspace)]).exit_code == 0
+    shared = json.loads((workspace / ".specify/integrations/claude.manifest.json").read_text(encoding="utf-8"))
+    assert json.loads(checkout_manifest.read_text(encoding="utf-8"))["version"] == shared["version"]
+    assert (worktree / ".claude/skills/speckit-plan/SKILL.md").is_file()
+    assert _status(worktree) == "" and _status(main) == ""

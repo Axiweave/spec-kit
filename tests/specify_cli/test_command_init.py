@@ -29,7 +29,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from specify_cli import app
+from specify_cli import AGENT_CONFIG, app
 from specify_cli.command_init import _shell_quote_arg
 from specify_cli.workspace import resolve_project
 
@@ -349,6 +349,95 @@ def test_init_explicit_local_keeps_assets_in_repository(
     assert not (repository / ".specify/project.json").exists()
     assert not (isolated_init_home / "speckit-specs").exists()
     assert not list(isolated_init_home.rglob("projects/*.json"))
+
+
+_TEAM_FILES = (
+    ".gitignore", ".claude/settings.json", ".vscode/settings.json", "CLAUDE.md", "AGENTS.md",
+    ".github/copilot-instructions.md",
+)
+
+
+def _git(directory: Path, *args: str) -> str:
+    return subprocess.run(["git", *args], cwd=directory, check=True, capture_output=True, text=True).stdout
+
+
+def _team_repository(path: Path, *extra: str) -> dict[Path, bytes]:
+    """A committed team repository that tracks agent settings files. Return the tracked bytes."""
+    path.mkdir(parents=True)
+    _git(path, "init", "-q")
+    for relative in (*_TEAM_FILES, *extra):
+        (path / relative).parent.mkdir(parents=True, exist_ok=True)
+        (path / relative).write_text("{}\n" if relative.endswith(".json") else "team\n", encoding="utf-8")
+    _git(path, "add", "-A")
+    _git(path, "commit", "-q", "-m", "team")
+    return {p: p.read_bytes() for p in path.rglob("*") if p.is_file() and ".git" not in p.parts}
+
+
+def _private_init(tmp_path: Path, name: str, key: str, *extra: str):
+    return _init(
+        tmp_path, name, "--force", "--storage", "external", "--workspace", str(tmp_path / "ws"),
+        "--private", "--script", "sh", *extra, integration=key,
+    )
+
+
+@pytest.mark.parametrize("key", sorted(AGENT_CONFIG))
+def test_private_init_leaves_git_status_clean_and_tracked_bytes_unchanged(tmp_path: Path, key: str):
+    repository = tmp_path / "team"
+    tracked = _team_repository(repository)
+    result = _private_init(tmp_path, "team", key)
+    assert result.exit_code == 0, _strip(result.output)
+    assert _git(repository, "status", "--porcelain", "--untracked-files=all") == ""
+    assert {path: path.read_bytes() for path in tracked} == tracked
+    project = resolve_project(repository)
+    assert project.workspace_root == (tmp_path / "ws").resolve()
+    assert json.loads((tmp_path / "ws/.specify/workspace.json").read_text())["private"] is True
+
+
+def test_private_init_without_gitignore_creates_none(tmp_path: Path):
+    repository = tmp_path / "team"
+    repository.mkdir()
+    _git(repository, "init", "-q")
+    _git(repository, "-c", "user.name=t", "-c", "user.email=t@e", "commit", "-q", "--allow-empty", "-m", "i")
+    result = _private_init(tmp_path, "team", "claude")
+    assert result.exit_code == 0, _strip(result.output)
+    assert not (repository / ".gitignore").exists()
+    assert _git(repository, "status", "--porcelain", "--untracked-files=all") == ""
+
+
+def test_private_init_refuses_tracked_required_target_before_any_write(tmp_path: Path, isolated_init_home: Path):
+    repository = tmp_path / "team"
+    tracked = _team_repository(repository, ".claude/skills/speckit-plan/SKILL.md")
+    home_before = sorted(isolated_init_home.rglob("*"))
+    result = _private_init(tmp_path, "team", "claude")
+    assert result.exit_code == 1
+    assert "tracked file .claude/skills/speckit-plan/SKILL.md" in _strip(result.output).replace("\n", "")
+    assert not (tmp_path / "ws").exists()
+    assert sorted(isolated_init_home.rglob("*")) == home_before
+    assert {p: p.read_bytes() for p in repository.rglob("*") if p.is_file() and ".git" not in p.parts} == tracked
+
+
+def test_private_requires_external_storage(tmp_path: Path):
+    _team_repository(tmp_path / "team")
+    result = _init(tmp_path, "team", "--force", "--storage", "local", "--private", "--script", "sh")
+    assert result.exit_code == 1
+    assert "--private requires --storage external." in _strip(result.output)
+
+
+def test_private_rejects_existing_shared_workspace(tmp_path: Path):
+    _team_repository(tmp_path / "team")
+    first = _init(tmp_path, "team", "--force", "--workspace", str(tmp_path / "ws"), "--script", "sh")
+    assert first.exit_code == 0, _strip(first.output)
+    result = _private_init(tmp_path, "team", "generic")
+    assert result.exit_code == 1
+    assert "Private mode is chosen when the workspace is created" in _strip(result.output)
+
+
+def test_private_init_outside_git_writes_no_ignore_files(tmp_path: Path):
+    (tmp_path / "plain").mkdir()
+    result = _private_init(tmp_path, "plain", "claude")
+    assert result.exit_code == 0, _strip(result.output)
+    assert not (tmp_path / "plain/.gitignore").exists()
+    assert resolve_project(tmp_path / "plain").workspace_root == (tmp_path / "ws").resolve()
 
 
 @pytest.mark.parametrize("occupied", ["file", "unrelated-directory", "foreign-workspace"])
@@ -1284,12 +1373,12 @@ def test_concurrent_external_init_creates_exactly_one_workspace_history(
             _original_claim = _storage.claim_storage
 
             @contextmanager
-            def _barrier_claim(project):
+            def _barrier_claim(project, **options):
                 (barrier_dir / f"{my_id}.ready").touch()
                 deadline = time.monotonic() + 10
                 while not (barrier_dir / f"{other_id}.ready").exists() and time.monotonic() < deadline:
                     time.sleep(0.01)
-                with _original_claim(project) as value:
+                with _original_claim(project, **options) as value:
                     yield value
 
             _storage.claim_storage = _barrier_claim

@@ -18,7 +18,7 @@ except ModuleNotFoundError:  # pragma: no cover - Python < 3.11
 
 
 def _vibe_manifest() -> MagicMock:
-    manifest = MagicMock(spec=IntegrationManifest)
+    manifest = MagicMock(spec=IntegrationManifest, private=False, checkout_only=False)
     manifest.files = {}
     manifest.record_file = MagicMock()
     manifest.record_existing = MagicMock()

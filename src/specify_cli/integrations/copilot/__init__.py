@@ -164,6 +164,7 @@ class CopilotIntegration(IntegrationBase):
         "stop": "agentStop",
     }
     events_config_file = ".github/hooks/speckit.json"
+    events_private_config_file = events_config_file  # Spec Kit owns the whole file.
     events_format = "copilot-json"
     # Copilot sessionStart and userPromptSubmitted inject a top-level
     # additionalContext field into the model-facing prompt (C13). Non-JSON
@@ -570,9 +571,9 @@ class CopilotIntegration(IntegrationBase):
             )
             created.append(prompt_file)
 
-        # Write .vscode/settings.json
+        # Write .vscode/settings.json. Private mode skips this shared editor file.
         settings_src = self._vscode_settings_path()
-        if settings_src and settings_src.is_file():
+        if settings_src and settings_src.is_file() and not manifest.private:
             dst_settings = project_root / ".vscode" / "settings.json"
             dst_settings.parent.mkdir(parents=True, exist_ok=True)
             if dst_settings.exists():

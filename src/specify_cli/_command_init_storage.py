@@ -69,7 +69,7 @@ def select_storage(
 
 
 @contextmanager
-def claim_storage(project: Project) -> Iterator[None]:
+def claim_storage(project: Project, *, private: bool = False) -> Iterator[None]:
     """Claim external storage and remove only newly owned state after failure."""
     locator = project.repository_root / ".specify/project.json"
     if not project.project_id:
@@ -102,7 +102,7 @@ def claim_storage(project: Project) -> Iterator[None]:
             directories.append(locator.parent)
         for path, data in (
             (metadata / "workspace.json", {
-                "schema_version": 1, "project_id": project.project_id,
+                "schema_version": 1, "project_id": project.project_id, **({"private": True} if private else {}),
             }),
             (record, {
                 "schema_version": 1, "workspace": str(workspace), "active_feature": None,

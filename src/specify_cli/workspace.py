@@ -84,7 +84,23 @@ def verify_workspace(workspace: Path, project_id: str) -> Path:
     _version(identity, identity_path)
     if identity.get("project_id") != project_id:
         raise ValueError(f"Workspace belongs to another project: {workspace}")
+    _private_flag(identity, identity_path)
     return workspace
+
+
+def _private_flag(identity: dict, path: Path) -> bool:
+    value = identity.get("private", False)
+    if type(value) is not bool:
+        raise ValueError(f"Invalid private flag in {path}: use true or false.")
+    return value
+
+
+def is_private(workspace: Path) -> bool:
+    """Return True when the external workspace at *workspace* uses private mode."""
+    identity_path = workspace / ".specify/workspace.json"
+    if not identity_path.exists() and not identity_path.is_symlink():
+        return False
+    return _private_flag(read_json(identity_path), identity_path)
 
 
 @dataclass(frozen=True)

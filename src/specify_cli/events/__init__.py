@@ -1482,8 +1482,13 @@ def install_integration_events(
 
     # 2. Format-specific merge/write
     fmt = getattr(integration, "events_format", "json-nested")
-    config_file = getattr(integration, "events_config_file", None)
+    config_file = _native_config_file(integration, manifest)
     if not config_file:
+        if manifest.private and getattr(integration, "events_config_file", None):
+            print(
+                f"Native hooks skipped for {integration.key}: its hook settings are shared.",
+                file=sys.stderr,
+            )
         return created
 
     config_path = project_root / config_file
@@ -1738,6 +1743,13 @@ def install_integration_events(
     return created
 
 
+def _native_config_file(integration: IntegrationBase, manifest: IntegrationManifest) -> str | None:
+    """Return the native hook file: the personal file in private mode (research D6)."""
+    if manifest.private:
+        return getattr(integration, "events_private_config_file", None)
+    return getattr(integration, "events_config_file", None)
+
+
 def _remove_native_event_hooks(
     integration: IntegrationBase,
     project_root: Path,
@@ -1750,7 +1762,7 @@ def _remove_native_event_hooks(
     reference it — #10).
     """
     fmt = getattr(integration, "events_format", None)
-    config_file = getattr(integration, "events_config_file", None)
+    config_file = _native_config_file(integration, manifest)
     if not config_file:
         return
     config_path = project_root / config_file
@@ -1860,7 +1872,8 @@ def remove_integration_events(
     """
     workspace_root_for(project_root)
     _remove_native_event_hooks(integration, project_root, manifest)
-    _cleanup_shared_dispatcher(integration, project_root, manifest)
+    if not manifest.checkout_only:  # A checkout-only teardown keeps the shared workspace dispatcher.
+        _cleanup_shared_dispatcher(integration, project_root, manifest)
 
     # Clean up opencode TS plugin (owned solely by the opencode integration).
     if integration.key == "opencode":
@@ -1881,9 +1894,10 @@ def events_stale_exclusions(integration_key: str) -> set[str]:
     if not integration:
         return set()
     exclusions = set()
-    config_file = getattr(integration, "events_config_file", None)
-    if config_file:
-        exclusions.add(config_file)
+    for attribute in ("events_config_file", "events_private_config_file"):
+        config_file = getattr(integration, attribute, None)
+        if config_file:
+            exclusions.add(config_file)
     if integration_key == "opencode":
         exclusions.add(".opencode/plugin/speckit-events.ts")
     # C3: the shared dispatcher is written into every event-capable

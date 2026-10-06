@@ -1142,14 +1142,15 @@ class CommandRegistrar:
         if workspace_root_for(project_root) != project_root:
             from .integrations.manifest import IntegrationManifest
 
-            manifest = IntegrationManifest(agent_name, project_root)
+            hidden: list[str] = []
             for name in registered:
                 output_name = self.compute_output_name(agent_name, name, agent_config)
                 path = commands_dir / f"{output_name}{agent_config['extension']}"
                 if path.is_relative_to(project_root):
-                    manifest._ignore_entry_point(path.relative_to(project_root).as_posix())
+                    hidden.append(path.relative_to(project_root).as_posix())
                 if agent_name == "copilot":
-                    manifest._ignore_entry_point(f".github/prompts/{name}.prompt.md")
+                    hidden.append(f".github/prompts/{name}.prompt.md")
+            IntegrationManifest(agent_name, project_root).exclude(hidden)
 
         return registered
 

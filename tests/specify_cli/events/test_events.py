@@ -371,7 +371,7 @@ class TestClaudeJsonMerging:
 
     def test_merge_into_empty_file(self, tmp_path):
         integration = ClaudeIntegration()
-        manifest = MagicMock(spec=IntegrationManifest)
+        manifest = MagicMock(spec=IntegrationManifest, private=False, checkout_only=False)
         manifest.files = {}
         manifest.record_file = MagicMock()
         manifest.record_existing = MagicMock()
@@ -402,7 +402,7 @@ class TestClaudeJsonMerging:
     def test_claude_emits_all_handlers_for_same_event(self, tmp_path):
         """#2: two handlers on the same event both appear in the native config."""
         integration = ClaudeIntegration()
-        manifest = MagicMock(spec=IntegrationManifest)
+        manifest = MagicMock(spec=IntegrationManifest, private=False, checkout_only=False)
         manifest.files = {}
         manifest.record_file = MagicMock()
         manifest.record_existing = MagicMock()
@@ -423,7 +423,7 @@ class TestClaudeJsonMerging:
 
     def test_remove_preserves_user_hooks(self, tmp_path):
         integration = ClaudeIntegration()
-        manifest = MagicMock(spec=IntegrationManifest)
+        manifest = MagicMock(spec=IntegrationManifest, private=False, checkout_only=False)
         manifest.files = {}
         manifest.record_file = MagicMock()
         manifest.record_existing = MagicMock()
@@ -465,7 +465,7 @@ class TestClaudeJsonMerging:
 
     def test_merge_keeps_non_ascii_user_settings_readable(self, tmp_path):
         integration = ClaudeIntegration()
-        manifest = MagicMock(spec=IntegrationManifest)
+        manifest = MagicMock(spec=IntegrationManifest, private=False, checkout_only=False)
         manifest.files = {}
         manifest.record_file = MagicMock()
         manifest.record_existing = MagicMock()
@@ -488,7 +488,7 @@ class TestClaudeJsonMerging:
 
     def test_merge_keeps_escaped_lone_surrogate_in_user_settings(self, tmp_path):
         integration = ClaudeIntegration()
-        manifest = MagicMock(spec=IntegrationManifest)
+        manifest = MagicMock(spec=IntegrationManifest, private=False, checkout_only=False)
         manifest.files = {}
         manifest.record_file = MagicMock()
         manifest.record_existing = MagicMock()
@@ -514,7 +514,7 @@ class TestCopilotJsonWriting:
 
     def test_copilot_json_generation(self, tmp_path):
         integration = CopilotIntegration()
-        manifest = MagicMock(spec=IntegrationManifest)
+        manifest = MagicMock(spec=IntegrationManifest, private=False, checkout_only=False)
         manifest.files = {}
         manifest.record_file = MagicMock()
         manifest.record_existing = MagicMock()
@@ -561,7 +561,7 @@ class TestCursorJsonWriting:
 
     def test_cursor_json_includes_version(self, tmp_path):
         integration = CursorAgentIntegration()
-        manifest = MagicMock(spec=IntegrationManifest)
+        manifest = MagicMock(spec=IntegrationManifest, private=False, checkout_only=False)
         manifest.files = {}
         manifest.record_file = MagicMock()
         manifest.record_existing = MagicMock()
@@ -580,7 +580,7 @@ class TestCursorJsonWriting:
         config_path.parent.mkdir(parents=True, exist_ok=True)
         config_path.write_text(json.dumps({"version": 1, "hooks": {}}))
 
-        manifest = MagicMock(spec=IntegrationManifest)
+        manifest = MagicMock(spec=IntegrationManifest, private=False, checkout_only=False)
         manifest.files = {}
         manifest.record_file = MagicMock()
         manifest.record_existing = MagicMock()
@@ -594,7 +594,7 @@ class TestCursorJsonWriting:
     def test_nested_matcher_grouping_per_distinct_matcher(self, tmp_path):
         """S3: two handlers with different matchers produce two matcher-groups."""
         integration = ClaudeIntegration()
-        manifest = MagicMock(spec=IntegrationManifest)
+        manifest = MagicMock(spec=IntegrationManifest, private=False, checkout_only=False)
         manifest.files = {}
         manifest.record_file = MagicMock()
         manifest.record_existing = MagicMock()
@@ -620,7 +620,7 @@ class TestCursorJsonWriting:
     def test_nested_shared_matcher_stays_one_group(self, tmp_path):
         """S3: handlers sharing a matcher stay in a single matcher-group."""
         integration = ClaudeIntegration()
-        manifest = MagicMock(spec=IntegrationManifest)
+        manifest = MagicMock(spec=IntegrationManifest, private=False, checkout_only=False)
         manifest.files = {}
         manifest.record_file = MagicMock()
         manifest.record_existing = MagicMock()
@@ -678,7 +678,7 @@ class TestDevinRootNestedFormat:
         integration = DevinIntegration()
         assert integration.events_format == "json-root-nested"
 
-        manifest = MagicMock(spec=IntegrationManifest)
+        manifest = MagicMock(spec=IntegrationManifest, private=False, checkout_only=False)
         manifest.files = {}
         manifest.record_file = MagicMock()
         manifest.record_existing = MagicMock()
@@ -705,7 +705,7 @@ class TestDevinRootNestedFormat:
             }]
         }))
 
-        manifest = MagicMock(spec=IntegrationManifest)
+        manifest = MagicMock(spec=IntegrationManifest, private=False, checkout_only=False)
         manifest.files = {}
         manifest.record_file = MagicMock()
         manifest.record_existing = MagicMock()
@@ -902,7 +902,7 @@ class TestTomlMatcherEscaping:
         from specify_cli.integrations.codex import CodexIntegration
 
         integration = CodexIntegration()
-        manifest = MagicMock(spec=IntegrationManifest)
+        manifest = MagicMock(spec=IntegrationManifest, private=False, checkout_only=False)
         manifest.files = {}
         manifest.record_file = MagicMock()
         manifest.record_existing = MagicMock()
@@ -1096,7 +1096,7 @@ class TestOpencodePluginMerging:
 
     def test_opencode_ts_plugin_generation(self, tmp_path):
         integration = OpencodeIntegration()
-        manifest = MagicMock(spec=IntegrationManifest)
+        manifest = MagicMock(spec=IntegrationManifest, private=False, checkout_only=False)
         manifest.files = {}
         manifest.record_file = MagicMock()
         manifest.record_existing = MagicMock()
@@ -1138,7 +1138,7 @@ class TestOpencodePluginMerging:
         The part ID derives from output.parts[last].id (prt_ brand preserved)
         with a prt_ fallback to prevent OpenCode session schema crashes."""
         integration = OpencodeIntegration()
-        manifest = MagicMock(spec=IntegrationManifest)
+        manifest = MagicMock(spec=IntegrationManifest, private=False, checkout_only=False)
         manifest.files = {}
         manifest.record_file = MagicMock()
         manifest.record_existing = MagicMock()
@@ -1164,7 +1164,7 @@ class TestOpencodePluginMerging:
         preferring a project venv, and the dispatcher is launched via
         execFileSync (argv, no shell)."""
         integration = OpencodeIntegration()
-        manifest = MagicMock(spec=IntegrationManifest)
+        manifest = MagicMock(spec=IntegrationManifest, private=False, checkout_only=False)
         manifest.files = {}
         manifest.record_file = MagicMock()
         manifest.record_existing = MagicMock()
@@ -1197,7 +1197,7 @@ class TestOpencodePluginMerging:
     def test_opencode_ts_plugin_emits_all_handlers(self, tmp_path):
         """#2: multiple handlers on the same native event all invoke runEvent."""
         integration = OpencodeIntegration()
-        manifest = MagicMock(spec=IntegrationManifest)
+        manifest = MagicMock(spec=IntegrationManifest, private=False, checkout_only=False)
         manifest.files = {}
         manifest.record_file = MagicMock()
         manifest.record_existing = MagicMock()
@@ -1221,7 +1221,7 @@ class TestOpencodePluginMerging:
         """C7: tool callbacks forward both input and output to runEvent so
         pre_tool_use can inspect tool args and post_tool_use the result."""
         integration = OpencodeIntegration()
-        manifest = MagicMock(spec=IntegrationManifest)
+        manifest = MagicMock(spec=IntegrationManifest, private=False, checkout_only=False)
         manifest.files = {}
         manifest.record_file = MagicMock()
         manifest.record_existing = MagicMock()
@@ -1246,7 +1246,7 @@ class TestOpencodePluginMerging:
         JSON string literals so they can't break the generated TypeScript or
         inject code."""
         integration = OpencodeIntegration()
-        manifest = MagicMock(spec=IntegrationManifest)
+        manifest = MagicMock(spec=IntegrationManifest, private=False, checkout_only=False)
         manifest.files = {}
         manifest.record_file = MagicMock()
         manifest.record_existing = MagicMock()
@@ -1270,7 +1270,7 @@ class TestOpencodePluginMerging:
         """A non-numeric timeout value in event config must not crash
         _build_opencode_plugin; it should fall back to the default (60s)."""
         integration = OpencodeIntegration()
-        manifest = MagicMock(spec=IntegrationManifest)
+        manifest = MagicMock(spec=IntegrationManifest, private=False, checkout_only=False)
         manifest.files = {}
         manifest.record_file = MagicMock()
         manifest.record_existing = MagicMock()
@@ -1606,7 +1606,7 @@ class TestCommandRunner:
         install) and falls back to an inline stdlib resolver so it works
         without a persistent `specify` executable (e.g. one-time uvx)."""
         integration = ClaudeIntegration()
-        manifest = MagicMock(spec=IntegrationManifest)
+        manifest = MagicMock(spec=IntegrationManifest, private=False, checkout_only=False)
         manifest.files = {}
         manifest.record_file = MagicMock()
         manifest.record_existing = MagicMock()
@@ -1634,7 +1634,7 @@ class TestCommandRunner:
 
         # Install events (generates the dispatcher + native config).
         integration = ClaudeIntegration()
-        manifest = MagicMock(spec=IntegrationManifest)
+        manifest = MagicMock(spec=IntegrationManifest, private=False, checkout_only=False)
         manifest.files = {}
         manifest.record_file = MagicMock()
         manifest.record_existing = MagicMock()
@@ -1691,7 +1691,7 @@ class TestCommandRunner:
         import sys as _sys
 
         integration = ClaudeIntegration()
-        manifest = MagicMock(spec=IntegrationManifest)
+        manifest = MagicMock(spec=IntegrationManifest, private=False, checkout_only=False)
         manifest.files = {}
         manifest.record_file = MagicMock()
         manifest.record_existing = MagicMock()
@@ -1739,7 +1739,7 @@ class TestCommandRunner:
         import sys as _sys
 
         integration = ClaudeIntegration()
-        manifest = MagicMock(spec=IntegrationManifest)
+        manifest = MagicMock(spec=IntegrationManifest, private=False, checkout_only=False)
         manifest.files = {}
         manifest.record_file = MagicMock()
         manifest.record_existing = MagicMock()
@@ -1769,7 +1769,7 @@ class TestCommandRunner:
         import sys as _sys
 
         integration = ClaudeIntegration()
-        manifest = MagicMock(spec=IntegrationManifest)
+        manifest = MagicMock(spec=IntegrationManifest, private=False, checkout_only=False)
         manifest.files = {}
         manifest.record_file = MagicMock()
         manifest.record_existing = MagicMock()
@@ -1810,7 +1810,7 @@ class TestCommandRunner:
         import sys as _sys
 
         integration = ClaudeIntegration()
-        manifest = MagicMock(spec=IntegrationManifest)
+        manifest = MagicMock(spec=IntegrationManifest, private=False, checkout_only=False)
         manifest.files = {}
         manifest.record_file = MagicMock()
         manifest.record_existing = MagicMock()
@@ -1871,7 +1871,7 @@ class TestCommandRunner:
         import sys as _sys
 
         integration = ClaudeIntegration()
-        manifest = MagicMock(spec=IntegrationManifest)
+        manifest = MagicMock(spec=IntegrationManifest, private=False, checkout_only=False)
         manifest.files = {}
         manifest.record_file = MagicMock()
         manifest.record_existing = MagicMock()
@@ -1927,7 +1927,7 @@ class TestCommandRunner:
         uses it for the inner subprocess, instead of a fixed 120s cap that
         would kill a handler configured for longer."""
         integration = ClaudeIntegration()
-        manifest = MagicMock(spec=IntegrationManifest)
+        manifest = MagicMock(spec=IntegrationManifest, private=False, checkout_only=False)
         manifest.files = {}
         manifest.record_file = MagicMock()
         manifest.record_existing = MagicMock()
@@ -2116,7 +2116,7 @@ class TestCommandRunner:
             return
 
         integration = ClaudeIntegration()
-        manifest = MagicMock(spec=IntegrationManifest)
+        manifest = MagicMock(spec=IntegrationManifest, private=False, checkout_only=False)
         manifest.files = {}
         manifest.record_file = MagicMock()
         manifest.record_existing = MagicMock()
@@ -2161,7 +2161,7 @@ class TestCommandRunner:
 # -- Merge/teardown idempotency & safety (Tier 3) ----------------------------
 
 def _claude_manifest(tmp_path):
-    manifest = MagicMock(spec=IntegrationManifest)
+    manifest = MagicMock(spec=IntegrationManifest, private=False, checkout_only=False)
     manifest.files = {}
     manifest.record_file = MagicMock()
     manifest.record_existing = MagicMock()
@@ -2443,7 +2443,7 @@ class TestSharedDispatcherRefcount:
             {"pre_tool_use": [{"command": "speckit.tdd.validate"}]},
         )
         # Install codex's events (re-writes shared dispatcher + codex config).
-        codex_manifest = MagicMock(spec=IntegrationManifest)
+        codex_manifest = MagicMock(spec=IntegrationManifest, private=False, checkout_only=False)
         codex_manifest.files = {}
         codex_manifest.record_file = MagicMock()
         codex_manifest.record_existing = MagicMock()
@@ -2961,7 +2961,7 @@ class TestSkippedMergeNotTracked:
         jsonc = '{\n  // my comment\n  "hooks": {}\n}\n'
         config_path.write_text(jsonc)
 
-        manifest = MagicMock(spec=IntegrationManifest)
+        manifest = MagicMock(spec=IntegrationManifest, private=False, checkout_only=False)
         manifest.files = {}
         manifest.record_file = MagicMock()
         manifest.record_existing = MagicMock()
@@ -3126,7 +3126,7 @@ class TestCursorVersionOnlyStubDeletion:
 
     def test_version_only_cursor_file_deleted_on_teardown(self, tmp_path):
         integration = CursorAgentIntegration()
-        manifest = MagicMock(spec=IntegrationManifest)
+        manifest = MagicMock(spec=IntegrationManifest, private=False, checkout_only=False)
         manifest.files = {}
         manifest.record_file = MagicMock()
         manifest.record_existing = MagicMock()

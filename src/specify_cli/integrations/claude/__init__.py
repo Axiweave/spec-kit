@@ -63,6 +63,7 @@ class ClaudeIntegration(SkillsIntegration):
         "stop": "Stop",
     }
     events_config_file = ".claude/settings.json"
+    events_private_config_file = ".claude/settings.local.json"
     events_format = "json-nested"
 
     @staticmethod

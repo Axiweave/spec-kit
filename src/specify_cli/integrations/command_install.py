@@ -51,6 +51,22 @@ def integration_install(
     default_key = _default_integration_key(current)
     installed_keys = _installed_integration_keys(current)
 
+    probe = IntegrationManifest(key, project_root)
+    if key in installed_keys and probe.private and not probe.checkout_manifest_path.exists():
+        # Private mode: the project lists the integration, but this checkout lacks its files.
+        from .._private_checkout import attach_integrations, plan_checkout_files, refuse_tracked
+        version = _get_speckit_version()
+        try:
+            refuse_tracked(project_root, plan_checkout_files(
+                lambda staged: attach_integrations(staged, [key], version=version), workspace=probe.metadata_root,
+            ))
+            attach_integrations(project_root, [key], version=version)
+        except (ValueError, OSError) as exc:
+            console.print(f"[red]Error:[/red] {_cli_error_detail(exc)}")
+            raise typer.Exit(1)
+        console.print(f"[green]✓[/green] Integration '{key}' installed in this checkout")
+        return
+
     if key in installed_keys:
         console.print(f"[yellow]Integration '{key}' is already installed.[/yellow]")
         if default_key == key:
@@ -101,6 +117,16 @@ def integration_install(
     raw_options, parsed_options = _resolve_integration_options(
         integration, current, key, integration_options
     )
+    if probe.private:
+        from .._private_checkout import install_integration, plan_checkout_files, refuse_tracked
+        try:
+            refuse_tracked(project_root, plan_checkout_files(lambda staged: install_integration(
+                staged, integration, version=_get_speckit_version(), script_type=selected_script,
+                raw_options=raw_options, parsed_options=parsed_options,
+            )))
+        except (ValueError, OSError) as exc:
+            console.print(f"[red]Error:[/red] {_cli_error_detail(exc)}")
+            raise typer.Exit(1)
 
     # Ensure shared infrastructure is present (safe to run unconditionally;
     # _install_shared_infra merges missing files without overwriting).

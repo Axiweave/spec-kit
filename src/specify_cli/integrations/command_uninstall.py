@@ -16,6 +16,9 @@ def integration_uninstall(
     key: str = typer.Argument(None, help="Integration key to uninstall (default: current integration)"),
     force: bool = typer.Option(False, "--force", help="Remove files even if modified"),
     global_install: bool = typer.Option(False, "--global", help="Remove unchanged shared OMP commands without a project"),
+    project: bool = typer.Option(
+        False, "--project", help="Private mode: also remove the integration from the project. Other checkouts keep their files.",
+    ),
 ):
     """Uninstall an integration, safely preserving modified files."""
     from . import get_integration
@@ -28,6 +31,12 @@ def integration_uninstall(
         return
 
     project_root = _require_specify_project()
+    from ..workspace import is_private, workspace_root_for
+    workspace = workspace_root_for(project_root)
+    private = workspace != project_root and is_private(workspace)
+    if project and not private:
+        console.print("[red]Error:[/red] --project applies only to private mode.")
+        raise typer.Exit(1)
     current = _read_integration_json(project_root)
     default_key = _default_integration_key(current)
     installed_keys = _installed_integration_keys(current)
@@ -43,6 +52,20 @@ def integration_uninstall(
         raise typer.Exit(1)
 
     integration = get_integration(key)
+    if private and not project:
+        from .._private_checkout import remove_checkout_integration
+        try:
+            removed, skipped = remove_checkout_integration(project_root, key, force=force)
+        except _MANIFEST_READ_ERRORS as exc:
+            console.print(f"[red]Error:[/red] Integration manifest for '{key}' is unreadable: {exc}")
+            raise typer.Exit(1)
+        console.print(
+            f"Removed {key} from this checkout. The project still lists {key}. "
+            f"To remove it from the project, run: specify integration uninstall {key} --project",
+            markup=False,
+        )
+        _print_removal(project_root, removed, skipped)
+        return
 
     manifest_path = IntegrationManifest(key, project_root).manifest_path
     if not manifest_path.exists():
@@ -123,6 +146,15 @@ def integration_uninstall(
 
     name = (integration.config or {}).get("name", key) if integration else key
     console.print(f"\n[green]✓[/green] Integration '{name}' uninstalled")
+    _print_removal(project_root, removed, skipped)
+    if project:
+        console.print(
+            f"Other checkouts keep their {key} files. Run specify project link in each one to remove them.",
+            markup=False,
+        )
+
+
+def _print_removal(project_root, removed, skipped) -> None:
     if removed:
         console.print(f"  Removed {len(removed)} file(s)")
     if skipped:

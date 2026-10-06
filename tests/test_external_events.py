@@ -275,3 +275,45 @@ def test_teardown_rejects_foreign_mapping_before_native_changes(external_project
     with pytest.raises(ValueError, match="another project"):
         remove_integration_events(integration, repository, manifest)
     assert native_path.read_bytes() == original
+
+
+@pytest.fixture
+def private_project(external_project):
+    repository, workspace, record = external_project
+    write_json(workspace / ".specify/workspace.json", {
+        "schema_version": 1, "project_id": PROJECT_ID, "private": True,
+    })
+    return repository, workspace, record
+
+
+def test_private_claude_hooks_use_personal_settings_and_keep_user_keys(private_project):
+    repository, workspace, _ = private_project
+    shared = repository / ".claude/settings.json"
+    write_json(shared, {"team": True})
+    shared_bytes = shared.read_bytes()
+    personal = repository / ".claude/settings.local.json"
+    write_json(personal, {"permissions": {"allow": ["Read"]}})
+    claude, manifest = install(repository)
+    assert shared.read_bytes() == shared_bytes
+    hooks = json.loads(personal.read_text())["hooks"]
+    assert "PreToolUse" in hooks
+    assert ".claude/settings.local.json" in manifest.files
+    remove_integration_events(claude, repository, manifest)
+    assert json.loads(personal.read_text()) == {"permissions": {"allow": ["Read"]}}
+    assert shared.read_bytes() == shared_bytes
+
+
+def test_private_copilot_hooks_keep_own_file(private_project):
+    repository, _, _ = private_project
+    install(repository, "copilot")
+    assert (repository / ".github/hooks/speckit.json").is_file()
+
+
+@pytest.mark.parametrize("key", ["gemini", "qwen", "tabnine", "devin", "cursor-agent", "codex", "vibe", "opencode"])
+def test_private_mode_skips_shared_native_hooks(private_project, key, capsys):
+    repository, _, _ = private_project
+    integration, manifest = install(repository, key)
+    assert not (repository / integration.events_config_file).exists()
+    assert not (repository / ".opencode").exists()
+    assert f"Native hooks skipped for {key}: its hook settings are shared." in capsys.readouterr().err
+    assert all(key.startswith(".specify/") for key in manifest.files)

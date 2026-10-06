@@ -124,6 +124,9 @@ class IntegrationBase(ABC):
     config: dict[str, Any] | None = None
     """Metadata dict matching the ``AGENT_CONFIG`` shape."""
 
+    events_private_config_file: str | None = None
+    """Private mode: a personal, untracked native hook file. ``None`` skips native hooks."""
+
     registrar_config: dict[str, Any] | None = None
     """Registration dict matching ``CommandRegistrar.AGENT_CONFIGS`` shape."""
 

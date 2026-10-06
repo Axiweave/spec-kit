@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ..workspace import workspace_root_for
+from ..workspace import is_private, workspace_root_for
 
 
 def _sha256(path: Path) -> str:
@@ -103,6 +103,50 @@ def _ensure_safe_manifest_destination(root: Path, path: Path) -> None:
             raise ValueError(f"Integration manifest path escapes project root: {label}") from None
 
 
+def _read_manifest(path: Path) -> dict[str, Any]:
+    """Read and validate one manifest file."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"Integration manifest at {path} is not valid UTF-8") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Integration manifest at {path} contains invalid JSON") from exc
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"Integration manifest at {path} must be a JSON object, got {type(data).__name__}"
+        )
+    files = data.get("files", {})
+    if not isinstance(files, dict) or not all(
+        isinstance(k, str) and isinstance(v, str) for k, v in files.items()
+    ):
+        raise ValueError(
+            f"Integration manifest 'files' at {path} must be a "
+            "mapping of string paths to string hashes"
+        )
+    for field in ("recovered_files", "excluded"):
+        value = data.get(field, [])
+        if not isinstance(value, list) or not all(isinstance(p, str) for p in value):
+            raise ValueError(
+                f"Integration manifest '{field}' at {path} must be a list of string paths"
+            )
+    return data
+
+
+def _write_manifest(root: Path, path: Path, data: dict[str, Any]) -> None:
+    content = json.dumps(data, indent=2) + "\n"
+    _ensure_safe_manifest_destination(root, path)
+    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    temp_path = Path(temp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(content)
+        temp_path.chmod(0o644)
+        _ensure_safe_manifest_destination(root, path)
+        os.replace(temp_path, path)
+    finally:
+        temp_path.unlink(missing_ok=True)
+
+
 class IntegrationManifest:
     """Tracks files installed by a single integration.
 
@@ -128,6 +172,10 @@ class IntegrationManifest:
             else project_root.absolute()
         )
         self.metadata_root = workspace_root_for(self.project_root)
+        # Private mode: checkout files get their own manifest in the checkout (research D3).
+        self.private = self.metadata_root != self.project_root and is_private(self.metadata_root)
+        # Private mode: teardown removes only this checkout's files and keeps the shared workspace state.
+        self.checkout_only = False
         self.version = version
         self._files: dict[str, str] = {}  # rel_path → sha256 hex
         self._recovered_files: set[str] = set()
@@ -139,6 +187,19 @@ class IntegrationManifest:
     def manifest_path(self) -> Path:
         """Path to the on-disk manifest JSON."""
         return self.metadata_root / ".specify" / "integrations" / f"{self.key}.manifest.json"
+
+    @property
+    def checkout_manifest_path(self) -> Path:
+        """Private mode only: the manifest of the files in this checkout."""
+        return self.project_root / ".specify" / "integrations" / f"{self.key}.manifest.json"
+
+    def _checkout_manifest_file(self) -> Path:
+        current = self.project_root
+        for part in (".specify", "integrations", self.checkout_manifest_path.name):
+            current = current / part
+            if current.is_symlink():
+                raise ValueError(f"Refusing to use symlinked manifest path: {current}")
+        return current
 
     def _entry_root(self, rel: Path) -> Path:
         return self.metadata_root if rel.parts[:1] == (".specify",) else self.project_root
@@ -168,7 +229,7 @@ class IntegrationManifest:
         return root / rel
 
     def _ignore_entry_point(self, relative: str) -> None:
-        if self.metadata_root == self.project_root or relative.startswith(".specify/"):
+        if self.private or self.metadata_root == self.project_root or relative.startswith(".specify/"):
             return
         ignore = self.project_root / ".gitignore"
         if ignore.is_symlink():
@@ -177,6 +238,26 @@ class IntegrationManifest:
         entry = "/" + relative.replace("\\", "\\\\").replace(" ", "\\ ")
         if entry not in content.splitlines():
             ignore.write_text(content.rstrip("\n") + "\n" + entry + "\n", encoding="utf-8")
+
+    def exclude(self, relatives: list[str]) -> None:
+        """Hide checkout paths that Spec Kit writes outside this manifest's hash list.
+
+        Default mode appends them to ``.gitignore``. Private mode records them in
+        the checkout manifest's ``excluded`` list, which feeds the exclude block.
+        """
+        if not self.private:
+            for relative in relatives:
+                self._ignore_entry_point(relative)
+            return
+        path = self._checkout_manifest_file()
+        data = (
+            _read_manifest(path) if path.exists()
+            else {"integration": self.key, "version": self.version, "files": {}}
+        )
+        data["excluded"] = sorted(set(data.get("excluded", [])) | set(relatives))
+        _write_manifest(self.project_root, path, data)
+        from .._private_checkout import regenerate_exclude_block
+        regenerate_exclude_block(self.project_root)
 
     # -- Recording files --------------------------------------------------
 
@@ -364,6 +445,8 @@ class IntegrationManifest:
             rel_path = Path(rel)
             if rel_path.is_absolute() or rel_path.anchor or ".." in rel_path.parts or not rel_path.parts:
                 continue
+            if self.checkout_only and rel_path.parts[0] == ".specify":
+                continue
             root = resolver._entry_root(rel_path)
             path = root / rel_path
             try:
@@ -410,68 +493,83 @@ class IntegrationManifest:
                     break
                 parent = parent.parent
 
-        # Remove the manifest file itself
-        manifest = self.manifest_path
         if remove_manifest:
+            manifests: list[tuple[Path, Path]] = []
             try:
-                self.file_path(Path(".specify/integrations") / manifest.name, allow_symlink=True)
+                if not self.checkout_only:
+                    manifests.append((self.file_path(
+                        Path(".specify/integrations") / self.manifest_path.name, allow_symlink=True
+                    ), self.metadata_root))
+                if self.private:
+                    manifests.append((self._checkout_manifest_file(), self.project_root))
             except (ValueError, OSError):
-                skipped.append(manifest)
+                skipped.append(self.manifest_path if not manifests else self.checkout_manifest_path)
                 return removed, skipped
-        if remove_manifest and manifest.exists():
-            try:
-                manifest.unlink()
-            except OSError:
-                # An undeletable manifest (read-only file, a directory left at
-                # the path, a Windows lock) must not abort the uninstall after
-                # the tracked files were already removed: the caller would lose
-                # the (removed, skipped) result and never run its post-uninstall
-                # bookkeeping. Report it like any other file we could not
-                # remove, mirroring the path.unlink() guard above. The
-                # empty-parent cleanup below is left unconditional: with the
-                # manifest still on disk its parent is non-empty, so the first
-                # rmdir() raises and breaks immediately.
-                skipped.append(manifest)
-            parent = manifest.parent
-            while parent != self.metadata_root:
+            for manifest, root in manifests:
+                if not manifest.exists():
+                    continue
                 try:
-                    parent.rmdir()
+                    manifest.unlink()
                 except OSError:
-                    break
-                parent = parent.parent
+                    # An undeletable manifest (read-only file, a directory left at
+                    # the path, a Windows lock) must not abort the uninstall after
+                    # the tracked files were already removed: the caller would lose
+                    # the (removed, skipped) result and never run its post-uninstall
+                    # bookkeeping. Report it like any other file we could not
+                    # remove, mirroring the path.unlink() guard above. The
+                    # empty-parent cleanup below is left unconditional: with the
+                    # manifest still on disk its parent is non-empty, so the first
+                    # rmdir() raises and breaks immediately.
+                    skipped.append(manifest)
+                parent = manifest.parent
+                while parent != root:
+                    try:
+                        parent.rmdir()
+                    except OSError:
+                        break
+                    parent = parent.parent
+        if self.private:
+            from .._private_checkout import regenerate_exclude_block
+            regenerate_exclude_block(self.project_root)
 
         return removed, skipped
 
     # -- Persistence ------------------------------------------------------
 
     def save(self) -> Path:
-        """Write the manifest to disk.  Returns the manifest path."""
+        """Write the manifest to disk.  Returns the manifest path.
+
+        Private mode writes ``.specify/*`` keys to the workspace manifest and
+        all other keys to the checkout manifest, then regenerates the exclude block.
+        """
         self._installed_at = self._installed_at or datetime.now(timezone.utc).isoformat()
-        data: dict[str, Any] = {
-            "integration": self.key,
-            "version": self.version,
-            "installed_at": self._installed_at,
-            "files": self._files,
-            **(
-                {"recovered_files": sorted(self._recovered_files)}
-                if self._recovered_files
-                else {}
-            ),
-        }
-        path = self.manifest_path
-        content = json.dumps(data, indent=2) + "\n"
-        _ensure_safe_manifest_destination(self.metadata_root, path)
-        fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-        temp_path = Path(temp_name)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                fh.write(content)
-            temp_path.chmod(0o644)
-            _ensure_safe_manifest_destination(self.metadata_root, path)
-            os.replace(temp_path, path)
-        finally:
-            temp_path.unlink(missing_ok=True)
-        return path
+
+        def data(files: dict[str, str]) -> dict[str, Any]:
+            recovered = sorted(self._recovered_files & files.keys())
+            return {
+                "integration": self.key,
+                "version": self.version,
+                "installed_at": self._installed_at,
+                "files": files,
+                **({"recovered_files": recovered} if recovered else {}),
+            }
+
+        if not self.private:
+            _write_manifest(self.metadata_root, self.manifest_path, data(self._files))
+            return self.manifest_path
+        shared = {k: v for k, v in self._files.items() if k.startswith(".specify/")}
+        local = {k: v for k, v in self._files.items() if k not in shared}
+        _write_manifest(self.metadata_root, self.manifest_path, data(shared))
+        checkout = self._checkout_manifest_file()
+        local_data = data(local)
+        # Paths hidden by exclude() stay hidden until this checkout drops the integration.
+        excluded = _read_manifest(checkout).get("excluded", []) if checkout.exists() else []
+        if excluded:
+            local_data["excluded"] = excluded
+        _write_manifest(self.project_root, checkout, local_data)
+        from .._private_checkout import regenerate_exclude_block
+        regenerate_exclude_block(self.project_root)
+        return self.manifest_path
 
     @classmethod
     def load(
@@ -483,59 +581,31 @@ class IntegrationManifest:
     ) -> IntegrationManifest:
         """Load an existing manifest from disk.
 
-        Raises ``FileNotFoundError`` if the manifest does not exist.
+        In private mode, merge the workspace and checkout manifests. Either
+        may be absent. Raises ``FileNotFoundError`` if no manifest exists.
         """
         inst = cls(key, project_root, resolve_project_root=resolve_project_root)
         path = inst.file_path(Path(".specify/integrations") / inst.manifest_path.name)
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except UnicodeDecodeError as exc:
-            raise ValueError(
-                f"Integration manifest at {path} is not valid UTF-8"
-            ) from exc
-        except json.JSONDecodeError as exc:
-            raise ValueError(
-                f"Integration manifest at {path} contains invalid JSON"
-            ) from exc
-
-        if not isinstance(data, dict):
-            raise ValueError(
-                f"Integration manifest at {path} must be a JSON object, "
-                f"got {type(data).__name__}"
-            )
-
-        files = data.get("files", {})
-        if not isinstance(files, dict) or not all(
-            isinstance(k, str) and isinstance(v, str) for k, v in files.items()
-        ):
-            raise ValueError(
-                f"Integration manifest 'files' at {path} must be a "
-                "mapping of string paths to string hashes"
-            )
-
-        inst.version = data.get("version", "")
-        inst._installed_at = data.get("installed_at", "")
-        inst._files = files
-
-        recovered = data.get("recovered_files", [])
-        if not isinstance(recovered, list) or not all(
-            isinstance(p, str) for p in recovered
-        ):
-            raise ValueError(
-                f"Integration manifest 'recovered_files' at {path} must be a "
-                "list of string paths"
-            )
-        inst._recovered_files = set(recovered)
+        paths = [path]
+        if inst.private:
+            paths = [p for p in (path, inst._checkout_manifest_file()) if p.exists()]
+            if not paths:
+                raise FileNotFoundError(path)
+        for index, path in enumerate(paths):
+            data = _read_manifest(path)
+            stored_key = data.get("integration", "")
+            if stored_key and stored_key != key:
+                raise ValueError(
+                    f"Manifest at {path} belongs to integration {stored_key!r}, "
+                    f"not {key!r}"
+                )
+            if index == 0:
+                inst.version = data.get("version", "")
+                inst._installed_at = data.get("installed_at", "")
+            inst._files.update(data.get("files", {}))
+            inst._recovered_files.update(data.get("recovered_files", []))
         # Drop any recovered_files entries that don't correspond to tracked
         # files — defensive against externally-edited or partially-corrupted
         # manifests. Inconsistent state self-corrects on next save().
         inst._recovered_files &= set(inst._files.keys())
-
-        stored_key = data.get("integration", "")
-        if stored_key and stored_key != key:
-            raise ValueError(
-                f"Manifest at {path} belongs to integration {stored_key!r}, "
-                f"not {key!r}"
-            )
-
         return inst

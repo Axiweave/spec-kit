@@ -277,6 +277,11 @@ def register(app: typer.Typer) -> None:
             "--no-workspace-git",
             help="Skip creating an independent Git repository and initial commit for the external workspace.",
         ),
+        private: bool = typer.Option(
+            False,
+            "--private",
+            help="Hide Spec Kit files from Git in this checkout. Requires --storage external and a new workspace.",
+        ),
         feature_numbering: str = typer.Option(
             None, "--feature-numbering", help="Feature numbering mode: sequential or timestamp."
         ),
@@ -605,6 +610,15 @@ def register(app: typer.Typer) -> None:
         workspace_path = project.workspace_root
         project_locator = project.repository_root / ".specify" / "project.json"
         fresh_workspace_claim = project.project_id is not None and not project_locator.exists()
+        if private and project.project_id is None:
+            console.print("[red]Error:[/red] --private requires --storage external.")
+            raise typer.Exit(1)
+        if private and not fresh_workspace_claim:
+            console.print(
+                "[red]Error:[/red] Private mode is chosen when the workspace is created: "
+                f"{_escape_markup(str(workspace_path))}."
+            )
+            raise typer.Exit(1)
         run_workspace_git = fresh_workspace_claim and not no_workspace_git
         if run_workspace_git:
             try:
@@ -790,8 +804,23 @@ def register(app: typer.Typer) -> None:
         # hangs when Rich tries to restore cursor state via VT escape sequences.
         _transient = sys.platform != "win32"
 
+        if private:
+            from ._private_checkout import install_integration, plan_checkout_files, refuse_tracked
+
+            try:
+                refuse_tracked(project.repository_root, plan_checkout_files(
+                    lambda staged: install_integration(
+                        staged, resolved_integration, version=get_speckit_version(),
+                        script_type=selected_script, raw_options=integration_options,
+                        parsed_options=integration_parsed_options, global_commands=global_commands,
+                    )
+                ))
+            except (ValueError, OSError) as exc:
+                console.print(f"[red]Error:[/red] {_escape_markup(str(exc))}")
+                raise typer.Exit(1) from None
+
         try:
-            with claim_storage(project), Live(
+            with claim_storage(project, private=private), Live(
                 tracker.render(), console=console, refresh_per_second=8, transient=_transient
             ) as live:
                 tracker.attach_refresh(lambda: live.update(tracker.render()))

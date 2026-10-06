@@ -131,7 +131,8 @@ def integration_switch(
     # Phase 1: Uninstall current integration (if any)
     if installed_key:
         current_integration = get_integration(installed_key)
-        manifest_path = IntegrationManifest(installed_key, project_root).manifest_path
+        probe = IntegrationManifest(installed_key, project_root)
+        old_private, manifest_path = probe.private, probe.manifest_path
 
         if current_integration and manifest_path.exists():
             console.print(f"Uninstalling current integration: [cyan]{installed_key}[/cyan]")
@@ -145,6 +146,8 @@ def integration_switch(
                     f"run [cyan]specify integration uninstall {installed_key}[/cyan], then retry."
                 )
                 raise typer.Exit(1)
+            # Private mode: the old integration stays listed, so only this checkout's files go.
+            old_manifest.checkout_only = old_private
             removed, skipped = current_integration.teardown(
                 project_root, old_manifest, force=force,
             )
@@ -157,6 +160,7 @@ def integration_switch(
             console.print(f"Uninstalling unknown integration '{installed_key}' via manifest")
             try:
                 old_manifest = IntegrationManifest.load(installed_key, project_root)
+                old_manifest.checkout_only = old_private
                 removed, skipped = old_manifest.uninstall(project_root, force=force)
                 if removed:
                     console.print(f"  Removed {len(removed)} file(s)")
@@ -193,35 +197,37 @@ def integration_switch(
             continuing="Continuing with integration switch; old preset artifacts may need manual cleanup.",
         )
 
-        # Clear metadata so a failed Phase 2 doesn't leave stale references
-        installed_keys = [installed for installed in installed_keys if installed != installed_key]
-        _clear_init_options_for_integration(project_root, installed_key)
-        if installed_keys:
-            fallback_key = installed_keys[0]
-            fallback_integration = get_integration(fallback_key)
-            if fallback_integration is not None:
-                (
-                    fallback_raw_options,
-                    fallback_parsed_options,
-                ) = _resolve_integration_options(
-                    fallback_integration, current, fallback_key, None
-                )
-                _set_default_integration_or_exit(
-                    project_root,
-                    current,
-                    fallback_key,
-                    fallback_integration,
-                    installed_keys,
-                    raw_options=fallback_raw_options,
-                    parsed_options=fallback_parsed_options,
-                )
+        # Clear metadata so a failed Phase 2 doesn't leave stale references.
+        # Private mode keeps the old integration listed for the other checkouts.
+        if not old_private:
+            installed_keys = [installed for installed in installed_keys if installed != installed_key]
+            _clear_init_options_for_integration(project_root, installed_key)
+            if installed_keys:
+                fallback_key = installed_keys[0]
+                fallback_integration = get_integration(fallback_key)
+                if fallback_integration is not None:
+                    (
+                        fallback_raw_options,
+                        fallback_parsed_options,
+                    ) = _resolve_integration_options(
+                        fallback_integration, current, fallback_key, None
+                    )
+                    _set_default_integration_or_exit(
+                        project_root,
+                        current,
+                        fallback_key,
+                        fallback_integration,
+                        installed_keys,
+                        raw_options=fallback_raw_options,
+                        parsed_options=fallback_parsed_options,
+                    )
+                else:
+                    _write_integration_json(
+                        project_root, fallback_key, installed_keys, _integration_settings(current)
+                    )
             else:
-                _write_integration_json(
-                    project_root, fallback_key, installed_keys, _integration_settings(current)
-                )
-        else:
-            _remove_integration_json(project_root)
-        current = _read_integration_json(project_root)
+                _remove_integration_json(project_root)
+            current = _read_integration_json(project_root)
 
     # Refresh shared infrastructure to the current CLI version. Switching
     # integrations is exactly when stale vendored shared scripts (e.g.
