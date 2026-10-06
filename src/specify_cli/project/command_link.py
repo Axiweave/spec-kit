@@ -95,11 +95,15 @@ def register(app: typer.Typer) -> None:
                 except ValueError:
                     # An explicit link repairs a broken machine record after identity validation.
                     pass
-            atomic_json(record_path, {"schema_version": 1, "workspace": str(workspace), "active_feature": active})
+            plan = None
             if is_private(workspace):
                 from .._assets import get_speckit_version
-                from .._private_checkout import reconcile_checkout
-                reconcile_checkout(repository, version=get_speckit_version())
+                from .._private_checkout import plan_reconcile, reconcile_checkout
+                version = get_speckit_version()
+                plan = plan_reconcile(repository, workspace, version=version)
+            atomic_json(record_path, {"schema_version": 1, "workspace": str(workspace), "active_feature": active})
+            if plan is not None:
+                reconcile_checkout(repository, *plan, version=version)
         except (OSError, ValueError) as exc:
             typer.echo(f"Error: {exc}", err=True)
             raise typer.Exit(1) from exc

@@ -221,20 +221,20 @@ def remove_checkout_integration(checkout: Path, key: str, *, force: bool = False
     return integration.teardown(checkout, manifest, force=force)
 
 
-def reconcile_checkout(checkout: Path, *, version: str) -> None:
-    """Make *checkout*'s integration files match the integrations that the workspace lists.
+def plan_reconcile(checkout: Path, workspace: Path, *, version: str) -> tuple[list[str], list[str]]:
+    """Return the integration keys to remove from and install into *checkout*.
 
-    Install the missing ones, reinstall the ones whose version differs from the
-    workspace manifest, and remove the ones that the workspace no longer lists.
+    Remove the ones that the workspace no longer lists and the ones whose version
+    differs from the workspace manifest. Install the missing and the stale ones.
+    Refuse before any write when an install target is tracked.
     """
     from .integration_state import installed_integration_keys, try_read_integration_json
-    from .workspace import workspace_root_for
 
-    state, error = try_read_integration_json(checkout)
+    state, error = try_read_integration_json(workspace)
     if error is not None:
         raise ValueError(f"Cannot read the workspace integration state: {error.detail}")
     listed = installed_integration_keys(state or {})
-    shared = workspace_root_for(checkout) / ".specify/integrations"
+    shared = workspace / ".specify/integrations"
     present = {path.name.removesuffix(".manifest.json"): read_json(path).get("version")
                for path in (checkout / ".specify/integrations").glob("*.manifest.json")}
     stale = [
@@ -245,10 +245,14 @@ def reconcile_checkout(checkout: Path, *, version: str) -> None:
     install = [key for key in listed if key not in present or key in stale]
     if install:
         refuse_tracked(checkout, plan_checkout_files(
-            lambda staged: attach_integrations(staged, install, version=version),
-            workspace=workspace_root_for(checkout),
+            lambda staged: attach_integrations(staged, install, version=version), workspace=workspace,
         ))
-    for key in sorted(set(present) - set(listed)) + stale:
+    return sorted(set(present) - set(listed)) + stale, install
+
+
+def reconcile_checkout(checkout: Path, remove: Iterable[str], install: list[str], *, version: str) -> None:
+    """Apply a plan from `plan_reconcile` to *checkout*."""
+    for key in remove:
         remove_checkout_integration(checkout, key)
     attach_integrations(checkout, install, version=version)
     regenerate_exclude_block(checkout)

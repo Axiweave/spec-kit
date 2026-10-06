@@ -11,6 +11,7 @@ from typer.testing import CliRunner
 
 from specify_cli import app
 
+from specify_cli.workspace import project_record_path
 from specify_cli.workspace_git import initialize_workspace_git
 
 PROJECT_ID = "550e8400-e29b-41d4-a716-446655440000"
@@ -546,3 +547,26 @@ def test_link_reconciles_attached_checkout_with_workspace(private_project, monke
     assert json.loads(checkout_manifest.read_text(encoding="utf-8"))["version"] == shared["version"]
     assert (worktree / ".claude/skills/speckit-plan/SKILL.md").is_file()
     assert _status(worktree) == "" and _status(main) == ""
+
+
+def test_attached_link_refusal_leaves_machine_record_unchanged(private_project, monkeypatch):
+    main, workspace, worktree, _ = private_project
+    monkeypatch.chdir(worktree)
+    assert CliRunner().invoke(app, ["project", "link", str(workspace)]).exit_code == 0
+    (worktree / ".agents/skills/speckit-plan").mkdir(parents=True)
+    (worktree / ".agents/skills/speckit-plan/SKILL.md").write_text("team\n", encoding="utf-8")
+    _git(worktree, "add", "-A")
+    _git(worktree, "commit", "-q", "-m", "team skill")
+    state_path = workspace / ".specify/integration.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state_path.write_text(json.dumps({**state, "installed_integrations": ["claude", "codex"]}), encoding="utf-8")
+    record = project_record_path(json.loads((worktree / ".specify/project.json").read_text())["project_id"])
+    record.write_text(json.dumps({"schema_version": 1, "workspace": str(workspace), "active_feature": "gone"}))
+    before = record.read_bytes()
+
+    result = CliRunner().invoke(app, ["project", "link", str(workspace)])
+
+    assert result.exit_code == 1
+    assert "Spec Kit would change tracked file .agents/skills/speckit-plan/SKILL.md." in result.output.replace("\n", "")
+    assert record.read_bytes() == before
+    assert not (worktree / ".specify/integrations/codex.manifest.json").exists()
