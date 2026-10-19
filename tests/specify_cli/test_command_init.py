@@ -741,28 +741,25 @@ def test_integration_environment_overrides_defaults_but_not_explicit_choice(
 
 
 @pytest.mark.parametrize("personal", [False, True], ids=["no-personal-default", "personal-default"])
-def test_integration_environment_only_preselects_the_interactive_menu(
+def test_integration_environment_supplies_the_interactive_choice(
     tmp_path: Path, saved_init_defaults: Path, monkeypatch: pytest.MonkeyPatch, personal: bool,
 ):
-    """Upstream semantics: the environment default never skips the interactive integration choice."""
+    """Spec 001 FR-018: an applicable environment override supplies the integration, so setup never asks."""
     defaults = json.loads(saved_init_defaults.read_text(encoding="utf-8"))
     if not personal:
         del defaults["integration"]
     saved_init_defaults.write_text(json.dumps(defaults), encoding="utf-8")
     monkeypatch.setenv("SPECKIT_INTEGRATION_DEFAULT", "claude")
-    preselected = []
 
     def choose(choices, prompt, default, **kwargs):
-        assert "copilot" in choices and "omp" in choices
-        preselected.append(default)
-        return "copilot"
+        assert "omp" not in choices, "The integration prompt must not appear."
+        return default
 
     monkeypatch.setattr("specify_cli.command_init._prompts_allowed", lambda non_interactive: not non_interactive)
     monkeypatch.setattr("specify_cli.command_init.select_with_arrows", choose)
     result = _init(tmp_path, "project", integration=None, interactive=True)
     assert result.exit_code == 0, _strip(result.output)
-    assert preselected == ["claude"]
-    assert _init_choices(resolve_project(tmp_path / "project").workspace_root)["integration"] == "copilot"
+    assert _init_choices(resolve_project(tmp_path / "project").workspace_root)["integration"] == "claude"
 
 
 def test_interactive_storage_choice_defaults_to_local(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

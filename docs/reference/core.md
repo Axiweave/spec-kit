@@ -32,7 +32,7 @@ Creates a new Spec Kit project with the necessary directory structure, templates
 Use `<project_name>` to create a new directory, or `--here` (or `.`) to initialize in the current directory. If the directory already has files, use `--force` to merge without confirmation.
 
 For new projects, setup uses explicit options, then the integration environment override, then personal defaults.
-In an interactive terminal, `SPECKIT_INTEGRATION_DEFAULT` only preselects the integration prompt.
+`SPECKIT_INTEGRATION_DEFAULT` supplies the integration, so setup does not ask for it.
 Unset choices prompt in interactive terminals. The storage prompt defaults to local storage.
 Non-interactive setup uses local storage, sequential numbering, the platform script type, and GitHub Copilot when no other choice applies.
 When `--integration` is omitted, `--global-commands` selects `omp`. Reinitialization keeps the project's saved integration.
@@ -623,7 +623,7 @@ Other integrations do not support `--global` or `--global-commands`.
 
 | Variable          | Description                                                              |
 | ----------------- | ------------------------------------------------------------------------ |
-| `SPECKIT_INTEGRATION_DEFAULT` | Set the integration for a new project when `--integration` is omitted. In an interactive terminal, the integration prompt still appears and preselects this value. Non-interactive setup uses it. It outranks a personal `integration` default. Set it to any registered integration key (e.g. `gemini`, `claude`). An unrecognized value is ignored with a warning and the built-in default (`copilot`) is used. An explicit `--integration <key>` always takes precedence. |
+| `SPECKIT_INTEGRATION_DEFAULT` | Set the integration for a new project when `--integration` is omitted. Setup uses it without an integration prompt, in interactive and non-interactive runs. It outranks a personal `integration` default. Set it to any registered integration key (e.g. `gemini`, `claude`). An unrecognized value is ignored with a warning and the built-in default (`copilot`) is used. An explicit `--integration <key>` always takes precedence. |
 | `SPECIFY_INIT_DIR` | Select the code repository explicitly, including from a monorepo root. Relative values resolve from cwd. The directory must contain `.specify/`. Invalid values fail without fallback. Without the override, core scripts and project CLI commands search upward from cwd. |
 | `SPECIFY_FEATURE_DIRECTORY` | Override saved feature selection. Relative paths join the workspace. External selections must stay inside that workspace. Local mode does not confine the value: a relative path such as `../shared-feature` or an absolute path can select a directory outside the project. |
 | `SPECIFY_FEATURE` | Override the reported feature label, independently of Git. This does not select a feature directory. Use `SPECIFY_FEATURE_DIRECTORY` or saved feature selection for that purpose. |

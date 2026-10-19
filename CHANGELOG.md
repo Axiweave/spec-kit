@@ -24,7 +24,7 @@
 - `specify project recover` only lists leftovers without `--apply`. It refuses running or unknown owners and never reverses a finished rename or merge. Recovery stores no SHA-256 evidence.
 - Check project identity in `specify project merge-specs` and keep its recovery journal correct.
 - Stop the repository search at the home directory. Detect reftable Git repositories.
-- Apply init options in the documented order. `SPECKIT_INTEGRATION_DEFAULT` again preselects the interactive integration prompt instead of skipping it. The interactive storage prompt defaults to local storage.
+- Apply init options in the documented order. The interactive storage prompt defaults to local storage.
 - Create workspace Git history for bundle setup. Read legacy registry records. Keep composed preset files.
 - Accept `--version` for vendored extensions only when it equals the shipped version.
 - Align Bash, PowerShell, and Python helper script behavior.

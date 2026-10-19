@@ -456,9 +456,10 @@ def register(app: typer.Typer) -> None:
             defaults = (load_init_options(repository) or {}) if existing_project else load_defaults()
             if global_commands:
                 integration = integration or "omp"
-            # SPECKIT_INTEGRATION_DEFAULT outranks a personal default, but only as the prompt's preselection.
-            if existing_project or not os.environ.get("SPECKIT_INTEGRATION_DEFAULT", "").strip():
-                integration = integration or defaults.get("integration") or defaults.get("ai")
+            # FR-017/FR-018: the environment override supplies the integration and outranks a personal default.
+            if not integration and not existing_project and os.environ.get("SPECKIT_INTEGRATION_DEFAULT", "").strip():
+                integration = resolve_default_init_integration()
+            integration = integration or defaults.get("integration") or defaults.get("ai")
             script_type = script_type or defaults.get("script")
             feature_numbering = feature_numbering or defaults.get("feature_numbering")
             if feature_selection is None:
