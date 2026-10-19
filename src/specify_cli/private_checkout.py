@@ -63,8 +63,6 @@ def regenerate_exclude_block(checkout: Path, *, create: bool = True) -> None:
     if not _git_root(checkout):
         return
     path = exclude_path(checkout)
-    if path.is_symlink():
-        raise ValueError(f"Refusing a symlinked exclude file: {path}")
     text = path.read_bytes().decode("utf-8") if path.exists() else ""
     newline = "\r\n" if "\r\n" in text else "\n"
     before, after, inside, found = [], [], False, False
@@ -103,9 +101,6 @@ def refuse_tracked(checkout: Path, paths: Iterable[str]) -> None:
             f"Private mode needs the project at the Git top level, not in a subdirectory: {checkout}. "
             "Use the default external mode."
         )
-    exclude = exclude_path(checkout)
-    if exclude.is_symlink():
-        raise PrivateModeError(f"Refusing a symlinked exclude file: {exclude}")
     paths = sorted(set(paths))
     if not paths:
         return

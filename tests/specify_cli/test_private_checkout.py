@@ -159,17 +159,20 @@ def test_missing_info_directory_is_created(tmp_path: Path):
     assert _block(main) == ["/.specify/"]
 
 
-def test_symlinked_exclude_file_is_refused(tmp_path: Path):
+def test_symlinked_exclude_file_gets_the_block_in_its_target(tmp_path: Path):
+    """Git follows a symlinked exclude file, so the block goes into the target and the link stays."""
     main = _repo(tmp_path / "main")
     path = exclude_path(main)
-    target = tmp_path / "elsewhere"
-    target.write_text("", encoding="utf-8")
+    target = main / ".gitignore.local"
+    target.write_text(".gitignore.local\nnotes/\n", encoding="utf-8")
     path.unlink()
-    path.symlink_to(target)
+    path.symlink_to(Path("../..") / ".gitignore.local")
     _attach(main)
-    with pytest.raises(ValueError, match="symlinked exclude file"):
-        regenerate_exclude_block(main)
-    assert target.read_text(encoding="utf-8") == ""
+    regenerate_exclude_block(main)
+    assert path.is_symlink()
+    assert target.read_text(encoding="utf-8").startswith(".gitignore.local\nnotes/\n")
+    assert _block(main) == ["/.specify/"]
+    assert _git(main, "status", "--porcelain", "--untracked-files=all") == ""
 
 
 def test_not_a_git_repository_is_a_no_op(tmp_path: Path):
@@ -346,19 +349,6 @@ def test_rules_match_names_with_glob_characters_literally(tmp_path: Path):
         (main / name).write_text("x", encoding="utf-8")
     status = _git(main, "status", "--porcelain", "--untracked-files=all")
     assert sorted(line[3:] for line in status.splitlines()) == ["ab.md", "x.md"]
-
-
-def test_refuse_tracked_refuses_a_symlinked_exclude_file_before_any_write(tmp_path: Path):
-    main = _repo(tmp_path / "main")
-    refuse_tracked(main, [])
-    path = exclude_path(main)
-    target = tmp_path / "elsewhere"
-    target.write_text("", encoding="utf-8")
-    path.unlink()
-    path.symlink_to(target)
-    with pytest.raises(ValueError, match="symlinked exclude file"):
-        refuse_tracked(main, [])
-    assert target.read_text(encoding="utf-8") == ""
 
 
 def test_private_mode_refuses_a_git_subdirectory(tmp_path: Path, isolated_home, monkeypatch):
