@@ -10,8 +10,8 @@ from uuid import uuid4
 import pytest
 
 from specify_cli.private_checkout import (
-    BEGIN, END, attach_integrations, exclude_path, install_integration, plan_checkout_files, plan_reconcile,
-    refuse_tracked, regenerate_exclude_block,
+    BEGIN, END, _isolated_user_dirs, attach_integrations, exclude_path, install_integration, plan_checkout_files,
+    plan_reconcile, refuse_tracked, regenerate_exclude_block, restore_checkout, restore_workspace_files,
 )
 from specify_cli.integration_runtime import parse_integration_options
 from specify_cli.integrations import INTEGRATION_REGISTRY
@@ -308,3 +308,211 @@ def test_reconcile_keeps_a_modified_file_of_a_stale_integration(tmp_path, isolat
     ) in result.output
     assert skill.read_text(encoding="utf-8") == "# Mine\n"
     assert json.loads(local.read_text(encoding="utf-8"))["version"] == "0"
+
+
+def _cli(monkeypatch, directory: Path, *args: str):
+    from typer.testing import CliRunner
+
+    from specify_cli import app
+
+    monkeypatch.chdir(directory)
+    return CliRunner().invoke(app, list(args))
+
+
+def _init(monkeypatch, checkout: Path, workspace: Path, *options: str):
+    return _cli(
+        monkeypatch, checkout, "init", "--here", "--force", "--ignore-agent-tools", "--offline", "--non-interactive",
+        "--workspace", str(workspace), "--script", "sh", "--no-workspace-git", *options,
+    )
+
+
+def test_begin_marker_without_end_refuses_and_keeps_user_lines(tmp_path: Path):
+    main = _repo(tmp_path / "main")
+    path = exclude_path(main)
+    original = f"# user\n{BEGIN}\n/.specify/\n# later user line\n/build/\n".encode()
+    path.write_bytes(original)
+    _attach(main)
+    with pytest.raises(ValueError, match=r"exclude.*Fix these markers"):
+        regenerate_exclude_block(main)
+    assert path.read_bytes() == original
+
+
+def test_rules_match_names_with_glob_characters_literally(tmp_path: Path):
+    main = _repo(tmp_path / "main")
+    names = ["a*.md", "[x].md", "#c.md", "!d.md"]
+    _attach(main, files=names)
+    regenerate_exclude_block(main)
+    for name in [*names, "ab.md", "x.md"]:
+        (main / name).write_text("x", encoding="utf-8")
+    status = _git(main, "status", "--porcelain", "--untracked-files=all")
+    assert sorted(line[3:] for line in status.splitlines()) == ["ab.md", "x.md"]
+
+
+def test_refuse_tracked_refuses_a_symlinked_exclude_file_before_any_write(tmp_path: Path):
+    main = _repo(tmp_path / "main")
+    refuse_tracked(main, [])
+    path = exclude_path(main)
+    target = tmp_path / "elsewhere"
+    target.write_text("", encoding="utf-8")
+    path.unlink()
+    path.symlink_to(target)
+    with pytest.raises(ValueError, match="symlinked exclude file"):
+        refuse_tracked(main, [])
+    assert target.read_text(encoding="utf-8") == ""
+
+
+def test_private_mode_refuses_a_git_subdirectory(tmp_path: Path, isolated_home, monkeypatch):
+    main = _repo(tmp_path / "main")
+    sub = main / "sub"
+    sub.mkdir()
+    refuse_tracked(main, [])
+    with pytest.raises(ValueError, match="Git top level"):
+        refuse_tracked(sub, [])
+
+    result = _init(monkeypatch, sub, tmp_path / "ws", "--integration", "claude", "--private")
+    assert result.exit_code != 0
+    assert "Git top level" in " ".join(result.output.split())
+    assert list(sub.iterdir()) == []
+
+    workspace = _private_workspace(tmp_path / "linked", "claude")
+    with pytest.raises(ValueError, match="Git top level"):
+        plan_reconcile(sub, workspace, version="1")
+
+
+def test_dry_run_keeps_omp_out_of_the_real_agent_directories(tmp_path, isolated_home, monkeypatch):
+    from specify_cli.integrations.omp.global_commands import command_directory
+
+    agent, config = tmp_path / "pi-agent", tmp_path / "pi-config"
+    monkeypatch.setenv("PI_CODING_AGENT_DIR", str(agent))
+    monkeypatch.setenv("PI_CONFIG_DIR", str(config))
+    environment = dict(os.environ)
+    with _isolated_user_dirs(tmp_path / "sandbox"):
+        assert command_directory().is_relative_to(tmp_path / "sandbox")
+    plan_checkout_files(lambda staged: install_integration(
+        staged, INTEGRATION_REGISTRY["omp"], version="1", script_type="sh", global_commands=True,
+    ))
+    assert dict(os.environ) == environment
+    assert not agent.exists() and not (isolated_home / "pi-config").exists()
+
+
+def test_restore_installs_user_wide_commands_in_the_real_home_only(tmp_path, isolated_home, monkeypatch):
+    from specify_cli.integrations.hermes import HermesIntegration
+    from specify_cli.integrations.omp.global_commands import command_directory, uninstall_global_commands
+
+    checkout, workspace = _repo(tmp_path / "code"), tmp_path / "ws"
+    result = _init(monkeypatch, checkout, workspace, "--integration", "omp", "--global-commands")
+    assert result.exit_code == 0, result.output
+    result = _cli(monkeypatch, checkout, "integration", "install", "hermes", "--force")
+    assert result.exit_code == 0, result.output
+    # A second machine: a new home, and user data folders outside it.
+    home = tmp_path / "second home"
+    home.mkdir()
+    for name, value in {
+        "HOME": home, "USERPROFILE": home, "XDG_CONFIG_HOME": tmp_path / "xdg/config",
+        "XDG_DATA_HOME": tmp_path / "xdg/data", "APPDATA": tmp_path / "xdg/config", "LOCALAPPDATA": tmp_path / "xdg/data",
+    }.items():
+        monkeypatch.setenv(name, str(value))
+
+    restore_checkout(checkout, workspace.resolve(), None)
+
+    launchers = sorted(path.name for path in command_directory().glob("*.md"))
+    assert "speckit.plan.md" in launchers
+    assert (HermesIntegration.global_skills_dir() / "speckit-plan/SKILL.md").is_file()
+    assert {path.relative_to(home).parts[0] for path in home.rglob("*")} == {".omp", ".hermes"}
+    removed, conflicts = uninstall_global_commands()  # The launchers have a real ownership record.
+    assert sorted(path.name for path in removed) == launchers and conflicts == []
+
+
+def test_restore_workspace_files_restores_missing_helpers_only(tmp_path, isolated_home, monkeypatch):
+    checkout, workspace = _repo(tmp_path / "code"), tmp_path / "ws"
+    result = _init(monkeypatch, checkout, workspace, "--integration", "claude", "--private")
+    assert result.exit_code == 0, result.output
+    workspace = workspace.resolve()
+    missing = [".specify/scripts/bash/common.sh", ".specify/templates/plan-template.md"]
+    original = {name: (workspace / name).read_bytes() for name in missing}
+    for name in missing:
+        (workspace / name).unlink()
+    edited = workspace / ".specify/templates/spec-template.md"
+    edited.write_text("# Mine\n", encoding="utf-8")
+    checkout_before = _snapshot(checkout)
+
+    assert sorted(restore_workspace_files(workspace)) == missing
+
+    assert {name: (workspace / name).read_bytes() for name in missing} == original
+    assert edited.read_text(encoding="utf-8") == "# Mine\n"
+    assert _snapshot(checkout) == checkout_before
+    before = _snapshot(workspace)
+    assert restore_workspace_files(workspace) == []
+    assert _snapshot(workspace) == before
+
+
+@pytest.mark.parametrize(("key", "layout"), [
+    ("claude", ".claude/skills/speckit-{}/SKILL.md"), ("gemini", ".gemini/commands/speckit.{}.toml"),
+])
+@pytest.mark.parametrize("route", ["init", "extension-add"])
+def test_private_extension_commands_refuse_a_tracked_target(tmp_path, isolated_home, monkeypatch, route, key, layout):
+    checkout, workspace = _repo(tmp_path / "code"), tmp_path / "ws"
+    name = layout.format("git-feature" if key == "claude" else "git.feature")
+    tracked = checkout / name
+    tracked.parent.mkdir(parents=True)
+    tracked.write_text("team\n", encoding="utf-8")
+    _git(checkout, "add", "-A")
+    _git(checkout, "commit", "-q", "-m", "team command")
+    options = ("--integration", key, "--private")
+
+    if route == "init":
+        _init(monkeypatch, checkout, workspace, *options, "--extension", "git")
+    else:
+        assert _init(monkeypatch, checkout, workspace, *options).exit_code == 0
+        result = _cli(monkeypatch, checkout, "extension", "add", "git")
+        assert result.exit_code == 1
+        assert f"tracked file {name}" in " ".join(result.output.split())
+
+    assert tracked.read_text(encoding="utf-8") == "team\n"
+    assert not (checkout / layout.format("git-commit" if key == "claude" else "git.commit")).exists()
+    assert (checkout / layout.format("plan")).is_file()
+    assert not (workspace / ".specify/extensions/git").exists()
+    registry = workspace / ".specify/extensions/.registry"
+    assert "git" not in (json.loads(registry.read_text(encoding="utf-8")).get("extensions", {}) if registry.exists() else {})
+
+
+@pytest.mark.parametrize("tracked", [True, False])
+def test_private_preset_skills_refuse_a_tracked_target_and_hide_the_rest(tmp_path, isolated_home, monkeypatch, tracked):
+    import yaml
+
+    checkout, workspace = _repo(tmp_path / "code"), tmp_path / "ws"
+    skill = checkout / ".github/skills/speckit-team-review/SKILL.md"
+    if tracked:
+        skill.parent.mkdir(parents=True)
+        skill.write_text("team\n", encoding="utf-8")
+        _git(checkout, "add", "-A")
+        _git(checkout, "commit", "-q", "-m", "team skill")
+    result = _init(
+        monkeypatch, checkout, workspace, "--integration", "copilot", "--integration-options", "--skills", "--private",
+    )
+    assert result.exit_code == 0, result.output
+    source = tmp_path / "preset"
+    (source / "commands").mkdir(parents=True)
+    (source / "commands/speckit.team.review.md").write_text("---\ndescription: Review\n---\nReview.\n", encoding="utf-8")
+    (source / "preset.yml").write_text(yaml.dump({
+        "schema_version": "1.0",
+        "preset": {"id": "team", "name": "Team", "version": "1.0.0", "description": "Team commands"},
+        "requires": {"speckit_version": ">=0.1.0"},
+        "provides": {"templates": [
+            {"type": "command", "name": "speckit.team.review", "file": "commands/speckit.team.review.md"},
+        ]},
+    }), encoding="utf-8")
+
+    result = _cli(monkeypatch, checkout, "preset", "add", "--dev", str(source))
+
+    registry = workspace / ".specify/presets/.registry"
+    installed = json.loads(registry.read_text(encoding="utf-8")).get("presets", {}) if registry.exists() else {}
+    if tracked:
+        assert result.exit_code == 1
+        assert "tracked file .github/skills/speckit-team-review/SKILL.md" in " ".join(result.output.split())
+        assert skill.read_text(encoding="utf-8") == "team\n"
+        assert not (workspace / ".specify/presets/team").exists() and "team" not in installed
+    else:
+        assert result.exit_code == 0, result.output
+        assert skill.is_file() and "team" in installed
+        assert _git(checkout, "status", "--porcelain", "--untracked-files=all") == ""

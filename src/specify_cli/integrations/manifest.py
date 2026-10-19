@@ -515,7 +515,16 @@ class IntegrationManifest:
                         Path(".specify/integrations") / self.manifest_path.name, allow_symlink=True
                     ), self.metadata_root))
                 if self.private:
-                    manifests.append((self._checkout_manifest_file(), self.project_root))
+                    checkout = self._checkout_manifest_file()
+                    # Hide the excluded files that stay, such as extension commands, until they go.
+                    kept = [
+                        relative for relative in _read_manifest(checkout).get("excluded", [])
+                        if os.path.lexists(self.project_root / relative)
+                    ] if checkout.exists() else []
+                    if kept:
+                        write_manifest(self.project_root, checkout, {"integration": self.key, "excluded": kept})
+                    else:
+                        manifests.append((checkout, self.project_root))
             except (ValueError, OSError):
                 skipped.append(self.manifest_path if not manifests else self.checkout_manifest_path)
                 return removed, skipped
@@ -547,6 +556,21 @@ class IntegrationManifest:
             regenerate_exclude_block(self.project_root)
 
         return removed, skipped
+
+    def prune_exclusions(self) -> None:
+        """Drop gone paths from an exclusions-only checkout manifest, and the manifest once it is empty."""
+        if not self.private:
+            return
+        checkout = self._checkout_manifest_file()
+        if not checkout.exists() or "files" in (data := _read_manifest(checkout)):
+            return
+        kept = [relative for relative in data.get("excluded", []) if os.path.lexists(self.project_root / relative)]
+        if kept:
+            write_manifest(self.project_root, checkout, {"integration": self.key, "excluded": kept})
+        else:
+            checkout.unlink()
+        from ..private_checkout import regenerate_exclude_block
+        regenerate_exclude_block(self.project_root)
 
     # -- Persistence ------------------------------------------------------
 

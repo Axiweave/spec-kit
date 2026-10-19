@@ -21,7 +21,8 @@ from .invocation_style import get_invocation_prefix
 from .toml_string import escape_toml_basic as _escape_toml_basic
 from .toml_string import has_illegal_toml_control as _has_illegal_toml_control
 from ._utils import relative_extension_path_violation
-from .workspace import confined, workspace_root_for
+from .private_checkout import PrivateModeError
+from .workspace import confined, is_private, workspace_root_for
 
 
 def _build_agent_configs() -> dict[str, Any]:
@@ -835,6 +836,26 @@ class CommandRegistrar:
         commands_dir = _resolved_dir or self._resolve_agent_dir(
             agent_name, agent_config, project_root,
         )
+        workspace = workspace_root_for(project_root)
+
+        def outputs(name: str) -> list[str]:
+            """Return the checkout paths that registering *name* writes."""
+            path = commands_dir / f"{self.compute_output_name(agent_name, name, agent_config)}{agent_config['extension']}"
+            paths = [path.relative_to(project_root).as_posix()] if path.is_relative_to(project_root) else []
+            if agent_name == "copilot":
+                paths.append(f".github/prompts/{name}.prompt.md")
+            return paths
+
+        if workspace != project_root and is_private(workspace):
+            from .private_checkout import refuse_tracked
+
+            targets = []
+            for command in commands:
+                aliases = command.get("aliases")
+                for name in (command.get("name"), *(aliases if isinstance(aliases, list) else ())):
+                    if not relative_extension_path_violation(name):
+                        targets.extend(outputs(name))
+            refuse_tracked(project_root, targets)
         commands_dir.mkdir(parents=True, exist_ok=True)
 
         registered = []
@@ -1139,18 +1160,12 @@ class CommandRegistrar:
                     self.write_copilot_prompt(project_root, alias)
                 registered.append(alias)
 
-        if workspace_root_for(project_root) != project_root:
+        if workspace != project_root:
             from .integrations.manifest import IntegrationManifest
 
-            hidden: list[str] = []
-            for name in registered:
-                output_name = self.compute_output_name(agent_name, name, agent_config)
-                path = commands_dir / f"{output_name}{agent_config['extension']}"
-                if path.is_relative_to(project_root):
-                    hidden.append(path.relative_to(project_root).as_posix())
-                if agent_name == "copilot":
-                    hidden.append(f".github/prompts/{name}.prompt.md")
-            IntegrationManifest(agent_name, project_root).exclude(hidden)
+            IntegrationManifest(agent_name, project_root).exclude(
+                [path for name in registered for path in outputs(name)]
+            )
 
         return registered
 
@@ -1413,6 +1428,8 @@ class CommandRegistrar:
                         active_created_skills_dir = (
                             recovered_active_skills_dir or agent_dir
                         )
+                except PrivateModeError:
+                    raise
                 except ValueError:
                     continue
                 except OSError:
@@ -1506,6 +1523,8 @@ class CommandRegistrar:
                     )
                     if registered:
                         results[agent_name] = registered
+                except PrivateModeError:
+                    raise
                 except ValueError:
                     continue
         return results

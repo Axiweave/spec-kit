@@ -105,6 +105,40 @@ def test_default_uninstall_without_checkout_files_succeeds(checkouts, monkeypatc
     assert _listed(workspace) == ["claude"]
     assert _clean(main, worktree)
 
+def test_default_uninstall_keeps_remaining_extension_files_hidden(checkouts, monkeypatch):
+    main, worktree, workspace = checkouts
+    code, output = _run(monkeypatch, worktree, "extension", "add", "git")
+    assert code == 0, output
+    extension_skill = worktree / ".claude/skills/speckit-git-commit/SKILL.md"
+    assert extension_skill.is_file()
+    assert _clean(main, worktree)
+
+    code, output = _run(monkeypatch, worktree, "integration", "uninstall", "claude")
+
+    assert code == 0, output
+    assert not (worktree / SKILL).exists() and extension_skill.is_file()
+    assert _clean(main, worktree)
+    code, output = _run(monkeypatch, worktree, "integration", "install", "claude")
+    assert code == 0, output
+    assert (worktree / SKILL).is_file()
+    assert _clean(main, worktree)
+
+def test_project_uninstall_drops_the_exclusions_of_removed_extension_files(checkouts, monkeypatch):
+    main, worktree, workspace = checkouts
+    code, output = _run(monkeypatch, worktree, "extension", "add", "git")
+    assert code == 0, output
+    extension_skill = worktree / ".claude/skills/speckit-git-commit/SKILL.md"
+
+    code, output = _run(monkeypatch, worktree, "integration", "uninstall", "claude", "--project")
+
+    assert code == 0, output
+    assert not extension_skill.exists()
+    assert not (worktree / ".specify/integrations/claude.manifest.json").exists()
+    exclude = Path(_git(main, "rev-parse", "--git-path", "info/exclude").strip())
+    exclude = exclude if exclude.is_absolute() else main / exclude
+    assert "speckit-git-commit" not in exclude.read_text(encoding="utf-8")
+
+
 def test_default_uninstall_keeps_dispatcher_and_other_checkout_hooks(checkouts, monkeypatch):
     main, worktree, workspace = checkouts
     (workspace / ".specify/integration-events.yml").write_text(

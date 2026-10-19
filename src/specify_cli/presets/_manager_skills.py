@@ -701,6 +701,21 @@ class _PresetSkillMethods:
         # command-backed agents that also mirror commands into skills.
         create_missing_skills = ai_skills_enabled and agent_config.get("extension") != "/SKILL.md"
 
+        from ..workspace import is_private
+
+        private = self.workspace_root != self.project_root and is_private(self.workspace_root)
+
+        def checkout_paths(skill_names) -> List[str]:
+            paths = (skills_dir / name / "SKILL.md" for name in skill_names)
+            return [path.relative_to(self.project_root).as_posix() for path in paths if path.is_relative_to(self.project_root)]
+
+        if private:
+            from ..private_checkout import refuse_tracked
+
+            refuse_tracked(self.project_root, checkout_paths(
+                name for tmpl in command_templates for name in self._skill_names_for_command(tmpl["name"])
+            ))
+
         written: List[str] = []
 
         for cmd_tmpl in command_templates:
@@ -830,6 +845,10 @@ class _PresetSkillMethods:
                     manifest.id, {selected_ai: [target_skill_name]}
                 )
 
+        if private and written:
+            from ..integrations.manifest import IntegrationManifest
+
+            IntegrationManifest(selected_ai, self.project_root).exclude(checkout_paths(written))
         return {selected_ai: written} if written else {}
 
     def _infer_legacy_skill_provenance(

@@ -15,15 +15,15 @@ from uuid import uuid4
 from rich.console import Console
 
 from .workspace import atomic_json, checkout_record_path, confined, read_json
-from .workspace_git import run_git
+from .workspace_git import _escape_ignore, run_git
 
 BEGIN = "# BEGIN Spec Kit private mode (managed; do not edit)"
 END = "# END Spec Kit private mode"
 LOCATOR_RULE = "/.specify/"
 
 
-def _rule(relative: str) -> str:
-    return "/" + relative.replace("\\", "\\\\").replace(" ", "\\ ")
+class PrivateModeError(ValueError):
+    """Private mode cannot hide its files here. Callers that skip one agent on ValueError must not skip this."""
 
 
 def _git_root(checkout: Path) -> bool:
@@ -53,11 +53,12 @@ def checkout_manifest_keys(checkout: Path) -> set[str]:
     return {key for key in keys if not key.startswith(".specify/")}
 
 
-def regenerate_exclude_block(checkout: Path) -> None:
+def regenerate_exclude_block(checkout: Path, *, create: bool = True) -> None:
     """Rewrite the managed block from the locators and checkout manifests of every worktree.
 
     Linked worktrees share one exclude file, so the block is the union over
-    all of them. User lines outside the block never change.
+    all of them. User lines outside the block never change. With ``create``
+    false, a file without the block stays unchanged.
     """
     if not _git_root(checkout):
         return
@@ -75,11 +76,15 @@ def regenerate_exclude_block(checkout: Path) -> None:
             inside = False
         elif not inside:
             (after if found else before).append(line)
+    if inside:
+        raise ValueError(f"{path} has the line {BEGIN!r} without the line {END!r}. Fix these markers, then retry.")
+    if not found and not create:
+        return
     rules: set[str] = set()
     for root in _worktrees(checkout):
         if (root / ".specify/project.json").is_file():
             rules.add(LOCATOR_RULE)
-            rules.update(_rule(key) for key in checkout_manifest_keys(root))
+            rules.update(_escape_ignore(key) for key in checkout_manifest_keys(root))
     block = "".join(f"{line}{newline}" for line in (BEGIN, *sorted(rules), END)) if rules else ""
     if block and before and not before[-1].endswith("\n"):
         before[-1] += newline
@@ -90,35 +95,49 @@ def regenerate_exclude_block(checkout: Path) -> None:
 
 
 def refuse_tracked(checkout: Path, paths: Iterable[str]) -> None:
-    """Stop before any write when Spec Kit would change a file that Git tracks."""
+    """Stop before any write when private mode cannot hide its files or would change a file that Git tracks."""
+    if not _git_root(checkout):
+        return
+    if run_git(checkout, "rev-parse", "--show-prefix"):
+        raise PrivateModeError(
+            f"Private mode needs the project at the Git top level, not in a subdirectory: {checkout}. "
+            "Use the default external mode."
+        )
+    exclude = exclude_path(checkout)
+    if exclude.is_symlink():
+        raise PrivateModeError(f"Refusing a symlinked exclude file: {exclude}")
     paths = sorted(set(paths))
-    if not paths or not _git_root(checkout):
+    if not paths:
         return
     tracked = run_git(checkout, "ls-files", "-z", "--cached", "--", *(f":(literal){p}" for p in paths))
     if tracked:
         first = tracked.split("\0")[0]
-        raise ValueError(
+        raise PrivateModeError(
             f"Spec Kit would change tracked file {first}. Remove it from Git or choose another integration."
         )
 
 
+def _set_environ(values: dict[str, object]) -> None:
+    for name, value in values.items():
+        if value is None:
+            os.environ.pop(name, None)
+        else:
+            os.environ[name] = str(value)
+
+
 @contextmanager
 def _isolated_user_dirs(home: Path) -> Iterator[None]:
-    names = ("HOME", "USERPROFILE", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "APPDATA", "LOCALAPPDATA")
-    saved = {name: os.environ.get(name) for name in names}
     values = {
         "HOME": home, "USERPROFILE": home, "XDG_CONFIG_HOME": home / "config",
         "XDG_DATA_HOME": home / "data", "APPDATA": home / "config", "LOCALAPPDATA": home / "data",
+        "PI_CODING_AGENT_DIR": None, "PI_CONFIG_DIR": None,  # OMP reads its command folder from these.
     }
+    saved = {name: os.environ.get(name) for name in values}
     try:
-        os.environ.update({name: str(value) for name, value in values.items()})
+        _set_environ(values)
         yield
     finally:
-        for name, value in saved.items():
-            if value is None:
-                os.environ.pop(name, None)
-            else:
-                os.environ[name] = value
+        _set_environ(saved)
 
 
 @contextmanager
@@ -279,15 +298,20 @@ def _make_parents(path: Path, created: list[Path]) -> None:
         created.append(directory)
 
 
-def restore_checkout(repository: Path, workspace: Path, active_feature: str | None) -> Restore:
-    """Create the missing generated files of a non-private checkout, then write its record (research D2).
+def _integration_state(workspace: Path) -> dict:
+    from .integration_state import try_read_integration_json
 
-    Phase 1 builds the files in a staged copy and changes nothing real. Phase 2
-    writes the locator when absent, creates each missing file exclusively,
-    updates a manifest hash only when the restored bytes differ, and writes the
-    record last. An error or interrupt in phase 2 rolls every write back. The
-    root ``.gitignore`` append comes after the record and is never rolled back.
-    Every path is explicit: nothing reads the real record or `workspace_root_for`.
+    state, error = try_read_integration_json(workspace)
+    if error is not None:
+        raise ValueError(f"Cannot read the workspace integration state: {error.detail}")
+    return state or {}
+
+
+@contextmanager
+def _staged_restore(workspace: Path, state: dict, *, private: bool) -> Iterator[tuple[Path, Path, dict[str, str]]]:
+    """Build every generated file of *workspace* in a staged pair. Nothing real changes.
+
+    Yield the staged checkout, the staged workspace, and the repairs from `_stage_bundled_files`.
     """
     from . import ensure_executable_scripts
     from .assets import get_speckit_version
@@ -296,28 +320,14 @@ def restore_checkout(repository: Path, workspace: Path, active_feature: str | No
         invoke_prefix_for_integration, invoke_separator_for_integration,
         resolve_integration_options, resolve_integration_script_type,
     )
-    from .integration_state import default_integration_key, installed_integration_keys, try_read_integration_json
+    from .integration_state import default_integration_key, installed_integration_keys
     from .integrations import get_integration
-    from .integrations.manifest import write_manifest, append_gitignore
     from .shared_infra import install_shared_infra
 
     version = get_speckit_version()
-    state, error = try_read_integration_json(workspace)
-    if error is not None:
-        raise ValueError(f"Cannot read the workspace integration state: {error.detail}")
-    state = state or {}
-    keys = installed_integration_keys(state)
-    modified = {key: files for key in keys if (files := _modified_files(repository, workspace, key))}
-    ignore = repository / ".gitignore"
-    if ignore.is_symlink():
-        raise ValueError(f"Refusing a symlinked ignore file: {ignore}")
-    present = set(ignore.read_text(encoding="utf-8").splitlines()) if ignore.exists() else set()
-    home = Path.home()
-    restore: list[tuple[Path, bytes, int]] = []
-    updates: dict[Path, dict] = {}
-    with _staged_pair(workspace, private=False) as (checkout, staged):
+    with _staged_pair(workspace, private=private) as (checkout, staged):
         packages = _stage_bundled_files(staged)  # Before attach, which registers package commands.
-        attach_integrations(checkout, keys, version=version)
+        attach_integrations(checkout, installed_integration_keys(state), version=version)
         default = default_integration_key(state)
         integration = get_integration(default) if default else None
         separator, prefix = ".", "/"
@@ -338,34 +348,138 @@ def restore_checkout(repository: Path, workspace: Path, active_feature: str | No
                 invoke_separator=separator, invoke_prefix=prefix,
             )
         ensure_executable_scripts(checkout, StepTracker("restore"))
+        yield checkout, staged, packages
+
+
+def _plan_missing(base: Path, real: Path, skip: set[str]) -> list[tuple[str, Path, bytes, int]]:
+    """List each regular file of *base* that *real* lacks: its relative path, target, bytes, and mode."""
+    plan = []
+    for path in sorted(base.rglob("*")):
+        relative = path.relative_to(base).as_posix()
+        if path.is_symlink() or not path.is_file() or relative in skip:
+            continue
+        target = _missing(real, relative)
+        if target is not None:
+            plan.append((relative, target, path.read_bytes(), stat.S_IMODE(path.stat().st_mode)))
+    return plan
+
+
+def _manifest_changes(staged: Path, workspace: Path, restored: set[str]) -> dict[Path, dict[str, str]]:
+    """Return, per real workspace manifest, the staged hashes of *restored* files that differ from its record."""
+    changes = {}
+    for path in sorted((staged / ".specify/integrations").glob("*.manifest.json")):
+        real = workspace / ".specify/integrations" / path.name
+        if real.is_symlink() or not real.is_file():
+            continue  # A missing manifest is on the restore list.
+        files, recorded = read_json(path).get("files", {}), read_json(real).get("files", {})
+        if found := {name: files[name] for name in restored & files.keys() if recorded.get(name) != files[name]}:
+            changes[real] = found
+    return changes
+
+
+def _write_restore(
+    workspace: Path, plan: list, changes: dict[Path, dict[str, str]],
+    saved: dict[Path, bytes | None], created: list[Path],
+) -> list[str]:
+    """Create each planned file exclusively, then merge *changes* into the workspace manifests.
+
+    Record the old bytes of each rewritten file in *saved* and each new path in
+    *created*, for `_rollback`. Return the relative paths that this run created.
+    """
+    from .integrations.manifest import write_manifest
+
+    restored = []
+    for relative, target, data, mode in plan:
+        _make_parents(target, created)
+        try:
+            handle = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), mode)
+        except FileExistsError:
+            continue  # A concurrent link created it. Keep its bytes.
+        created.append(target)
+        with os.fdopen(handle, "wb") as file:
+            file.write(data)
+        restored.append(relative)
+    for path, files in changes.items():
+        data = read_json(path)
+        saved.setdefault(path, path.read_bytes())
+        write_manifest(workspace, path, {**data, "files": {**data.get("files", {}), **files}})
+    return restored
+
+
+def _rollback(saved: dict[Path, bytes | None], created: list[Path]) -> None:
+    for path, data in saved.items():
+        if data is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_bytes(data)
+    for path in reversed(created):
+        with suppress(OSError):
+            path.rmdir() if path.is_dir() else path.unlink()
+
+
+def restore_workspace_files(workspace: Path) -> list[str]:
+    """Create the missing generated files of *workspace*.
+
+    These are the shared scripts and templates, the integration files under
+    ``.specify``, and the verified bundled package files. A manifest hash
+    changes only when the restored bytes differ. An error or interrupt rolls
+    every write back. Return the restored workspace paths.
+    """
+    from .workspace import is_private
+
+    state = _integration_state(workspace)
+    with _staged_restore(workspace, state, private=is_private(workspace)) as (_, staged, _):
+        plan = _plan_missing(staged, workspace, {".specify/workspace.json"})
+        changes = _manifest_changes(staged, workspace, {relative for relative, *_ in plan})
+    saved: dict[Path, bytes | None] = {}
+    created: list[Path] = []
+    try:
+        return _write_restore(workspace, plan, changes, saved, created)
+    except (Exception, KeyboardInterrupt):
+        _rollback(saved, created)
+        raise
+
+
+def restore_checkout(repository: Path, workspace: Path, active_feature: str | None) -> Restore:
+    """Create the missing generated files of a non-private checkout and its workspace, then write its record (research D2).
+
+    Phase 1 builds the files in a staged copy and changes nothing real. Phase 2
+    writes the locator when absent, creates each missing file exclusively,
+    updates a manifest hash only when the restored bytes differ, writes the
+    record, and then installs the user-wide OMP and Hermes commands in the real
+    home. An error or interrupt in phase 2 rolls every write back, except the
+    user-wide commands. The root ``.gitignore`` append comes after the record
+    and is never rolled back. The staged home is never copied.
+    """
+    from .integration_runtime import resolve_integration_script_type
+    from .integration_state import installed_integration_keys
+    from .integrations import get_integration
+    from .integrations.manifest import IntegrationManifest, append_gitignore
+    from .integrations.omp.global_commands import (
+        command_directory, global_commands_enabled, install_global_commands,
+    )
+
+    state = _integration_state(workspace)
+    keys = installed_integration_keys(state)
+    modified = {key: files for key in keys if (files := _modified_files(repository, workspace, key))}
+    ignore = repository / ".gitignore"
+    if ignore.is_symlink():
+        raise ValueError(f"Refusing a symlinked ignore file: {ignore}")
+    present = set(ignore.read_text(encoding="utf-8").splitlines()) if ignore.exists() else set()
+    with _staged_restore(workspace, state, private=False) as (checkout, staged, packages):
         staged_ignore = checkout / ".gitignore"
         lines = [
             _unescape(line) for line in staged_ignore.read_text(encoding="utf-8").splitlines()
             if line.startswith("/") and line not in present
         ] if staged_ignore.is_file() else []
-        restored: set[str] = set()
-        for base, real, skip in (
-            (checkout, repository, {".gitignore", ".specify/project.json", ".specify/checkout.json"}),
-            (staged, workspace, {".specify/workspace.json"}),
-            (checkout.parent / "home", home, set()),
-        ):
-            for path in sorted(base.rglob("*")):
-                relative = path.relative_to(base).as_posix()
-                if path.is_symlink() or not path.is_file() or relative in skip:
-                    continue
-                target = _missing(real, relative)
-                if target is not None:
-                    restore.append((target, path.read_bytes(), stat.S_IMODE(path.stat().st_mode)))
-                    restored.add(relative)
-        for path in sorted((staged / ".specify/integrations").glob("*.manifest.json")):
-            real = workspace / ".specify/integrations" / path.name
-            if real.is_symlink() or not real.is_file():
-                continue  # A missing manifest is on the restore list.
-            files, data = read_json(path).get("files", {}), read_json(real)
-            recorded = data.get("files", {})
-            changes = {name: files[name] for name in restored & files.keys() if recorded.get(name) != files[name]}
-            if changes:
-                updates[real] = {**data, "files": {**recorded, **changes}}
+        plan = [
+            *_plan_missing(checkout, repository, {".gitignore", ".specify/project.json", ".specify/checkout.json"}),
+            *_plan_missing(staged, workspace, {".specify/workspace.json"}),
+        ]
+        changes = _manifest_changes(staged, workspace, {relative for relative, *_ in plan})
+        launchers = sorted(
+            path.stem for path in command_directory().glob("speckit.*.md")
+        ) if "omp" in keys and global_commands_enabled(checkout) else []
     if (lines or "/.specify/checkout.json" not in present) and not os.access(
         ignore if ignore.exists() else repository, os.W_OK,
     ):
@@ -373,41 +487,27 @@ def restore_checkout(repository: Path, workspace: Path, active_feature: str | No
 
     locator = repository / ".specify/project.json"
     record = checkout_record_path(repository)
-    saved = {path: path.read_bytes() if path.is_file() else None for path in (*updates, record)}
     write_locator = not os.path.lexists(locator)
-    touched: list[Path] = []  # Saved paths that this run rewrote.
+    saved: dict[Path, bytes | None] = {}  # Old bytes of each path that this run rewrote.
     created: list[Path] = []  # Files and folders that this run created, in order.
-    count = 0
     try:
         if write_locator:
             project_id = read_json(workspace / ".specify/workspace.json")["project_id"]
             _make_parents(locator, created)
             atomic_json(locator, {"schema_version": 1, "project_id": project_id, "storage": "external"}, exclusive=True)
             created.append(locator)
-        for target, data, mode in restore:
-            _make_parents(target, created)
-            try:
-                handle = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), mode)
-            except FileExistsError:
-                continue  # A concurrent link created it. Keep its bytes.
-            created.append(target)
-            with os.fdopen(handle, "wb") as file:
-                file.write(data)
-            count += 1
-        for path, data in updates.items():
-            touched.append(path)
-            write_manifest(workspace, path, data)
-        touched.append(record)
+        count = len(_write_restore(workspace, plan, changes, saved, created))
+        saved[record] = record.read_bytes() if record.is_file() else None
         atomic_json(record, {"schema_version": 1, "workspace": str(workspace), "active_feature": active_feature})
+        if launchers:
+            install_global_commands(names=launchers)
+        if "hermes" in keys and (hermes := get_integration("hermes")) is not None:
+            hermes.setup(
+                repository, IntegrationManifest("hermes", repository),
+                script_type=resolve_integration_script_type(repository, state, "hermes", None),
+            )
     except (Exception, KeyboardInterrupt):
-        for path in touched:
-            if saved[path] is None:
-                path.unlink(missing_ok=True)
-            else:
-                path.write_bytes(saved[path])
-        for path in reversed(created):
-            with suppress(OSError):
-                path.rmdir() if path.is_dir() else path.unlink()
+        _rollback(saved, created)
         raise
 
     updated, failure = False, None
@@ -514,10 +614,9 @@ def plan_reconcile(
     modified = {key: files for key in stale if (files := _modified_files(checkout, workspace, key))}
     stale = [key for key in stale if key not in modified]
     install = [key for key in listed if key not in present or key in stale]
-    if install:
-        refuse_tracked(checkout, plan_checkout_files(
-            lambda staged: attach_integrations(staged, install, version=version), workspace=workspace,
-        ))
+    refuse_tracked(checkout, plan_checkout_files(
+        lambda staged: attach_integrations(staged, install, version=version), workspace=workspace,
+    ) if install else [])
     return sorted(set(present) - set(listed)) + stale, install, modified
 
 

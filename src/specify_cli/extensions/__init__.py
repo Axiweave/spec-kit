@@ -55,7 +55,8 @@ from ..integration_state import (
     try_read_integration_json,
 )
 from ..shared_infra import verify_archive_sha256
-from ..workspace import workspace_root_for
+from ..private_checkout import PrivateModeError
+from ..workspace import is_private, workspace_root_for
 
 _FALLBACK_CORE_COMMAND_NAMES = frozenset(
     {
@@ -1790,6 +1791,20 @@ class ExtensionManager:
                 r"__SPECKIT_COMMAND_([A-Z][A-Z0-9_-]*)__", _replacement, body
             )
 
+        workspace = workspace_root_for(self.project_root)
+        private = workspace != self.project_root and is_private(workspace)
+
+        def checkout_paths(skill_names) -> List[str]:
+            paths = (skills_dir / name / "SKILL.md" for name in skill_names)
+            return [path.relative_to(self.project_root).as_posix() for path in paths if path.is_relative_to(self.project_root)]
+
+        if private:
+            from ..private_checkout import refuse_tracked
+
+            refuse_tracked(self.project_root, checkout_paths(
+                self._skill_name_for_command(command["name"]) for command in manifest.commands
+            ))
+
         for cmd_info in manifest.commands:
             cmd_name = cmd_info["name"]
             cmd_file_rel = cmd_info["file"]
@@ -1927,6 +1942,10 @@ class ExtensionManager:
                 skill_file.write_text(skill_content, encoding="utf-8")
             written.append(skill_name)
 
+        if private and written:
+            from ..integrations.manifest import IntegrationManifest
+
+            IntegrationManifest(selected_ai, self.project_root).exclude(checkout_paths(written))
         return written
 
     @staticmethod
@@ -3158,6 +3177,15 @@ class ExtensionManager:
                     tmp_path.unlink()
                 raise
 
+        def _staging_hint() -> str:
+            if custom_payload_staging_dir is None:
+                return ""
+            return (
+                f" Your kept files are saved in '{custom_payload_staging_dir}'. "
+                f"Retry with 'specify extension add {manifest.id}', then copy them "
+                f"back into '{dest_dir}'."
+            )
+
         def _restore_custom_payload_entry(
             target: Path, content: bytes, preserved_mode: int
         ) -> None:
@@ -3174,16 +3202,9 @@ class ExtensionManager:
                 _restore_stranded_config_file(target, content, preserved_mode)
             except BaseException as exc:
                 rel_label = target.relative_to(dest_dir).as_posix()
-                hint = (
-                    f" A durable copy of the preserved content was retained at "
-                    f"'{custom_payload_staging_dir}'; recover it manually before "
-                    f"retrying."
-                    if custom_payload_staging_dir is not None
-                    else ""
-                )
                 raise ExtensionError(
                     f"Could not restore preserved content for '{rel_label}': "
-                    f"{exc}.{hint}"
+                    f"{exc}.{_staging_hint()}"
                 ) from exc
 
         try:
@@ -3212,12 +3233,32 @@ class ExtensionManager:
             target = dest_dir / filename
             _restore_stranded_config_file(target, content, mode)
 
+        # A record without a producer baseline (written before
+        # generated_files existed) cannot tell edits from old package bytes,
+        # so the new source owns every file it ships. Only files it does not
+        # ship are kept.
+        if old_metadata is not None and not isinstance(
+            old_metadata.get("generated_files"), dict
+        ):
+            custom_payload = {
+                rel: entry for rel, entry in custom_payload.items()
+                if not (dest_dir / rel).is_file()
+            }
+
         # Restore any preserved custom/edited payload now too, before the
         # still-fallible registration and registry.add() steps below run —
         # so a failure there finds the user's bytes already durably on
         # disk instead of only held in this function's memory.
         for rel, (content, mode) in custom_payload.items():
             _restore_custom_payload_entry(dest_dir / rel, content, mode)
+        if custom_payload:
+            from ..terminal import err_console
+
+            err_console.print(
+                f"Kept existing files in extension '{manifest.id}': "
+                + ", ".join(sorted(custom_payload)),
+                markup=False,
+            )
 
         # NOTE: the durable staging backup is intentionally NOT cleaned up
         # here.  Command/skill/hook registration and the final registry.add()
@@ -3254,7 +3295,10 @@ class ExtensionManager:
                         path.parent.rmdir()
                     except OSError:
                         pass
+            rollback_payload()
 
+        def rollback_payload() -> None:
+            """Remove the copied package. Keep the rescued configuration files."""
             preserved = set(stranded_configs)
             if did_remove:
                 backup_dir = self.extensions_dir / ".backup" / manifest.id
@@ -3409,7 +3453,19 @@ class ExtensionManager:
                     raise ExtensionError(
                         f"Generic registration failed ({exc}); rollback failed: "
                         + "; ".join(rollback_errors)
+                        + _staging_hint()
                     ) from exc
+            elif isinstance(exc, PrivateModeError):
+                # The refusal comes before any write for its agent: undo earlier agents and the package copy.
+                from ..agents import CommandRegistrar
+
+                if registered_commands:
+                    CommandRegistrar().unregister_commands(registered_commands, self.project_root)
+                rollback_payload()
+            if custom_payload_staging_dir is not None:
+                raise ExtensionError(f"{exc}.{_staging_hint()}") from exc
+            if isinstance(exc, PrivateModeError):
+                raise ExtensionError(str(exc)) from exc
             raise
 
         if did_remove:

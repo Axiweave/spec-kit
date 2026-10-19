@@ -9,6 +9,7 @@ import typer
 from rich.markup import escape as _escape_markup
 
 
+from ..private_checkout import PrivateModeError
 from ..terminal import console
 from ..download_security import read_response_limited as _read_response_limited
 from ..download_security import (
@@ -31,15 +32,6 @@ preset_app = typer.Typer(
 # stack is anchored at 1 rather than 0 to leave no unreachable slot above the
 # highest-precedence preset.
 MINIMUM_PRESET_PRIORITY = 1
-
-
-def _render_powershell_argv(argv: list[str]) -> str:
-    """Render argv as a copy-pastable PowerShell command."""
-
-    def quote_arg(arg: str) -> str:
-        return "'" + arg.replace("'", "''") + "'"
-
-    return "& " + " ".join(quote_arg(arg) for arg in argv)
 
 
 def _validate_priority(priority: int) -> None:
@@ -325,7 +317,7 @@ def _install_preset(
     except PresetValidationError as e:
         console.print(f"[red]Validation Error:[/red] {_escape_markup(str(e))}")
         raise typer.Exit(1)
-    except (PresetError, OSError) as e:
+    except (PresetError, OSError, PrivateModeError) as e:
         console.print(f"[red]Error:[/red] {_escape_markup(str(e))}")
         raise typer.Exit(1)
 
