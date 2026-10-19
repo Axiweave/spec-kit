@@ -280,7 +280,7 @@ def register(app: typer.Typer) -> None:
         private: bool = typer.Option(
             False,
             "--private",
-            help="Hide Spec Kit files from Git in this checkout. Requires --storage external and a new workspace.",
+            help="Hide Spec Kit files from Git in this checkout. Requires --storage external and a new or private workspace.",
         ),
         feature_numbering: str = typer.Option(
             None, "--feature-numbering", help="Feature numbering mode: sequential or timestamp."
@@ -447,15 +447,18 @@ def register(app: typer.Typer) -> None:
         from ._command_init_storage import claim_storage, select_storage
         from .init_options import load_init_options
         from .user_config import load_defaults
+        from .workspace import is_private
         from .workspace_git import initialize_workspace_git, preflight_workspace_git
 
         try:
             repository = (Path.cwd() if here else Path(project_name)).resolve()
             existing_project = (repository / ".specify").is_dir()
             defaults = (load_init_options(repository) or {}) if existing_project else load_defaults()
-            if not integration and not existing_project and os.environ.get("SPECKIT_INTEGRATION_DEFAULT", "").strip():
-                integration = resolve_default_init_integration()
-            integration = integration or defaults.get("integration") or defaults.get("ai")
+            if global_commands:
+                integration = integration or "omp"
+            # SPECKIT_INTEGRATION_DEFAULT outranks a personal default, but only as the prompt's preselection.
+            if existing_project or not os.environ.get("SPECKIT_INTEGRATION_DEFAULT", "").strip():
+                integration = integration or defaults.get("integration") or defaults.get("ai")
             script_type = script_type or defaults.get("script")
             feature_numbering = feature_numbering or defaults.get("feature_numbering")
             if feature_selection is None:
@@ -470,14 +473,12 @@ def register(app: typer.Typer) -> None:
         except (ValueError, OSError) as exc:
             console.print(f"[red]Error:[/red] {_escape_markup(str(exc))}")
             raise typer.Exit(1) from None
-        if global_commands:
-            if integration and integration != "omp":
-                console.print(
-                    f"--global-commands supports only omp, not {integration!r}.",
-                    style="red", markup=False,
-                )
-                raise typer.Exit(1)
-            integration = "omp"
+        if global_commands and integration != "omp":
+            console.print(
+                f"--global-commands supports only omp, not {integration!r}.",
+                style="red", markup=False,
+            )
+            raise typer.Exit(1)
 
 
         if integration:
@@ -594,7 +595,7 @@ def register(app: typer.Typer) -> None:
                         storage = select_with_arrows(
                             {"local": "Code repository", "external": "External workspace"},
                             "Choose Spec Kit storage:",
-                            "external",
+                            "local",
                             flag_hint="--storage local|external",
                         )
                 if storage == "external" and not storage_root and _prompts_allowed(non_interactive):
@@ -613,7 +614,7 @@ def register(app: typer.Typer) -> None:
         if private and project.project_id is None:
             console.print("[red]Error:[/red] --private requires --storage external.")
             raise typer.Exit(1)
-        if private and not fresh_workspace_claim:
+        if private and not fresh_workspace_claim and not is_private(workspace_path):
             console.print(
                 "[red]Error:[/red] Private mode is chosen when the workspace is created: "
                 f"{_escape_markup(str(workspace_path))}."

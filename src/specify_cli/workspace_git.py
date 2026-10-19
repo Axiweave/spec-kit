@@ -44,10 +44,12 @@ def run_git(
             "Inspect retained files. Retry with an empty destination or use --no-workspace-git."
         ) from exc
     if result.returncode not in allowed_codes:
-        detail = result.stderr.strip() or result.stdout.strip()
+        detail = (result.stderr.strip() or result.stdout.strip()).rstrip(".")
+        command = next(arg for arg in args if not arg.startswith("-"))
         raise ValueError(
-            f"Workspace Git {' '.join(args[:2])} failed at {directory}: {detail}. "
-            "Check Git identity, hooks, and signing. Use --no-workspace-git to skip workspace history."
+            f"Workspace Git {command} failed at {directory}: {detail}. "
+            "Check Git identity, hooks, and signing. An identity set only through includeIf "
+            "may not apply to the workspace path. Use --no-workspace-git to skip workspace history."
         )
     return result.stdout.rstrip("\n")
 
@@ -280,9 +282,11 @@ def initialize_workspace_git(workspace: Path) -> str:
                 and (current.st_dev, current.st_ino) == (git_info.st_dev, git_info.st_ino)
             )
             # A hook or a timed-out commit can create history before returning an error.
-            has_history = owned and any(path.is_file() for path in (git_dir / "refs").rglob("*"))
-            has_history = has_history or (owned and (git_dir / "packed-refs").exists())
-            committed = committed or has_history
+            if owned and not committed:
+                try:
+                    committed = bool(run_git(workspace, "for-each-ref", "--count=1"))
+                except ValueError:
+                    pass  # No readable repository means no history.
             if owned and not committed:
                 if ignore.is_file() and not ignore.is_symlink() and ignore.read_bytes() == updated:
                     if ignore_existed:
@@ -293,7 +297,7 @@ def initialize_workspace_git(workspace: Path) -> str:
         except OSError as cleanup_error:
             exc.add_note(f"Workspace Git recovery needs attention at {workspace}: {cleanup_error}")
         raise WorkspaceGitError(
-            f"Workspace history setup failed: {exc}. Partial files remain at {workspace}. "
+            f"Workspace history setup failed: {str(exc).rstrip('.')}. Partial files remain at {workspace}. "
             "Inspect the workspace before retrying with an empty destination.",
             committed=committed,
         ) from exc

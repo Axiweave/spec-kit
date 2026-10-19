@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from pathlib import Path
 from uuid import uuid4
@@ -241,6 +242,36 @@ def test_strict_init_dir_does_not_search_parent(tmp_path, monkeypatch):
         resolve_project(tmp_path)
 
 
+@pytest.mark.parametrize("cwd_is_home", [False, True])
+def test_user_level_specify_in_home_is_a_project_only_from_home(tmp_path, monkeypatch, cwd_is_home):
+    """A ~/.specify for personal settings must not turn every directory under home into its project."""
+    from specify_cli.workspace import ProjectNotFoundError, find_repository
+
+    monkeypatch.delenv("SPECIFY_INIT_DIR", raising=False)
+    home = tmp_path / "home"
+    (home / ".specify").mkdir(parents=True)
+    nested = home / "code/app"
+    nested.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    if cwd_is_home:
+        assert find_repository(home) == home.resolve()
+    else:
+        with pytest.raises(ProjectNotFoundError):
+            find_repository(nested)
+
+
+@pytest.mark.parametrize("project_id", ["not-a-uuid", "../escape", ""])
+def test_locator_project_id_must_be_a_uuid(tmp_path, monkeypatch, project_id):
+    repo, workspace, _ = external(tmp_path, monkeypatch)
+    for path in (repo / ".specify/project.json", workspace / ".specify/workspace.json"):
+        data = json.loads(path.read_text())
+        data["project_id"] = project_id
+        path.write_text(json.dumps(data))
+    with pytest.raises(ValueError, match="Invalid project ID"):
+        resolve_project(repo)
+
+
 def test_unreadable_workspace_reports_location_without_fallback(tmp_path, monkeypatch):
     repo, workspace, _ = external(tmp_path, monkeypatch)
     original = Path.read_text
@@ -251,7 +282,7 @@ def test_unreadable_workspace_reports_location_without_fallback(tmp_path, monkey
         return original(path, *args, **kwargs)
 
     monkeypatch.setattr(Path, "read_text", read)
-    with pytest.raises(ValueError, match=str(workspace)):
+    with pytest.raises(ValueError, match=re.escape(str(workspace))):
         resolve_project(repo)
     assert not (repo / "specs").exists()
 

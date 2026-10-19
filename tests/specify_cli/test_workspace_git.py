@@ -153,7 +153,7 @@ def test_missing_git_does_not_create_destination(tmp_path: Path, monkeypatch: py
 def test_unusable_identity_refuses_before_writes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("GIT_AUTHOR_NAME", "")
     destination = tmp_path / "workspace"
-    with pytest.raises((OSError, ValueError), match="identity|ident|name"):
+    with pytest.raises(ValueError, match="empty ident name"):
         preflight_workspace_git(destination)
     assert not destination.exists()
 
@@ -169,7 +169,11 @@ def test_redirected_git_environment_cannot_select_code_repository(tmp_path: Path
     assert {p.relative_to(code): p.read_bytes() for p in code.rglob("*") if p.is_file()} == before
 
 
-@pytest.mark.parametrize("filename", ["notes ü.md", "notes [a]*?.md", "notes #!.md"])
+@pytest.mark.parametrize("filename", [
+    "notes ü.md",
+    pytest.param("notes [a]*?.md", marks=pytest.mark.skipif(os.name == "nt", reason="Windows forbids * and ? in names")),
+    "notes #!.md",
+])
 def test_initial_history_tracks_only_durable_content(tmp_path: Path, filename: str):
     """Conservation: custom content survives while private and produced copies stay out."""
     import hashlib
@@ -381,12 +385,13 @@ def test_git_write_failure_preserves_user_bytes(tmp_path, monkeypatch, phase):
 
     def refuse(command, **kwargs):
         if phase in command[1:3]:
-            return subprocess.CompletedProcess(command, 1, "", f"refused {phase}")
+            return subprocess.CompletedProcess(command, 1, "", f"refused {phase}.")
         return real_run(command, **kwargs)
 
     monkeypatch.setattr(subprocess, "run", refuse)
-    with pytest.raises(ValueError, match=f"refused {phase}"):
+    with pytest.raises(ValueError, match=f"Git {phase} failed .*refused {phase}") as failure:
         initialize_workspace_git(root)
+    assert ".." not in str(failure.value)
     assert note.read_bytes() == b"User content\n"
     assert ignore.read_bytes() == b"# User rules\r\n*.log\r\n"
     assert not (root / ".git").exists()
@@ -423,13 +428,38 @@ def test_write_timeout_preserves_content_and_removes_owned_partial_git(tmp_path,
 
     def timeout_commit(command, **kwargs):
         if "commit" in command[1:3]:
-            assert kwargs["timeout"] == 120
             raise subprocess.TimeoutExpired(command, kwargs["timeout"])
         return real_run(command, **kwargs)
 
     monkeypatch.setattr(subprocess, "run", timeout_commit)
     with pytest.raises(ValueError, match="Workspace Git failed"):
         initialize_workspace_git(root)
+    assert (root / "notes.md").read_bytes() == b"Keep this file\n"
+    assert not (root / ".git").exists()
+
+
+def test_reftable_failure_before_history_removes_owned_git(tmp_path, monkeypatch):
+    """A reftable repository keeps a stub refs/heads file, which is not history."""
+    from specify_cli.workspace_git import WorkspaceGitError
+
+    probe = subprocess.run(["git", "init", "-q", "--ref-format=reftable", str(tmp_path / "probe")], capture_output=True)
+    if probe.returncode:
+        pytest.skip("This Git does not support reftable.")
+    monkeypatch.setenv("GIT_DEFAULT_REF_FORMAT", "reftable")
+    root = tmp_path / "workspace"
+    root.mkdir()
+    (root / "notes.md").write_bytes(b"Keep this file\n")
+    real_run = subprocess.run
+
+    def refuse_commit(command, **kwargs):
+        if "commit" in command[1:3]:
+            return subprocess.CompletedProcess(command, 1, "", "refused commit")
+        return real_run(command, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", refuse_commit)
+    with pytest.raises(WorkspaceGitError) as failure:
+        initialize_workspace_git(root)
+    assert not failure.value.committed
     assert (root / "notes.md").read_bytes() == b"Keep this file\n"
     assert not (root / ".git").exists()
 

@@ -160,6 +160,11 @@ def test_automatic_setup_uses_all_personal_defaults(tmp_path, monkeypatch, opera
         monkeypatch.setenv(key, str(directory))
     monkeypatch.delenv("SPECIFY_INIT_DIR", raising=False)
     monkeypatch.delenv("SPECKIT_INTEGRATION_DEFAULT", raising=False)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    for role in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{role}_NAME", "Workspace Test")
+        monkeypatch.setenv(f"GIT_{role}_EMAIL", "workspace@example.invalid")
     repository = tmp_path / "new-project"
     repository.mkdir()
     monkeypatch.chdir(repository)
@@ -189,6 +194,7 @@ def test_automatic_setup_uses_all_personal_defaults(tmp_path, monkeypatch, opera
         "omp", "py", "timestamp",
     )
     assert sorted(path.name for path in (repository / ".specify").iterdir()) == ["checkout.json", "project.json"]
+    assert (workspace / ".git").is_dir()
     assert config.read_bytes() == original
 
 

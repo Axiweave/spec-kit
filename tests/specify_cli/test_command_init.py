@@ -16,7 +16,6 @@ escapes user-controlled display values; init.py was the outlier.
 
 from __future__ import annotations
 
-import hashlib
 import importlib
 import json
 import os
@@ -29,7 +28,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from specify_cli import AGENT_CONFIG, app
+from specify_cli import AGENT_CONFIG, _locate_bundled_workflow, app
 from specify_cli.command_init import _shell_quote_arg
 from specify_cli.workspace import resolve_project
 
@@ -432,6 +431,41 @@ def test_private_rejects_existing_shared_workspace(tmp_path: Path):
     assert "Private mode is chosen when the workspace is created" in _strip(result.output)
 
 
+def test_private_reinit_of_private_workspace_succeeds_and_stays_hidden(tmp_path: Path):
+    repository = tmp_path / "team"
+    tracked = _team_repository(repository)
+    first = _private_init(tmp_path, "team", "claude")
+    assert first.exit_code == 0, _strip(first.output)
+    result = _private_init(tmp_path, "team", "claude")
+    assert result.exit_code == 0, _strip(result.output)
+    assert _git(repository, "status", "--porcelain", "--untracked-files=all") == ""
+    assert {path: path.read_bytes() for path in tracked} == tracked
+    assert json.loads((tmp_path / "ws/.specify/workspace.json").read_text())["private"] is True
+
+
+@pytest.mark.parametrize("existing", [None, b"node_modules/\r\n"], ids=["absent", "present"])
+def test_failed_external_init_restores_code_repository_gitignore(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, existing: bytes | None,
+):
+    repository = tmp_path / "project"
+    repository.mkdir()
+    gitignore = repository / ".gitignore"
+    if existing is not None:
+        gitignore.write_bytes(existing)
+    real_run = subprocess.run
+
+    def fail_commit(args, **kwargs):
+        if "commit" in args:
+            return subprocess.CompletedProcess(args, 1, "", "commit-hook refused")
+        return real_run(args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", fail_commit)
+    result = _init(repository, ".", "--force", "--workspace", str(tmp_path / "workspace"))
+    assert result.exit_code == 1
+    assert (gitignore.read_bytes() if gitignore.exists() else None) == existing
+
+
+
 def test_private_init_outside_git_writes_no_ignore_files(tmp_path: Path):
     (tmp_path / "plain").mkdir()
     result = _private_init(tmp_path, "plain", "claude")
@@ -704,6 +738,68 @@ def test_integration_environment_overrides_defaults_but_not_explicit_choice(
         "script": "py",
     }
     assert saved_init_defaults.read_bytes() == config_before
+
+
+@pytest.mark.parametrize("personal", [False, True], ids=["no-personal-default", "personal-default"])
+def test_integration_environment_only_preselects_the_interactive_menu(
+    tmp_path: Path, saved_init_defaults: Path, monkeypatch: pytest.MonkeyPatch, personal: bool,
+):
+    """Upstream semantics: the environment default never skips the interactive integration choice."""
+    defaults = json.loads(saved_init_defaults.read_text(encoding="utf-8"))
+    if not personal:
+        del defaults["integration"]
+    saved_init_defaults.write_text(json.dumps(defaults), encoding="utf-8")
+    monkeypatch.setenv("SPECKIT_INTEGRATION_DEFAULT", "claude")
+    preselected = []
+
+    def choose(choices, prompt, default, **kwargs):
+        assert "copilot" in choices and "omp" in choices
+        preselected.append(default)
+        return "copilot"
+
+    monkeypatch.setattr("specify_cli.command_init._prompts_allowed", lambda non_interactive: not non_interactive)
+    monkeypatch.setattr("specify_cli.command_init.select_with_arrows", choose)
+    result = _init(tmp_path, "project", integration=None, interactive=True)
+    assert result.exit_code == 0, _strip(result.output)
+    assert preselected == ["claude"]
+    assert _init_choices(resolve_project(tmp_path / "project").workspace_root)["integration"] == "copilot"
+
+
+def test_interactive_storage_choice_defaults_to_local(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Spec 001: external storage is opt-in, so accepting every default keeps assets in the repository."""
+    def accept_default(choices, prompt, default, **kwargs):
+        return default
+
+    def refuse_prompt(*args, **kwargs):
+        pytest.fail("Local storage must not ask for a workspace path.")
+
+    monkeypatch.setattr("specify_cli.command_init._prompts_allowed", lambda non_interactive: not non_interactive)
+    monkeypatch.setattr("specify_cli.command_init.select_with_arrows", accept_default)
+    monkeypatch.setattr("specify_cli.command_init.typer.prompt", refuse_prompt)
+    result = _init(tmp_path, "project", interactive=True)
+    assert result.exit_code == 0, _strip(result.output)
+    project = resolve_project(tmp_path / "project")
+    assert project.storage == "local"
+    assert not (project.repository_root / ".specify/project.json").exists()
+
+
+@pytest.mark.parametrize("source", ["personal", "environment"])
+def test_global_commands_without_integration_selects_omp_over_defaults(
+    tmp_path: Path, saved_init_defaults: Path, monkeypatch: pytest.MonkeyPatch, source: str,
+):
+    if source == "personal":
+        defaults = json.loads(saved_init_defaults.read_text(encoding="utf-8"))
+        defaults["integration"] = "claude"
+        saved_init_defaults.write_text(json.dumps(defaults), encoding="utf-8")
+    else:
+        monkeypatch.setenv("SPECKIT_INTEGRATION_DEFAULT", "claude")
+    result = _init(tmp_path, "project", "--global-commands", integration=None)
+    assert result.exit_code == 0, _strip(result.output)
+    options = json.loads(
+        (resolve_project(tmp_path / "project").workspace_root / ".specify/init-options.json").read_text(encoding="utf-8")
+    )
+    assert (options["integration"], options["command_scope"]) == ("omp", "global")
+
 
 
 @pytest.mark.parametrize("empty", [False, True], ids=["absent", "empty"])
@@ -1303,8 +1399,8 @@ def test_bundled_workflow_install_records_provenance_and_stays_out_of_initial_co
         (project.workspace_root / ".specify/workflows/workflow-registry.json").read_text(encoding="utf-8")
     )
     relative = workflow_yaml.relative_to(project.workspace_root).as_posix()
-    expected_hash = hashlib.sha256(workflow_yaml.read_bytes()).hexdigest()
-    assert registry["workflows"]["speckit"]["generated_files"][relative] == expected_hash
+    assert relative in registry["workflows"]["speckit"]["generated_files"]
+    assert workflow_yaml.read_bytes() == (_locate_bundled_workflow("speckit") / "workflow.yml").read_bytes()
 
     tracked = set(subprocess.run(
         ["git", "-C", str(project.workspace_root), "ls-tree", "-r", "--name-only", "HEAD"],

@@ -3,9 +3,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+
+_UUID = r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}"
 
 
 def user_data_dir() -> Path:
@@ -124,7 +127,10 @@ def find_repository(start: Path | None = None) -> Path:
     if override:
         if not current.is_dir() or not (current / ".specify").is_dir():
             raise ValueError(f"SPECIFY_INIT_DIR is not a Spec Kit project: {current}")
+    home = Path.home().resolve()
     for candidate in ((current,) if override else (current, *current.parents)):
+        if candidate == home and candidate != current:
+            break  # A user-level ~/.specify holds settings, so only cwd == home selects it.
         if (candidate / ".specify").is_dir():
             identity = candidate / ".specify/workspace.json"
             if identity.exists() or identity.is_symlink():
@@ -171,7 +177,7 @@ def _load_project(repository: Path, *, select_feature: bool = True) -> Project:
         if locator.get("storage") != "external":
             raise ValueError(f"Invalid storage mode: {locator_path}")
         project_id = locator.get("project_id")
-        if not isinstance(project_id, str):
+        if not isinstance(project_id, str) or not re.fullmatch(_UUID, project_id):
             raise ValueError(f"Invalid project ID: {locator_path}")
         record_path = checkout_record_path(repository)
         if not record_path.is_file():
@@ -185,7 +191,7 @@ def _load_project(repository: Path, *, select_feature: bool = True) -> Project:
             workspace = verify_workspace(Path(value), project_id)
         except ValueError as exc:
             raise ValueError(
-                f"{exc}. Run specify project unlink to detach this checkout, or specify project link <backup>."
+                f"{str(exc).rstrip('.')}. Run specify project unlink to detach this checkout, or specify project link <backup>."
             ) from exc
         if select_feature and feature_selection_mode(workspace) == "automatic":
             saved = record.get("active_feature")

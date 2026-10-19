@@ -99,6 +99,7 @@ def _run_init(integration: str, *, script_type: str, offline: bool = False) -> N
             script_type=script_type,
             storage=None,
             workspace=None,
+            no_workspace_git=False,
             private=False,
             feature_numbering=None,
             feature_selection=None,

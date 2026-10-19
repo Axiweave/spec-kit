@@ -86,6 +86,8 @@ def claim_storage(project: Project, *, private: bool = False) -> Iterator[None]:
     if workspace.exists() and any(workspace.iterdir()):
         raise ValueError(f"Workspace is occupied. Choose an empty directory: {workspace}")
     record = checkout_record_path(project.repository_root)
+    gitignore = project.repository_root / ".gitignore"
+    original_gitignore = gitignore.read_bytes() if gitignore.is_file() else None
     claimed: list[tuple[Path, dict]] = []
     directories: list[Path] = []
     try:
@@ -126,6 +128,13 @@ def claim_storage(project: Project, *, private: bool = False) -> Iterator[None]:
                         path.unlink()
                 except (OSError, ValueError) as cleanup_error:
                     exc.add_note(f"Could not remove claimed metadata at {path}: {cleanup_error}")
+            try:
+                if original_gitignore is None:
+                    gitignore.unlink(missing_ok=True)
+                else:
+                    gitignore.write_bytes(original_gitignore)
+            except OSError as cleanup_error:
+                exc.add_note(f"Could not restore {gitignore}: {cleanup_error}")
             # Keep partial assets and unrelated content. Remove only empty directories.
             for directory in reversed(directories):
                 with suppress(OSError):
