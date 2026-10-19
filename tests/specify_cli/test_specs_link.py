@@ -6,6 +6,7 @@ from typer.testing import CliRunner
 
 from specify_cli import app
 from specify_cli.private_checkout import BEGIN, END, exclude_path
+from specify_cli.specs_link import link_specs
 from tests.specify_cli.project.test_command_unlink import external_project, git
 
 
@@ -30,6 +31,12 @@ def test_external_init_links_specs_and_git_does_not_see_the_link(tmp_path, monke
     assert "specs" not in tracked
     # A shared project commits its locator. The specs rule must not hide it.
     assert (".specify/project.json" in tracked) is (not options)
+
+    # A second link run changes nothing.
+    exclude = exclude_path(repository).read_bytes()
+    assert link_specs(repository, workspace) is None
+    assert exclude_path(repository).read_bytes() == exclude
+    assert link.resolve() == (workspace / "specs").resolve()
 
 
 def test_link_in_a_new_worktree_follows_the_specs_link_default(tmp_path, monkeypatch):
