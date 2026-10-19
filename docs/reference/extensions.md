@@ -77,7 +77,7 @@ specify extension add archive
 specify extension add brownfield
 ```
 
-An add by name always installs the vendored copy. `specify extension update` does not replace it with a newer community release. To replace an earlier community install with the vendored copy, run `specify extension add <id> --force`. See [Third-Party Notices](https://github.com/Axiweave/spec-kit/blob/main/THIRD_PARTY_NOTICES.md) for the authors and licenses.
+An add by name always installs the vendored copy. `specify extension update` does not replace it with a newer community release. With `--version`, the version must equal the vendored version. Any other version fails. To replace an earlier community install with the vendored copy, run `specify extension add <id> --force`. See [Third-Party Notices](https://github.com/Axiweave/spec-kit/blob/main/THIRD_PARTY_NOTICES.md) for the authors and licenses.
 
 ## Remove an Extension
 

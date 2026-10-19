@@ -32,8 +32,10 @@ Creates a new Spec Kit project with the necessary directory structure, templates
 Use `<project_name>` to create a new directory, or `--here` (or `.`) to initialize in the current directory. If the directory already has files, use `--force` to merge without confirmation.
 
 For new projects, setup uses explicit options, then the integration environment override, then personal defaults.
-Unset choices prompt in interactive terminals.
+In an interactive terminal, `SPECKIT_INTEGRATION_DEFAULT` only preselects the integration prompt.
+Unset choices prompt in interactive terminals. The storage prompt defaults to local storage.
 Non-interactive setup uses local storage, sequential numbering, the platform script type, and GitHub Copilot when no other choice applies.
+When `--integration` is omitted, `--global-commands` selects `omp`. Reinitialization keeps the project's saved integration.
 
 ### Examples
 
@@ -99,11 +101,15 @@ Outside a Git repository, Spec Kit writes no ignore rules.
 You choose private mode when you create the workspace. The workspace saves `"private": true` in `.specify/workspace.json`.
 An existing workspace cannot change its mode.
 
+Private mode needs the project at the top level of its Git repository. Setup refuses a project in a subdirectory.
+
 Before any write, setup does a dry run in a temporary directory.
+It checks the targets of the integration, the extensions, and the presets.
 If Spec Kit would change a file that Git tracks, setup stops and writes nothing.
+Later `specify extension add` and `specify preset add` runs also stop before any write when they would change a tracked file.
 
 Only Claude Code and GitHub Copilot get native hooks in private mode.
-Claude Code uses `.claude/settings.local.json`. Copilot uses its own hook file and skips `.vscode/settings.json`.
+Claude Code uses `.claude/settings.local.json`. Copilot uses `.github/hooks/speckit.json` and skips `.vscode/settings.json`.
 For other integrations, setup skips native hooks and prints a message.
 
 ### Workspace Git history
@@ -134,6 +140,9 @@ Review arbitrary prose and unknown files for secrets before you share the worksp
 Later commands do not commit, configure remotes, or synchronize changes.
 Use ordinary Git commands to review, commit, and share workspace changes.
 To track a later edit to an ignored generated file, use an explicit `git add -f <path>`.
+Setup writes the ignore rules for unchanged generated files once, into the workspace `.gitignore`.
+Packages that you add later, such as `specify extension add`, and helper files that later commands generate are not added to that file.
+Review `git status` in the workspace after such a change, and add ignore lines by hand if you do not want to commit those files.
 After a clone, run `specify project link <workspace>` from the matching code repository.
 Link restores missing agent commands, helpers, templates, and the missing files of packages bundled with the CLI.
 A bundled file comes back only when its bytes match the recorded producer hash.
@@ -175,7 +184,9 @@ Malformed or unreadable files block updates instead of losing saved data.
 A nonempty `storage_root` selects external storage for new projects.
 Setup expands `~` without changing the saved string.
 Explicit `--storage local` and `--workspace` override that location choice.
-`SPECKIT_INTEGRATION_DEFAULT` overrides the personal integration value unless `--integration` is explicit.
+For a new project, `SPECKIT_INTEGRATION_DEFAULT` outranks the personal `integration` value. An explicit `--integration` outranks both.
+The variable never skips the interactive prompt. The prompt preselects it, and non-interactive setup uses it.
+Without the variable, a personal `integration` value applies with no prompt.
 Changed personal defaults do not change an existing project's workspace or saved choices, including during forced reinitialization.
 
 ### Feature selection
@@ -278,7 +289,8 @@ Approval tokens bind the repository, workspace, target scheme, local clock, and 
 Tokens are not authentication secrets.
 If files or metadata change after preview, request a new preview.
 
-The migration updates owned Markdown paths, existing saved selections, and affected paused or failed workflow resource directories.
+The migration updates owned Markdown paths, the saved selections of this checkout and of its local linked worktrees, and affected paused or failed workflow resource directories.
+Clones on other machines keep their old selection. In each such clone, run `specify project select <new path>`.
 The opt-in agent-context extension supplies managed regions for native context path updates.
 The migration does not create or change extension configuration.
 It preserves selection policy, opaque workflow values, completed history, and installation records.
@@ -293,9 +305,10 @@ Both name the owner process, and the backup records the progress of each rename.
 After success, the command removes both.
 
 If a rename stops before it finishes, run `specify project recover` from the code repository.
-It lists every leftover lock and recovery folder with its owner, and exits 1 when leftovers exist.
+It only lists every leftover lock and recovery folder with its owner. It changes nothing, and exits 1 when leftovers exist.
 `specify project recover --apply` restores the files from the backup when the owner process has stopped.
 It refuses a running owner, an owner it cannot confirm, and a file that changed after the stop.
+It never reverses a rename that finished.
 For an unconfirmed owner, stop every writer and then delete the lock by hand.
 
 ### Merge specification artifacts
@@ -494,7 +507,10 @@ Report incomplete review and blocked readiness until cleanup and a new reconcili
 
 If interruption prevents an application result, the helper keeps the recovery journal and payloads.
 The lock and the journal name the owner process.
-Run `specify project recover` to list them and `specify project recover --apply` to restore the destination after the owner stops.
+Run `specify project recover` from the destination project to list them. It changes nothing.
+Run `specify project recover --apply` to restore the destination after the owner stops.
+It refuses a leftover whose owner still runs or cannot be confirmed, and it never reverses a merge that finished.
+`recover` cannot find leftovers in a raw `--destination-kind set` destination. Clean that destination by hand.
 
 Follow the result's exact remaining operations before another transfer or a clean readiness claim.
 Stop every writer before removing a reported lock.
@@ -576,8 +592,12 @@ A new checkout record has no active feature. In `automatic` mode, link prints `N
 
 `link` also attaches a new checkout that has no locator, such as a linked worktree or a second clone, in private and non-private mode.
 It takes the project ID from the workspace and writes the locator and the checkout record.
-In a checkout that already has a locator, `link` installs missing integrations, reinstalls integrations with a different version, and removes integrations that the workspace no longer lists.
+In private mode, a checkout that already has a locator also gets its integrations synchronized.
+`link` installs missing integrations, reinstalls integrations with a different version, and removes integrations that the workspace no longer lists.
+In non-private mode, `link` does not install or remove integrations. It restores missing files only.
 Link never changes another checkout. It keeps modified files, names each one, and prints `Repair: specify integration upgrade <key> --force`.
+`Kept modified file` cannot tell an old generated copy from your edit. Version metadata files always change on a version change.
+So the `Repair:` command is a required step. Save your own edits before you run it.
 
 ### Shared OMP commands
 
@@ -590,10 +610,12 @@ specify project command speckit.specify --json
 Global installation works outside a project and targets the active OMP profile's command directory.
 The launchers contain no project content.
 Each invocation resolves the current project's command, configuration, presets, extensions, and feature selection.
-The JSON response contains `content`, `repository_root`, `workspace_root`, and `feature_dir`.
+The JSON response contains `content`, `repository_root`, `workspace_root`, `feature_dir`, and `feature_selection`.
 
 Use `specify integration upgrade omp --global` or `specify integration uninstall omp --global` to manage the shared set.
-These commands preserve unrelated files and edited launchers, including with `--force`.
+Install and upgrade reuse the launchers that Spec Kit manages. They skip edited and unowned launchers, and report each one.
+Uninstall removes unchanged managed launchers. It keeps edited launchers, reports them, and exits 1.
+These commands never change unrelated files.
 Project or add-on removal does not remove shared launchers that another project can use.
 Other integrations do not support `--global` or `--global-commands`.
 
@@ -601,7 +623,7 @@ Other integrations do not support `--global` or `--global-commands`.
 
 | Variable          | Description                                                              |
 | ----------------- | ------------------------------------------------------------------------ |
-| `SPECKIT_INTEGRATION_DEFAULT` | Override the fallback integration used by `specify init` when `--integration` is omitted (interactive prompt default and non-interactive fallback). Set it to any registered integration key (e.g. `gemini`, `claude`). An unrecognized value is ignored with a warning and the built-in default (`copilot`) is used. An explicit `--integration <key>` always takes precedence. |
+| `SPECKIT_INTEGRATION_DEFAULT` | Set the integration for a new project when `--integration` is omitted. In an interactive terminal, the integration prompt still appears and preselects this value. Non-interactive setup uses it. It outranks a personal `integration` default. Set it to any registered integration key (e.g. `gemini`, `claude`). An unrecognized value is ignored with a warning and the built-in default (`copilot`) is used. An explicit `--integration <key>` always takes precedence. |
 | `SPECIFY_INIT_DIR` | Select the code repository explicitly, including from a monorepo root. Relative values resolve from cwd. The directory must contain `.specify/`. Invalid values fail without fallback. Without the override, core scripts and project CLI commands search upward from cwd. |
 | `SPECIFY_FEATURE_DIRECTORY` | Override saved feature selection. Relative paths join the workspace. External selections must stay inside that workspace. Local mode does not confine the value: a relative path such as `../shared-feature` or an absolute path can select a directory outside the project. |
 | `SPECIFY_FEATURE` | Override the reported feature label, independently of Git. This does not select a feature directory. Use `SPECIFY_FEATURE_DIRECTORY` or saved feature selection for that purpose. |

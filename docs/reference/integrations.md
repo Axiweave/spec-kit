@@ -136,7 +136,9 @@ The global launcher resolves `specify project command speckit.merge --json` inst
 The invoking project's source precedence and preset composition determine the returned workflow.
 
 The global manifest tracks each command directory separately.
-Install, upgrade, and uninstall preserve edited and unrelated files, even with `--force`.
+Install and upgrade reuse the launchers that Spec Kit manages. They skip edited and unowned launchers, and report each one.
+Uninstall removes unchanged managed launchers. It keeps edited launchers, reports them, and exits 1.
+These commands never change unrelated files, even with `--force`.
 Project integration or extension removal leaves shared launchers intact.
 Use an explicit global uninstall to remove unchanged shared launchers.
 Use `specify project info --json` to locate each project's workspace for a separate backup.

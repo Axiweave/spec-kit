@@ -20,7 +20,7 @@ Spec Kit supports two install routes:
 
 ### Install from Source — Persistent Installation (Recommended)
 
-Install once and use everywhere. The command below installs the fork's default branch. To pin a release, append `@vX.Y.Z` with a tag from [Tags](https://github.com/Axiweave/spec-kit/tags) — keep the leading `v` (for example, `v0.12.11`, not `0.12.11`):
+Install once and use everywhere. The command below installs the fork's default branch. The fork publishes no release tags. Tags such as `v1.1.0` mirror upstream and hold upstream code. To pin the fork, append a commit SHA: `git+https://github.com/Axiweave/spec-kit.git@<sha>`.
 
 > [!NOTE]
 > The command below requires **[uv](https://docs.astral.sh/uv/)**. If you see `command not found: uv`, [install uv first](./install/uv.md).

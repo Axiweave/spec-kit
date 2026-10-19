@@ -54,7 +54,7 @@ starting either path.
 **In your terminal**, install the CLI from PyPI (requires [uv](install/uv.md)), then initialize your project:
 
 ```bash
-uv tool install specify-cli
+uv tool install specify-cli --from git+https://github.com/Axiweave/spec-kit.git
 specify init taskify --integration copilot
 cd taskify
 ```

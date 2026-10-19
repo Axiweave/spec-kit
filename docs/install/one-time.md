@@ -11,9 +11,9 @@ If you want to try Spec Kit without installing it permanently, use `uvx` to run 
 # Create a new project (latest from the fork's default branch)
 uvx --from git+https://github.com/Axiweave/spec-kit.git specify init <PROJECT_NAME>
 
-# Or target a specific tag (replace vX.Y.Z with a tag from
-# https://github.com/Axiweave/spec-kit/tags; keep the leading v)
-uvx --from git+https://github.com/Axiweave/spec-kit.git@vX.Y.Z specify init <PROJECT_NAME>
+# Or pin a fork commit (replace <sha> with a commit SHA). The fork publishes
+# no release tags. Tags such as v1.1.0 mirror upstream and hold upstream code.
+uvx --from git+https://github.com/Axiweave/spec-kit.git@<sha> specify init <PROJECT_NAME>
 
 # Initialize in the current directory
 uvx --from git+https://github.com/Axiweave/spec-kit.git specify init . --integration copilot

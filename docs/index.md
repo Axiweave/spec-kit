@@ -197,7 +197,7 @@ Community extensions like CI Guard and Architecture Guard add compliance gates a
 <div class="footer-cta">
 
 ```bash
-uv tool install specify-cli
+uv tool install specify-cli --from git+https://github.com/Axiweave/spec-kit.git
 specify init my-project --integration copilot
 ```
 

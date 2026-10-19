@@ -13,15 +13,16 @@ Invocation authorizes a local merge commit after verification. Do not push.
 5. If tracked changes or an unfinished Git operation exist, stop and ask how to preserve them.
 6. Leave unrelated untracked files untouched, including `.omp/config.yml`, generated `.omp/commands/speckit.*.md`, and `specs/`.
 
-Never reset, discard, automatically stash, or commit unrelated user work.
+   Never reset, discard, automatically stash, or commit unrelated user work.
 
-7. Fetch upstream release tags: `git fetch <upstream> 'refs/tags/v*:refs/tags/v*'`.
+7. Fetch upstream release tags into a separate namespace: `git fetch --no-tags <upstream> 'refs/tags/v*:refs/upstream-tags/v*'`.
+   Never fetch them into `refs/tags/`. Upstream tags hold upstream code, and `git push --tags` would publish them as fork tags.
 8. Find the newest upstream release already in `HEAD`. Upstream tags a version-bump commit beside `main`,
    so before the first tag merge `git describe` finds only old tags. Accept a tag when it or its parent is in `HEAD`:
 
    ```bash
-   for t in $(git tag -l 'v[0-9]*' --sort=-v:refname); do
-     git merge-base --is-ancestor "$t^" HEAD && { echo "$t"; break; }
+   for t in $(git for-each-ref --sort=-v:refname --format='%(refname:strip=2)' 'refs/upstream-tags/v[0-9]*'); do
+     git merge-base --is-ancestor "refs/upstream-tags/$t^" HEAD && { echo "$t"; break; }
    done
    ```
 
@@ -50,7 +51,7 @@ This tag records the fork head before the next upstream merge. For example, `v0.
 
 ## 3. Merge
 
-1. Run `git merge --no-ff --no-commit <tag>`.
+1. Run `git merge --no-ff --no-commit refs/upstream-tags/<tag>`.
 2. If conflicts occur, read the `resolving-merge-conflicts` skill before resolving them.
 3. Preserve the fork decisions while integrating upstream changes. These always stay fork-specific:
    - `_GITHUB_REPO = "Axiweave/spec-kit"` in `src/specify_cli/_version.py`.

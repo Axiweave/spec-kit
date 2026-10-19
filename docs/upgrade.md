@@ -9,8 +9,8 @@
 | What to Upgrade | Command | When to Use |
 |----------------|---------|-------------|
 | **CLI Tool (recommended)** | `specify self upgrade` | Latest stable release of this fork, in place. Auto-detects whether you installed via `uv tool` or `pipx`. If the fork publishes no release, it stops and prints the default-branch install command. |
-| **CLI Tool — pin a version** | `specify self upgrade --tag vX.Y.Z[suffix]` | Upgrade to a specific fork tag instead of the latest stable. Suffixes are limited to dev, alpha/beta/rc, and/or build metadata forms. |
-| **CLI Tool — manual fallback** | `uv tool install specify-cli --force --from git+https://github.com/Axiweave/spec-kit.git` | When `specify self upgrade` isn't available (older installs) or when you want explicit control. Append `@vX.Y.Z` to pin a fork tag. |
+| **CLI Tool — pin a version** | `specify self upgrade --tag vX.Y.Z[suffix]` | Upgrade to a specific tag instead of the latest stable. The fork publishes no release tags. Its mirrored upstream tags hold upstream code, so `--tag` installs upstream code. To pin fork code, use the manual fallback with a commit SHA. |
+| **CLI Tool — manual fallback** | `uv tool install specify-cli --force --from git+https://github.com/Axiweave/spec-kit.git` | When `specify self upgrade` isn't available (older installs) or when you want explicit control. To pin, append `@<sha>` with a fork commit SHA. |
 | **CLI Tool — manual fallback (pipx)** | `pipx install --force git+https://github.com/Axiweave/spec-kit.git` | Same as above, for pipx installs. |
 | **Project Files** | Run `specify integration upgrade <key>`, then `specify extension update` | Refresh installed integration files and extensions in your project |
 | **Both** | Run CLI upgrade, then project update | Recommended for major version updates |
@@ -49,7 +49,7 @@ If your installed CLI is older than the release that introduced `specify self up
 
 ### If you installed with `uv tool install`
 
-Upgrade to the fork's default branch, or append `@vX.Y.Z` with a tag from [Tags](https://github.com/Axiweave/spec-kit/tags) to pin a release:
+Upgrade to the fork's default branch, or append `@<sha>` with a fork commit SHA to pin it. The fork publishes no release tags. Tags such as `v1.1.0` mirror upstream and hold upstream code.
 
 ```bash
 uv tool install specify-cli --force --from git+https://github.com/Axiweave/spec-kit.git
@@ -57,7 +57,7 @@ uv tool install specify-cli --force --from git+https://github.com/Axiweave/spec-
 
 ### If you use one-shot `uvx` commands
 
-Run the fork's default branch, or append `@vX.Y.Z` to pin a tag:
+Run the fork's default branch, or append `@<sha>` with a fork commit SHA to pin it:
 
 ```bash
 uvx --from git+https://github.com/Axiweave/spec-kit.git specify init --here --integration copilot
@@ -67,7 +67,7 @@ uvx --from git+https://github.com/Axiweave/spec-kit.git specify init --here --in
 
 ### If you installed with `pipx`
 
-Upgrade to the fork's default branch, or append `@vX.Y.Z` to pin a tag:
+Upgrade to the fork's default branch, or append `@<sha>` with a fork commit SHA to pin it:
 
 ```bash
 pipx install --force git+https://github.com/Axiweave/spec-kit.git
@@ -162,7 +162,7 @@ A project with external storage keeps its Spec Kit files in a workspace folder. 
 4. On each other machine, pull the workspace changes in the workspace folder.
 5. In each other checkout, run `specify project link <workspace>`. Link restores the missing generated files of that checkout.
 
-When link prints `Kept modified file: <relative path>`, link kept your edit of that file. To replace the edited files with the new managed copy, run the `Repair:` command that link prints, in the same checkout.
+When link prints `Kept modified file: <relative path>`, link kept that file. Link cannot tell an old generated copy from your edit. Version metadata files always change on a version change, so link keeps them after every upgrade. The `Repair:` command that link prints is therefore a required step. Save your own edits first, then run it in the same checkout.
 
 ### Fallback: re-run init
 

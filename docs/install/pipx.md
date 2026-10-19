@@ -4,14 +4,14 @@
 
 ## Install Specify CLI
 
-Install the fork's default branch, or pin a tag from [Tags](https://github.com/Axiweave/spec-kit/tags) when one exists:
+Install the fork's default branch, or pin a fork commit SHA. The fork publishes no release tags. Tags such as `v1.1.0` mirror upstream and hold upstream code.
 
 ```bash
 # Install the fork's default branch
 pipx install git+https://github.com/Axiweave/spec-kit.git
 
-# Or pin a tag (replace vX.Y.Z, keeping the leading v)
-pipx install git+https://github.com/Axiweave/spec-kit.git@vX.Y.Z
+# Or pin a fork commit (replace <sha> with a commit SHA)
+pipx install git+https://github.com/Axiweave/spec-kit.git@<sha>
 ```
 
 ## Verify

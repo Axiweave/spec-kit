@@ -127,8 +127,8 @@ Link can print more lines. Do what each line tells you:
 | --- | --- |
 | `Updated: .gitignore. Commit it so other checkouts get the ignore line.` | Commit `.gitignore` |
 | `Locator written: .specify/project.json. Commit it so teammates can link.` | Commit `.specify/project.json` |
-| `Kept modified file: <relative path>` | Link kept your edit of a generated file |
-| `Repair: specify integration upgrade <key> --force` | Run it to replace the edited files with the managed copy |
+| `Kept modified file: <relative path>` | Link kept this file. It cannot tell an old generated copy from your edit. Version metadata files always change on a version change, so expect them here. |
+| `Repair: specify integration upgrade <key> --force` | Required. Save your own edits first, then run it to replace the kept files with the managed copy |
 | `Next: specify project select <feature>` | Select a feature for this checkout |
 
 ## 3. Add a Worktree or Another Clone
@@ -216,8 +216,10 @@ Duplicate feature prefixes:
 Rename with: specify project migrate-naming --feature-numbering timestamp --dry-run
 ```
 
-- Sequential names: run the command from the hint. It shows a preview before
-  it changes a name.
+- Sequential names: the hint command ends in `--dry-run`, so it only shows a
+  preview. Review the preview. Then run the command again without `--dry-run`
+  in a terminal and approve it, or add `--apply <token>` with the
+  `approval_token` from the `--json` preview.
 - Timestamp names: the hint is
   `Rename one directory of each timestamp group by hand to a free timestamp prefix.`
 
@@ -239,15 +241,16 @@ from one specification set to another. They do not replace Git sync:
 ## Recover After a Forced Stop
 
 A forced stop of a rename, a merge, or a move can leave a lock or a recovery
-folder. Run this from the code checkout:
+folder. Run this from the code checkout of the project that was changed. For a
+merge, that is the destination project:
 
 ```bash
 specify project recover
 ```
 
-The command changes nothing. It exits 0 when nothing is left, and exits 1 when
-it lists leftovers. For each leftover, it shows the owner process and its
-state.
+The command only lists leftovers. It changes nothing. It exits 0 when nothing
+is left, and exits 1 when it lists leftovers. For each leftover, it shows the
+owner process and its state.
 
 To restore the leftovers whose owner stopped, run:
 
@@ -256,9 +259,12 @@ specify project recover --apply
 ```
 
 `--apply` refuses a leftover when the owner still runs, when it cannot confirm
-that the owner stopped, or when a target file changed after the stop. It
-never changes a `move-recovery` leftover. Follow the manual steps in the
-output.
+that the owner stopped, or when a target file changed after the stop. It never
+reverses a rename or a merge that finished. It never changes a
+`move-recovery` leftover. Follow the manual steps in the output.
+
+`recover` cannot find leftovers in a raw `--destination-kind set` destination.
+Inspect and clean that destination by hand.
 
 ## Leave External Storage
 
