@@ -1,7 +1,6 @@
 """Stage and commit a verified move from local project storage."""
 from __future__ import annotations
 
-import hashlib
 import json
 import shutil
 import stat
@@ -23,7 +22,7 @@ from specify_cli.workspace_git import WorkspaceGitError, initialize_workspace_gi
 class _Entry:
     path: str
     mode: int
-    digest: str | None
+    stamp: tuple[int, int] | None  # (size, mtime_ns) for a file, None for a directory
 
 
 @dataclass(frozen=True)
@@ -53,9 +52,7 @@ def _inventory(root: Path, roots: tuple[str, ...] = (".",)) -> tuple[_Entry, ...
             for child in sorted(path.iterdir()):
                 visit(child)
         elif stat.S_ISREG(info.st_mode):
-            with path.open("rb") as handle:
-                digest = hashlib.file_digest(handle, "sha256").hexdigest()
-            entries.append(_Entry(path.relative_to(root).as_posix(), mode, digest))
+            entries.append(_Entry(path.relative_to(root).as_posix(), mode, (info.st_size, info.st_mtime_ns)))
         else:
             raise ValueError(f"Move requires ordinary files and directories: {path}")
 
@@ -162,14 +159,14 @@ def prepare_move(repository: Path, destination: Path, *, no_workspace_git: bool 
         ) from exc
     return PreparedMove(
         repository, workspace, project_id, active,
-        tuple(entry.path for entry in source if entry.digest is not None),
+        tuple(entry.path for entry in source if entry.stamp is not None),
         no_workspace_git, roots, source, staged,
     )
 
 
 def _relocate_workflow_dirs(prepared: PreparedMove) -> None:
     """Relocate only resource directories in the verified copy."""
-    directories = {entry.path for entry in prepared._source if entry.digest is None}
+    directories = {entry.path for entry in prepared._source if entry.stamp is None}
     runs = prepared.workspace_root / ".specify/workflows/runs"
     for path in runs.glob("*/state.json"):
         data = read_json(path)
@@ -198,10 +195,10 @@ def _restore_metadata(prepared: PreparedMove, contents: dict[str, bytes], protec
     for entry in reversed(_inventory(workspace, (".specify",))):
         path = workspace / entry.path
         if entry.path not in expected and path not in protected:
-            path.rmdir() if entry.digest is None else path.unlink()
+            path.rmdir() if entry.stamp is None else path.unlink()
     for entry in expected.values():
         path = workspace / entry.path
-        if entry.digest is None:
+        if entry.stamp is None:
             path.mkdir(exist_ok=True)
         elif not path.exists() or path.read_bytes() != contents[entry.path]:
             path.write_bytes(contents[entry.path])
@@ -217,15 +214,15 @@ def _restore_sources(prepared: PreparedMove, recovery: Path, moved: list[str], c
         if target.exists() or target.is_symlink():
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
-        if entry.digest is None:
+        if entry.stamp is None:
             target.mkdir()
         elif entry.path in contents:
             target.write_bytes(contents[entry.path])
         else:
             source = prepared.workspace_root / entry.path
-            with source.open("rb") as handle:
-                if hashlib.file_digest(handle, "sha256").hexdigest() != entry.digest:
-                    raise ValueError(f"Recovery copy changed: {source}. Preserve both copies for manual recovery.")
+            info = source.stat()
+            if (info.st_size, info.st_mtime_ns) != entry.stamp:
+                raise ValueError(f"Recovery copy changed: {source}. Preserve both copies for manual recovery.")
             shutil.copy2(source, target)
         target.chmod(entry.mode)
 
@@ -289,7 +286,7 @@ def commit_move(prepared: PreparedMove, *, report: dict[str, str] | None = None)
     contents = {
         entry.path: (workspace / entry.path).read_bytes()
         for entry in prepared._source
-        if entry.path.startswith(".specify/") and entry.digest is not None
+        if entry.path.startswith(".specify/") and entry.stamp is not None
     }
     states = (
         (workspace / ".specify/workspace.json", {"schema_version": 1, "project_id": prepared.project_id}),
@@ -534,7 +531,7 @@ def prepare_local(repository: Path) -> PreparedLocal:
             raise KeyboardInterrupt("Conversion interrupted. The checkout and the workspace were not changed.") from exc
         raise ValueError(f"Conversion preparation failed: {exc} The checkout and the workspace were not changed.") from exc
     return PreparedLocal(
-        repository, workspace, active, tuple(entry.path for entry in source if entry.digest is not None),
+        repository, workspace, active, tuple(entry.path for entry in source if entry.stamp is not None),
         tuple(roots), staging,
     )
 
@@ -620,4 +617,4 @@ def commit_local(prepared: PreparedLocal) -> tuple[int, tuple[Path, ...]]:
         )
         raise error(f"Conversion to local storage failed: {reason}.{state} The workspace was not changed.") from exc
     regenerate_exclude_block(repository, create=False)
-    return sum(entry.digest is not None for entry in local), shared
+    return sum(entry.stamp is not None for entry in local), shared

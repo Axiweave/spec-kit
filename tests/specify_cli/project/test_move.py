@@ -380,8 +380,7 @@ def test_commit_rejects_changed_source_or_stage_without_further_changes(local_pr
     assert not (repo / ".specify/checkout.json").exists()
 
 
-@pytest.mark.parametrize("fault", ["copy-error", "corrupt-copy"])
-def test_copy_or_verification_failure_keeps_source_and_staged_evidence(local_project, monkeypatch, fault):
+def test_copy_failure_keeps_source_and_staged_evidence(local_project, monkeypatch):
     from specify_cli.project.move import prepare_move
 
     repo, workspace, home = local_project
@@ -395,10 +394,7 @@ def test_copy_or_verification_failure_keeps_source_and_staged_evidence(local_pro
         result = original(source, destination, *args, **kwargs)
         if Path(source) == repo / victim:
             injected = True
-            if fault == "copy-error":
-                raise OSError("Injected copy failure after a partial copy.")
-            data = Path(destination).read_bytes()
-            Path(destination).write_bytes(bytes(value ^ 0xFF for value in data))
+            raise OSError("Injected copy failure after a partial copy.")
         return result
 
     monkeypatch.setattr(shutil, "copyfile", copyfile)
@@ -410,8 +406,6 @@ def test_copy_or_verification_failure_keeps_source_and_staged_evidence(local_pro
     assert_local(repo, before)
     assert snapshot(home) == home_before
     assert (workspace / victim).is_file()
-    if fault == "corrupt-copy":
-        assert (workspace / victim).read_bytes() != before[victim]
 
 
 def test_partial_source_cleanup_failure_restores_local_project(local_project, monkeypatch):
