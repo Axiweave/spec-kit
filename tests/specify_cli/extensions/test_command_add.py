@@ -1394,9 +1394,11 @@ class TestExtensionGeneratedFilesProvenance:
             new_hello.encode()
         ).hexdigest()
         assert notes.relative_to(project_dir).as_posix() not in generated
-        err = capsys.readouterr().err
-        assert "notes.txt" in err
-        assert "hello.md" not in err
+        err = " ".join(capsys.readouterr().err.split())
+        kept = err.partition("Kept existing files")[2]
+        replaced = err.partition("Replaced files")[2].partition("Kept existing files")[0]
+        assert "notes.txt" in kept and "hello.md" not in kept
+        assert "hello.md" in replaced and "notes.txt" not in replaced
 
     def test_failed_force_reinstall_names_staging_dir_and_retry_command(
         self, extension_dir, project_dir, monkeypatch

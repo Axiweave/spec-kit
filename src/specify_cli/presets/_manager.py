@@ -601,10 +601,23 @@ class PresetManager(_PresetCommandMethods, _PresetSkillMethods):
         if old_metadata is not None and not isinstance(
             old_metadata.get("generated_files"), dict
         ):
+            replaced = sorted(
+                rel for rel, (content, _) in custom_payload.items()
+                if (dest_dir / rel).is_file() and (dest_dir / rel).read_bytes() != content
+            )
             custom_payload = {
                 rel: entry for rel, entry in custom_payload.items()
                 if not (dest_dir / rel).is_file()
             }
+            if replaced:
+                from ..terminal import err_console
+
+                err_console.print(
+                    f"Replaced files in preset '{manifest.id}' with the new release. "
+                    "The old record cannot tell your edits from old package files: "
+                    + ", ".join(replaced),
+                    markup=False,
+                )
 
         # Restore any preserved custom/edited payload now, before the still
         # -fallible registration and registry.add() steps below run — so a

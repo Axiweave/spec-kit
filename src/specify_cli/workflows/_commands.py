@@ -321,6 +321,7 @@ def _preserve_custom_content_into_staged(
 
     preserved: dict[str, str | None] = {}
     kept: list[str] = []
+    replaced: list[str] = []
     if not dest_dir.exists():
         return preserved
     for path in sorted(dest_dir.rglob("*")):
@@ -353,6 +354,8 @@ def _preserve_custom_content_into_staged(
                 "custom content at that path"
             )
         if old_baseline is None and staged_target.exists():
+            if staged_target.read_bytes() != path.read_bytes():
+                replaced.append(rel_in_dir.as_posix())
             continue
         staged_target.parent.mkdir(parents=True, exist_ok=True)
         _shutil.copy2(path, staged_target)
@@ -362,6 +365,12 @@ def _preserve_custom_content_into_staged(
     if kept:
         err_console.print(
             f"Kept existing files in '{dest_dir.name}': " + ", ".join(kept),
+            markup=False,
+        )
+    if replaced:
+        err_console.print(
+            f"Replaced files in '{dest_dir.name}' with the new release. "
+            "The old record cannot tell your edits from old package files: " + ", ".join(replaced),
             markup=False,
         )
     return preserved
@@ -483,6 +492,12 @@ def _commit_or_preserve_workflow_file(
             else {}
         )
         return False, None, generated
+    if old_baseline is None and dest_file.is_file() and dest_file.read_bytes() != new_content:
+        err_console.print(
+            f"Replaced '{dest_file}' with the new release. "
+            "The old record cannot tell your edits from old package files.",
+            markup=False,
+        )
     backup_file = _commit_workflow_file(staged_file, dest_file, existed_before)
     generated = _generated_files_entry(project_root, {dest_file: new_content})
     return True, backup_file, generated

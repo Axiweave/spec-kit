@@ -3783,8 +3783,11 @@ steps:
         )
         assert (installed / "scripts" / "helper.sh").read_text() == "echo v2 helper\n"
         assert (installed / "notes.txt").read_text() == "kept across reinstall\n"
-        assert "notes.txt" in second.stderr
-        assert "helper.sh" not in second.stderr
+        err = " ".join(second.stderr.split())
+        kept = err.partition("Kept existing files")[2].partition("Replaced files")[0]
+        replaced = err.partition("Replaced files")[2]
+        assert "notes.txt" in kept and "helper.sh" not in kept
+        assert "helper.sh" in replaced and "notes.txt" not in replaced
         entry = WorkflowRegistry(project_dir).get("align-wf")
         assert entry["version"] == "2.0.0"
         assert ".specify/workflows/align-wf/scripts/helper.sh" in entry["generated_files"]

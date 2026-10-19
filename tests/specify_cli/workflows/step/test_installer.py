@@ -1198,7 +1198,7 @@ def test_all_sources_share_identity_rejection(tmp_path):
 def test_failed_catalog_restore_puts_previous_step_back(
     tmp_path, project_dir, monkeypatch, capsys, failing
 ):
-    """A restore that fails after the swap leaves the previous tree and no siblings, and prints nothing."""
+    """A restore that fails after the swap leaves the previous tree and no siblings, and prints nothing to stdout."""
     from specify_cli.workflows.step.catalog import StepRegistry
 
     target = _write_package(_steps_dir(project_dir) / "my-step", init_body="# edited\n")
@@ -1217,7 +1217,7 @@ def test_failed_catalog_restore_puts_previous_step_back(
 
     assert {p.relative_to(target): p.read_bytes() for p in target.rglob("*") if p.is_file()} == before
     assert [p.name for p in _steps_dir(project_dir).iterdir() if p.name.startswith(".")] == []
-    assert capsys.readouterr() == ("", "")
+    assert capsys.readouterr().out == ""
 
 
 def test_restore_rollback_keeps_a_live_step_when_backup_cannot_return(
