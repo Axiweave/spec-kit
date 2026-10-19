@@ -21,15 +21,32 @@ from __future__ import annotations
 
 import contextlib
 import os
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 from ..workspace import workspace_root_for
 
 from . import BundlerError
 from .manifest import ComponentRef
+from .versioning import same_version
 
 DEFAULT_PRIORITY = 10
+
+
+@dataclass(frozen=True)
+class BundledPatchDetails:
+    kind: str
+    component_id: str
+    requested_version: str
+    installed_version: str
+
+
+@dataclass(frozen=True)
+class BundledPatchWarning:
+    message: str
+    details: BundledPatchDetails
+    code: Literal["bundled_patch_upgrade"] = "bundled_patch_upgrade"
 
 
 def _assert_pinned_version(
@@ -58,6 +75,111 @@ def _assert_pinned_version(
         )
 
 
+def _select_pinned_release(
+    kind: str, component: ComponentRef, info: dict, select_release
+) -> tuple[dict, str | None]:
+    """Select the catalog release a bundle pin names.
+
+    Returns the selected release record and the version the archive must
+    declare (``None`` when the pin cannot be enforced). Selection stays within
+    the winning catalog entry, so a pinned release missing from it is an error
+    rather than a silent fall-through to the advertised release or to a
+    lower-priority catalog. An entry advertising no version cannot enforce the
+    pin, so it is installed as resolved (mirrors ``_assert_pinned_version``).
+    """
+    _assert_catalog_source(kind, component, info)
+    pinned = component.version
+    advertised = info.get("version")
+    if not pinned or advertised is None or not str(advertised).strip():
+        return info, None
+    selected = select_release(info, pinned)
+    if selected is None:
+        raise BundlerError(
+            f"{kind} '{component.id}' is pinned to version {pinned} in the bundle "
+            f"manifest, but its catalog has no release for that version (it "
+            f"advertises {str(advertised).strip()}). Update the bundle's pinned "
+            "version or the catalog before installing."
+        )
+    return selected, selected["version"]
+
+
+def _assert_catalog_source(kind: str, component: ComponentRef, info: dict) -> None:
+    """A source identifies the winning catalog; it cannot select another one."""
+    if component.source and component.source != info.get("_catalog_name"):
+        raise BundlerError(
+            f"{kind} '{component.id}' requests catalog '{component.source}', "
+            f"but its highest-priority source is "
+            f"'{info.get('_catalog_name', '<unknown>')}'. "
+            "A bundle source cannot bypass catalog precedence."
+        )
+    if not info.get("_install_allowed", True):
+        raise BundlerError(
+            f"{kind} '{component.id}' is from a discovery-only catalog; "
+            "installation is not allowed."
+        )
+
+
+def _selected_catalog_info(kind: str, component: ComponentRef, catalog) -> dict:
+    """Resolve an exact workflow/step release within the winning catalog."""
+    from .component_catalog import select_catalog_release, winning_catalog_entry
+
+    current = winning_catalog_entry(catalog, component)
+    if current is None:
+        raise BundlerError(f"{kind} '{component.id}' not found in any catalog.")
+    _assert_catalog_source(kind, component, current)
+    if component.version is None:
+        return current
+    selected = select_catalog_release(component, current)
+    if selected is None:
+        raise BundlerError(
+            f"{kind} '{component.id}' has no catalog release for pinned version "
+            f"{component.version} in the highest-priority source."
+        )
+    if selected.get("_catalog_name") != current.get("_catalog_name"):
+        raise BundlerError(
+            f"{kind} '{component.id}' changed catalog sources during version lookup."
+        )
+    _assert_catalog_source(kind, component, selected)
+    if not selected.get("version") or not same_version(
+        selected["version"], component.version
+    ):
+        raise BundlerError(
+            f"{kind} '{component.id}' has no verifiable catalog release for "
+            f"pinned version {component.version}."
+        )
+    return selected
+
+
+def _bundled_pin_warning(
+    kind: str, component: ComponentRef, advertised: object,
+) -> BundledPatchWarning | None:
+    """Allow packaged stable patch upgrades without weakening catalog pins."""
+    from .versioning import is_newer_patch
+
+    if (
+        component.source is None
+        and component.version
+        and isinstance(advertised, str)
+        and is_newer_patch(advertised.strip(), component.version)
+    ):
+        return BundledPatchWarning(
+            message=(
+                f"{kind} '{component.id}' is pinned to version {component.version}, "
+                f"but Spec Kit ships {advertised.strip()}; using the newer packaged patch. "
+                "Bundle installation records the actual installed version "
+                "alongside the requested pin."
+            ),
+            details=BundledPatchDetails(
+                kind=component.kind,
+                component_id=component.id,
+                requested_version=component.version,
+                installed_version=advertised.strip(),
+            ),
+        )
+    _assert_pinned_version(kind, component.id, component.version, advertised)
+    return None
+
+
 def _bundled_manifest_version(manifest_path: Path, root_key: str) -> str | None:
     """Best-effort read of a bundled asset's declared version from its manifest.
 
@@ -77,9 +199,32 @@ def _bundled_manifest_version(manifest_path: Path, root_key: str) -> str | None:
                 # (missing / non-string / whitespace) means "cannot enforce".
                 if isinstance(version, str) and version.strip():
                     return version
-    except Exception:  # noqa: BLE001 - unreadable/invalid manifest: skip pin
+    except Exception:  # noqa: BLE001 - unreadable manifest: version unknown
         return None
     return None
+
+
+def _bundled_component_version(component: ComponentRef) -> str | None:
+    from .. import (
+        _locate_bundled_preset,
+        _locate_bundled_workflow,
+        locate_bundled_extension,
+    )
+
+    if component.source is not None:
+        return None
+    locate = {
+        "extensions": locate_bundled_extension,
+        "presets": _locate_bundled_preset,
+        "workflows": _locate_bundled_workflow,
+    }.get(component.kind)
+    if locate is None:
+        return None
+    bundled = locate(component.id)
+    if bundled is None:
+        return None
+    kind = component.kind[:-1]
+    return _bundled_manifest_version(bundled / f"{kind}.yml", kind)
 
 
 def _registry_version(registry, component_id: str) -> str | None:
@@ -103,10 +248,10 @@ class _KindManager(Protocol):
     def installed_version(self, component: ComponentRef) -> str | None:
         pass
 
-    def install(self, component: ComponentRef) -> None:
+    def install(self, component: ComponentRef) -> BundledPatchWarning | None:
         pass
 
-    def refresh(self, component: ComponentRef) -> None:
+    def refresh(self, component: ComponentRef) -> BundledPatchWarning | None:
         pass
 
     def remove(self, component: ComponentRef) -> None:
@@ -174,33 +319,31 @@ class _PresetKindManager:
     def installed_version(self, component: ComponentRef) -> str | None:
         return _registry_version(self._manager.registry, component.id)
 
-    def install(self, component: ComponentRef) -> None:
-        self._do_install(component, force=False)
+    def install(self, component: ComponentRef) -> BundledPatchWarning | None:
+        return self._do_install(component, force=False)
 
-    def refresh(self, component: ComponentRef) -> None:
-        self._do_install(component, force=True)
+    def refresh(self, component: ComponentRef) -> BundledPatchWarning | None:
+        return self._do_install(component, force=True)
 
-    def _do_install(self, component: ComponentRef, *, force: bool) -> None:
+    def _do_install(
+        self, component: ComponentRef, *, force: bool,
+    ) -> BundledPatchWarning | None:
         from .. import _locate_bundled_preset, get_speckit_version
 
         speckit_version = get_speckit_version()
         priority = DEFAULT_PRIORITY if component.priority is None else component.priority
 
         bundled = _locate_bundled_preset(component.id)
-        if bundled is not None:
-            # Enforce the manifest pin against the bundled asset's own version,
-            # mirroring the catalog path below (the bundled path previously
-            # skipped the pin entirely).
-            _assert_pinned_version(
+        if bundled is not None and component.source is None:
+            warning = _bundled_pin_warning(
                 "Preset",
-                component.id,
-                component.version,
+                component,
                 _bundled_manifest_version(bundled / "preset.yml", "preset"),
             )
             self._manager.install_from_directory(
                 bundled, speckit_version, priority, **({"force": True} if force else {})
             )
-            return
+            return warning
 
         if not self._allow_network:
             raise BundlerError(
@@ -210,20 +353,18 @@ class _PresetKindManager:
             )
 
         from ..presets import PresetCatalog
+        from .component_catalog import winning_catalog_entry
 
         catalog = PresetCatalog(self._root)
-        info = catalog.get_pack_info(component.id)
+        info = winning_catalog_entry(catalog, component)
         if not info:
             raise BundlerError(f"Preset '{component.id}' not found in any catalog.")
-        if not info.get("_install_allowed", True):
-            raise BundlerError(
-                f"Preset '{component.id}' is from a discovery-only catalog; "
-                "installation is not allowed."
-            )
-        _assert_pinned_version(
-            "Preset", component.id, component.version, info.get("version")
+        from ..presets._catalog_versions import select_release
+
+        info, expected_version = _select_pinned_release(
+            "Preset", component, info, select_release
         )
-        zip_path = catalog.download_pack(component.id)
+        zip_path = catalog.download_pack_info(info)
         try:
             self._manager.install_from_zip(
                 zip_path,
@@ -231,6 +372,11 @@ class _PresetKindManager:
                 priority,
                 catalog_name=info.get("_catalog_name"),
                 **({"force": True} if force else {}),
+                **(
+                    {"expected_id": component.id, "expected_version": expected_version}
+                    if expected_version is not None
+                    else {}
+                ),
             )
         finally:
             with contextlib.suppress(Exception):
@@ -240,7 +386,7 @@ class _PresetKindManager:
     def remove(self, component: ComponentRef) -> None:
         try:
             self._manager.remove(component.id)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise BundlerError(
                 f"Failed to remove preset '{component.id}': {exc}"
             ) from exc
@@ -263,34 +409,32 @@ class _ExtensionKindManager:
     def installed_version(self, component: ComponentRef) -> str | None:
         return _registry_version(self._manager.registry, component.id)
 
-    def install(self, component: ComponentRef) -> None:
-        self._do_install(component, force=False)
+    def install(self, component: ComponentRef) -> BundledPatchWarning | None:
+        return self._do_install(component, force=False)
 
-    def refresh(self, component: ComponentRef) -> None:
-        self._do_install(component, force=True)
+    def refresh(self, component: ComponentRef) -> BundledPatchWarning | None:
+        return self._do_install(component, force=True)
 
-    def _do_install(self, component: ComponentRef, *, force: bool) -> None:
+    def _do_install(
+        self, component: ComponentRef, *, force: bool,
+    ) -> BundledPatchWarning | None:
         from .. import get_speckit_version, locate_bundled_extension
 
         speckit_version = get_speckit_version()
         priority = DEFAULT_PRIORITY if component.priority is None else component.priority
 
         bundled = locate_bundled_extension(component.id)
-        if bundled is not None:
-            # Enforce the manifest pin against the bundled asset's own version,
-            # mirroring the catalog path below (the bundled path previously
-            # skipped the pin entirely).
-            _assert_pinned_version(
+        if bundled is not None and component.source is None:
+            warning = _bundled_pin_warning(
                 "Extension",
-                component.id,
-                component.version,
+                component,
                 _bundled_manifest_version(bundled / "extension.yml", "extension"),
             )
             manifest = self._manager.install_from_directory(
                 bundled, speckit_version, priority=priority, force=force
             )
             self._manager.scaffold_config(manifest.id)
-            return
+            return warning
 
         if not self._allow_network:
             raise BundlerError(
@@ -300,22 +444,20 @@ class _ExtensionKindManager:
             )
 
         from ..extensions import ExtensionCatalog
+        from .component_catalog import winning_catalog_entry
 
         catalog = ExtensionCatalog(self._root)
-        info = catalog.get_extension_info(component.id)
+        info = winning_catalog_entry(catalog, component)
         if not info:
             raise BundlerError(
                 f"Extension '{component.id}' not found in any catalog."
             )
-        if not info.get("_install_allowed", True):
-            raise BundlerError(
-                f"Extension '{component.id}' is from a discovery-only catalog; "
-                "installation is not allowed."
-            )
-        _assert_pinned_version(
-            "Extension", component.id, component.version, info.get("version")
+        from ..extensions._catalog_versions import select_release
+
+        info, expected_version = _select_pinned_release(
+            "Extension", component, info, select_release
         )
-        zip_path = catalog.download_extension(component.id)
+        zip_path = catalog.download_extension_info(info)
         try:
             manifest = self._manager.install_from_zip(
                 zip_path,
@@ -323,6 +465,11 @@ class _ExtensionKindManager:
                 priority=priority,
                 force=force,
                 catalog_name=info.get("_catalog_name"),
+                **(
+                    {"expected_id": component.id, "expected_version": expected_version}
+                    if expected_version is not None
+                    else {}
+                ),
             )
             self._manager.scaffold_config(manifest.id)
         finally:
@@ -333,7 +480,7 @@ class _ExtensionKindManager:
     def remove(self, component: ComponentRef) -> None:
         try:
             self._manager.remove(component.id)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             raise BundlerError(
                 f"Failed to remove extension '{component.id}': {exc}"
             ) from exc
@@ -357,11 +504,11 @@ class _WorkflowKindManager:
     def installed_version(self, component: ComponentRef) -> str | None:
         return _registry_version(self._registry, component.id)
 
-    def install(self, component: ComponentRef) -> None:
+    def install(self, component: ComponentRef) -> BundledPatchWarning | None:
         from .. import _locate_bundled_workflow
 
         bundled = _locate_bundled_workflow(component.id)
-        if bundled is not None:
+        if bundled is not None and component.source is None:
             workflow_file = bundled / "workflow.yml"
             try:
                 from ..workflows.engine import WorkflowDefinition
@@ -376,18 +523,28 @@ class _WorkflowKindManager:
                     f"Bundled workflow at {workflow_file} declares ID "
                     f"'{definition.id}', expected '{component.id}'."
                 )
-            _assert_pinned_version(
-                "Workflow", component.id, component.version, definition.version
-            )
-            from .. import workflow_add
+            from .versioning import is_newer_patch
 
-            with _chdir(self._root):
-                _delegate_command(
-                    "install",
-                    f"workflow '{component.id}'",
-                    lambda: workflow_add(str(workflow_file), dev=True, from_url=None),
+            if component.version is None or (
+                definition.version and (
+                    same_version(definition.version, component.version)
+                    or is_newer_patch(definition.version, component.version)
                 )
-            return
+            ):
+                warning = _bundled_pin_warning("Workflow", component, definition.version)
+                from .. import workflow_add
+
+                with _chdir(self._root):
+                    _delegate_command(
+                        "install",
+                        f"workflow '{component.id}'",
+                        lambda: workflow_add(str(workflow_file), dev=True, from_url=None),
+                    )
+                return warning
+            if not self._allow_network:
+                _assert_pinned_version(
+                    "Workflow", component.id, component.version, definition.version
+                )
 
         if not self._allow_network:
             raise BundlerError(
@@ -395,33 +552,26 @@ class _WorkflowKindManager:
                 "access is disabled. Installing or refreshing this component "
                 "requires network access; re-run without --offline."
             )
-        self._assert_pinned_version(component)
-        from .. import workflow_add
+        from ..workflows.catalog import WorkflowCatalog
+
+        catalog = WorkflowCatalog(self._workspace)
+        selected = _selected_catalog_info(
+            "Workflow", component, catalog
+        )
+        from ..workflows.command_add import _install_preselected_workflow
 
         with _chdir(self._root):
             _delegate_command(
                 "install", f"workflow '{component.id}'",
-                lambda: workflow_add(component.id, dev=False, from_url=None),
+                lambda: _install_preselected_workflow(
+                    component.id, version=component.version, selected_info=selected,
+                ),
             )
 
-    def refresh(self, component: ComponentRef) -> None:
+    def refresh(self, component: ComponentRef) -> BundledPatchWarning | None:
         # workflow_add is idempotent for already-installed workflows; delegate
         # to the standard install path which handles version refresh correctly.
-        self.install(component)
-
-    def _assert_pinned_version(self, component: ComponentRef) -> None:
-        if not component.version:
-            return
-        try:
-            from ..workflows.catalog import WorkflowCatalog
-
-            info = WorkflowCatalog(self._workspace).get_workflow_info(component.id)
-        except Exception:  # noqa: BLE001 - catalog unreachable: cannot enforce
-            return
-        if info:
-            _assert_pinned_version(
-                "Workflow", component.id, component.version, info.get("version")
-            )
+        return self.install(component)
 
     def remove(self, component: ComponentRef) -> None:
         from .. import workflow_remove
@@ -458,13 +608,39 @@ class _StepKindManager:
                 "is disabled. Installing or refreshing this component requires "
                 "network access; re-run without --offline."
             )
-        from .. import workflow_step_add
+        from ..workflows.catalog import StepCatalog, StepCatalogError
+        from ..workflows.step.installer import StepInstallError, validate_step_id
+
+        try:
+            validate_step_id(component.id)
+        except StepInstallError as exc:
+            raise BundlerError(
+                f"Invalid step '{component.id}': {exc}"
+            ) from exc
+
+        try:
+            catalog = StepCatalog(self._workspace)
+            selected = _selected_catalog_info(
+                "Step", component, catalog
+            )
+        except StepCatalogError as exc:
+            raise BundlerError(
+                f"Failed to resolve step '{component.id}': {exc}"
+            ) from exc
+        from ..workflows.step.command_add import _install_preselected_step
 
         with _chdir(self._root):
-            _delegate_command(
-                "install", f"step '{component.id}'",
-                lambda: workflow_step_add(component.id),
-            )
+            try:
+                _delegate_command(
+                    "install", f"step '{component.id}'",
+                    lambda: _install_preselected_step(
+                        component.id, version=component.version, selected_info=selected,
+                    ),
+                )
+            except StepInstallError as exc:
+                raise BundlerError(
+                    f"Failed to install step '{component.id}': {exc}"
+                ) from exc
 
     def refresh(self, component: ComponentRef) -> None:
         # Preserve an existing step until we've validated we can perform refresh.

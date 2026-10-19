@@ -355,10 +355,9 @@ class TestIntegrationStatus:
 
         result = _run_in_project(copilot_project, ["integration", "status", "--json"])
 
-        assert result.exit_code == 0
-        payload = json.loads(result.output)
-        assert payload["status"] == "warning"
-        assert any(item["code"] == "project-root-unresolved" for item in payload["findings"])
+        assert result.exit_code == 1
+        assert result.stdout == ""
+        assert "Cannot establish project root" in json.loads(result.stderr)["error"]
 
     def test_status_uses_lexical_manifest_paths_when_project_root_resolution_falls_back(self, tmp_path):
         from specify_cli.integration_status import _manifest_file_status

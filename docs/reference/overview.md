@@ -8,11 +8,27 @@ The foundational commands for creating and managing Spec Kit projects. Initializ
 
 [Core Commands reference →](core.md)
 
+## MCP Server
+
+The experimental `specify mcp` command exposes stable CLI JSON commands to MCP
+clients through a local stdio server.
+
+[MCP Server reference →](mcp.md)
+
 ## Integrations
 
 Integrations connect Spec Kit to your AI coding agent. Each integration sets up the appropriate command files and directory structures for a specific agent. Only one integration is active per project at a time, and you can switch between them at any point.
 
 [Integrations reference →](integrations.md)
+
+## Catalogs
+
+Catalogs are priority-ordered indexes for discovering integrations, extensions,
+presets, workflows, workflow step types, and bundles. Spec Kit includes
+built-in sources and supports private, organization-managed catalogs with
+explicit discovery and installation policies.
+
+[Catalogs reference →](catalogs.md)
 
 ## Extensions
 

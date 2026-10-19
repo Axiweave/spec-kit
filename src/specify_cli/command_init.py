@@ -230,9 +230,14 @@ def ensure_constitution_from_template(
         return
 
     try:
+        from .integrations._file_changes import after_file_change, before_file_change
+
+        before_file_change(memory_constitution)
         materialization = materialize_constitution_template(
             project_path, memory_constitution
         )
+        if memory_constitution.is_file():
+            after_file_change(memory_constitution)
         if materialization is None:
             if tracker:
                 tracker.add("constitution", "Constitution setup")
@@ -257,7 +262,10 @@ def ensure_constitution_from_template(
 
 
 def register(app: typer.Typer) -> None:
+    from .integrations._lifecycle import external_lifecycle, initial_directory_state, lifecycle_owns_rollback, lifecycle_success
+
     @app.command()
+    @external_lifecycle("init")
     def init(
         project_name: str = typer.Argument(
             None,
@@ -305,6 +313,10 @@ def register(app: typer.Typer) -> None:
             False,
             "--force",
             help="Force merge/overwrite when using --here (skip confirmation)",
+        ),
+        allow_symlinks: bool = typer.Option(
+            False, "--allow-symlinks",
+            help="Persist permission for contained symlinks in migrated FileHelper operations (default: deny).",
         ),
         non_interactive: bool = typer.Option(
             False,
@@ -364,6 +376,10 @@ def register(app: typer.Typer) -> None:
             False,
             "--trust-extension-urls",
             help="Pre-authorize installing extensions from external URLs without the interactive trust prompt (required for non-interactive URL installs).",
+        ),
+        trust_integration: bool = typer.Option(
+            False, "--trust-integration",
+            help="Authorize executing a reviewed external integration package without prompting.",
         ),
     ):
         """
@@ -499,7 +515,8 @@ def register(app: typer.Typer) -> None:
             project_path = Path.cwd()
             dir_existed_before = True
 
-            existing_items = list(project_path.iterdir())
+            original_directory = initial_directory_state(project_path)
+            existing_items = original_directory[1] if original_directory else list(project_path.iterdir())
             if existing_items:
                 console.print(
                     f"[yellow]Warning:[/yellow] Current directory is not empty ({len(existing_items)} items)"
@@ -553,16 +570,17 @@ def register(app: typer.Typer) -> None:
                         console.print("[yellow]Operation cancelled[/yellow]")
                         raise typer.Exit(0)
         else:
-            project_path = Path(project_name).resolve()
-            dir_existed_before = project_path.exists()
-            if project_path.exists():
+            project_path = Path(project_name).absolute()
+            original_directory = initial_directory_state(project_path)
+            dir_existed_before = original_directory[0] if original_directory else project_path.exists()
+            if dir_existed_before:
                 safe_name = _escape_markup(str(project_name))
                 if not project_path.is_dir():
                     console.print(
                         f"[red]Error:[/red] '{safe_name}' exists but is not a directory."
                     )
                     raise typer.Exit(1)
-                existing_items = list(project_path.iterdir())
+                existing_items = original_directory[1] if original_directory else list(project_path.iterdir())
                 if force:
                     if existing_items:
                         console.print(
@@ -586,6 +604,20 @@ def register(app: typer.Typer) -> None:
                     console.print()
                     console.print(error_panel)
                     raise typer.Exit(1)
+
+        from ._file_policy import (
+            ProjectPolicyError, prepare_init_root, read_project_options,
+        )
+        from .file_helper import FileHelperError
+
+        try:
+            # Existing targets are checked before any integration or scaffold mutation.
+            previous_init_options = (
+                read_project_options(project_path) if dir_existed_before else {}
+            )
+        except ProjectPolicyError as exc:
+            console.print(f"[red]Error:[/red] {_escape_markup(str(exc))}")
+            raise typer.Exit(1) from exc
 
         try:
             if not existing_project and workspace is None:
@@ -628,7 +660,6 @@ def register(app: typer.Typer) -> None:
             except (ValueError, OSError) as exc:
                 console.print(f"[red]Error:[/red] {_escape_markup(str(exc))}")
                 raise typer.Exit(1) from None
-
         if integration:
             if integration not in AGENT_CONFIG:
                 console.print(
@@ -808,9 +839,14 @@ def register(app: typer.Typer) -> None:
         # hangs when Rich tries to restore cursor state via VT escape sequences.
         _transient = sys.platform != "win32"
 
+        try:
+            project_path = prepare_init_root(project_path).resolve()
+        except (OSError, FileHelperError, RuntimeError) as exc:
+            console.print(f"[red]Error:[/red] Cannot create project root: {_escape_markup(str(exc))}")
+            raise typer.Exit(1) from exc
+
         if private:
             from .private_checkout import install_integration, plan_checkout_files, refuse_tracked
-
             try:
                 refuse_tracked(project.repository_root, plan_checkout_files(
                     lambda staged: install_integration(
@@ -857,6 +893,7 @@ def register(app: typer.Typer) -> None:
                 manifest.save()
 
                 init_opts = {
+                    **previous_init_options,
                     "ai": selected_ai,
                     "integration": resolved_integration.key,
                     "here": here,
@@ -865,11 +902,14 @@ def register(app: typer.Typer) -> None:
                     "feature_selection": feature_selection,
                     "speckit_version": get_speckit_version(),
                     "command_scope": "global" if global_commands else "project",
+                    "allow_symlinks": allow_symlinks,
                 }
                 if resolved_integration.is_skills_mode(
                     integration_parsed_options or None, project_root=project_path
                 ):
                     init_opts["ai_skills"] = True
+                else:
+                    init_opts.pop("ai_skills", None)
                 save_init_options(workspace_path, init_opts)
 
                 if force:
@@ -955,10 +995,14 @@ def register(app: typer.Typer) -> None:
                             )
                             dest_wf.mkdir(parents=True, exist_ok=True)
                             dest_workflow_yaml = dest_wf / "workflow.yml"
+                            from .integrations._file_changes import after_file_change, before_file_change
+
+                            before_file_change(dest_workflow_yaml)
                             _shutil.copy2(
                                 bundled_wf / "workflow.yml",
                                 dest_workflow_yaml,
                             )
+                            after_file_change(dest_workflow_yaml)
                             definition = WorkflowDefinition.from_yaml(
                                 dest_workflow_yaml
                             )
@@ -982,6 +1026,7 @@ def register(app: typer.Typer) -> None:
                 except Exception as wf_err:
                     sanitized_wf = str(wf_err).replace("\n", " ").strip()
                     tracker.error("workflow", f"install failed: {sanitized_wf[:120]}")
+
 
 
                 ensure_executable_scripts(workspace_path, tracker=tracker)
@@ -1036,6 +1081,8 @@ def register(app: typer.Typer) -> None:
                                             catalog_name=pack_info.get("_catalog_name"),
                                         )
                                     except PresetError as preset_err:
+                                        if lifecycle_owns_rollback():
+                                            raise
                                         print_cli_warning(
                                             "install",
                                             "preset",
@@ -1050,6 +1097,8 @@ def register(app: typer.Typer) -> None:
                                             except OSError:
                                                 pass
                     except Exception as preset_err:
+                        if lifecycle_owns_rollback():
+                            raise
                         print_cli_warning(
                             "install",
                             "preset",
@@ -1084,6 +1133,8 @@ def register(app: typer.Typer) -> None:
                             tracker.complete(f"extension-{i}", status_msg)
                             any_extension_installed = True
                         except Exception as ext_err:
+                            if lifecycle_owns_rollback():
+                                raise
                             sanitized_ext = str(ext_err).replace("\n", " ").strip()
                             tracker.error(
                                 f"extension-{i}",
@@ -1145,13 +1196,14 @@ def register(app: typer.Typer) -> None:
                 and project_path.exists()
                 and not dir_existed_before
                 and not getattr(e, "committed", False)
+                and initial_directory_state(project_path) is None
             ):
                 shutil.rmtree(project_path)
             raise typer.Exit(1)
 
         if _transient:
             console.print(tracker.render())
-        console.print("\n[bold green]Project ready.[/bold green]")
+        lifecycle_success("\n[bold green]Project ready.[/bold green]")
         if project.workspace_root != project.repository_root:
             from .specs_link import link_specs
 
@@ -1219,8 +1271,6 @@ def register(app: typer.Typer) -> None:
         muse_skill_mode = selected_ai == "muse" and _is_skills_integration
         grok_skill_mode = selected_ai == "grok" and _is_skills_integration
         dsh_skill_mode = selected_ai == "dsh" and _is_skills_integration
-        cline_skill_mode = selected_ai == "cline"
-        forge_skill_mode = selected_ai == "forge"
         bob_skill_mode = selected_ai == "bob" and _is_skills_integration
         native_skill_mode = (
             codex_skill_mode
@@ -1297,28 +1347,18 @@ def register(app: typer.Typer) -> None:
             step_num += 1
         usage_label = "skills" if native_skill_mode else "slash commands"
 
-        from .invocation_style import (
-            is_dollar_skills_agent as _is_dollar_skills_agent,
-            is_slash_skills_agent as _is_slash_skills_agent,
+        invoke_prefix = _invoke_prefix_for_integration(
+            resolved_integration,
+            resolved_integration.key,
+            integration_parsed_options or None,
+            project_path,
+        )
+        invoke_separator = resolved_integration.effective_invoke_separator(
+            integration_parsed_options or None, project_root=project_path
         )
 
-        # `_is_skills_integration` means the integration is installed in
-        # skills mode, which is the semantic equivalent of `ai_skills_enabled`
-        # used by `is_slash_skills_agent()`.
-        _ai_skills_enabled = _is_skills_integration
-
         def _display_cmd(name: str) -> str:
-            if _is_dollar_skills_agent(selected_ai, _ai_skills_enabled):
-                return f"$speckit-{name}"
-            if kimi_skill_mode:
-                return f"/skill:speckit-{name}"
-            if (
-                _is_slash_skills_agent(selected_ai, _ai_skills_enabled)
-                or cline_skill_mode
-                or forge_skill_mode
-            ):
-                return f"/speckit-{name}"
-            return f"/speckit.{name}"
+            return f"{invoke_prefix}speckit{invoke_separator}{name}"
 
         steps_lines.append(
             f"{step_num}. Start using {usage_label} with your coding agent:"

@@ -89,7 +89,7 @@ def test_init_command_registered():
     callback_names = [
         cmd.callback.__name__ for cmd in app.registered_commands if cmd.callback
     ]
-    assert callback_names == ["init", "check", "version"]
+    assert callback_names == ["init", "check", "version", "mcp"]
 
 
 
@@ -233,6 +233,7 @@ def test_printed_cd_command_actually_changes_directory(tmp_path: Path, name: str
         cwd=tmp_path,
         capture_output=True,
         text=True,
+        check=False,
     )
     assert proc.returncode == 0, f"cd {printed!r} failed: {proc.stderr}"
     assert Path(proc.stdout.strip()).name == name, proc.stdout

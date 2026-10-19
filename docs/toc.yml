@@ -45,8 +45,12 @@
       href: reference/overview.md
     - name: Core Commands
       href: reference/core.md
+    - name: MCP Server
+      href: reference/mcp.md
     - name: Integrations
       href: reference/integrations.md
+    - name: Catalogs
+      href: reference/catalogs.md
     - name: Extensions
       href: reference/extensions.md
     - name: Presets
@@ -102,6 +106,8 @@
       href: community/presets.md
     - name: Bundles
       href: community/bundles.md
+    - name: Workflow Step Types
+      href: community/workflow-steps.md
     - name: Walkthroughs
       href: community/walkthroughs.md
     - name: Friends

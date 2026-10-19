@@ -54,6 +54,7 @@ from ..integration_state import (
     integration_setting,
     try_read_integration_json,
 )
+from ..integrations._registration import project_registration
 from ..shared_infra import verify_archive_sha256
 from ..private_checkout import PrivateModeError
 from ..workspace import is_private, workspace_root_for
@@ -971,9 +972,13 @@ class ExtensionRegistry:
 
     def _save(self):
         """Save registry to disk."""
+        from ..integrations._file_changes import after_file_change, before_file_change
+
+        before_file_change(self.registry_path)
         self.extensions_dir.mkdir(parents=True, exist_ok=True)
         with open(self.registry_path, "w", encoding="utf-8") as f:
             json.dump(self.data, f, indent=2)
+        after_file_change(self.registry_path)
 
     def add(self, extension_id: str, metadata: dict):
         """Add extension to registry.
@@ -1479,6 +1484,7 @@ class ExtensionManager:
 
         return _ignore
 
+    @project_registration
     def _get_skills_dir(self, *, create: bool = True) -> Optional[Path]:
         """Return the active skills directory for extension skill registration.
 
@@ -1717,6 +1723,7 @@ class ExtensionManager:
             only_agent=active_agent,
         )
 
+    @project_registration
     def _register_extension_skills(
         self,
         manifest: ExtensionManifest,
@@ -1755,6 +1762,7 @@ class ExtensionManager:
         from ..agents import CommandRegistrar
         from ..integrations import get_integration
         from ..integrations.base import IntegrationBase
+        from ..integrations._file_changes import changing_file, unlink, write_text
 
         written: List[str] = []
         opts = load_init_options(self.project_root)
@@ -1927,19 +1935,20 @@ class ExtensionManager:
             if use_dev_symlink:
                 try:
                     cache_file.parent.mkdir(parents=True, exist_ok=True)
-                    cache_file.write_text(skill_content, encoding="utf-8")
+                    write_text(cache_file, skill_content, encoding="utf-8")
                     if skill_file.exists() or skill_file.is_symlink():
-                        skill_file.unlink()
+                        unlink(skill_file)
                     target = os.path.relpath(cache_file, skill_file.parent)
-                    os.symlink(target, skill_file)
+                    with changing_file(skill_file):
+                        os.symlink(target, skill_file)
                 except (OSError, ValueError):
                     if skill_file.is_symlink():
-                        skill_file.unlink()
-                    skill_file.write_text(skill_content, encoding="utf-8")
+                        unlink(skill_file)
+                    write_text(skill_file, skill_content, encoding="utf-8")
             else:
                 if skill_file.is_symlink():
-                    skill_file.unlink()
-                skill_file.write_text(skill_content, encoding="utf-8")
+                    unlink(skill_file)
+                write_text(skill_file, skill_content, encoding="utf-8")
             written.append(skill_name)
 
         if private and written:
@@ -2063,8 +2072,20 @@ class ExtensionManager:
 
     def _extension_skill_candidate_dirs(self) -> Dict[Path, Path]:
         """Return every configured skill output and its trusted root."""
-        from .. import AGENT_CONFIG, DEFAULT_SKILLS_DIR
+        from .. import DEFAULT_SKILLS_DIR
         from ..agents import CommandRegistrar
+        from ..integrations import get_integration
+        from ..integrations.installer import project_integrations
+
+        with project_integrations(self.project_root):
+            registrar = CommandRegistrar(self.project_root, include_generic=False)
+            folders = []
+            for key in registrar.AGENT_CONFIGS:
+                integration = get_integration(key)
+                if integration is not None:
+                    folder = (integration.config or {}).get("folder")
+                    if folder:
+                        folders.append(folder)
 
         candidates: Dict[Path, Path] = {}
 
@@ -2074,12 +2095,10 @@ class ExtensionManager:
             if trusted_root is not None:
                 candidates[candidate] = trusted_root
 
-        for cfg in AGENT_CONFIG.values():
-            folder = cfg.get("folder", "")
-            if folder:
-                add_candidate(
-                    self.project_root / folder.rstrip("/") / "skills"
-                )
+        for folder in folders:
+            add_candidate(
+                self.project_root / folder.rstrip("/") / "skills"
+            )
         add_candidate(self.project_root / DEFAULT_SKILLS_DIR)
 
         from ..integration_state import integration_setting, try_read_integration_json
@@ -2094,7 +2113,6 @@ class ExtensionManager:
                 # Recorded paths and static roots still allow safe cleanup.
                 pass
 
-        registrar = CommandRegistrar()
         for agent_name, agent_config in registrar.AGENT_CONFIGS.items():
             if agent_config.get("extension") != "/SKILL.md":
                 continue
@@ -2208,6 +2226,7 @@ class ExtensionManager:
             ensure_safe_shared_directory,
             validate_safe_shared_directory,
         )
+        from ..integrations._file_changes import changing_file, unlink, write_bytes
 
         root = self.project_root.resolve()
         source = (self.extensions_dir / extension_id).resolve()
@@ -2220,7 +2239,7 @@ class ExtensionManager:
                         raise ValueError("unexpected symlink at output path")
                     if os.readlink(path) == link:
                         continue
-                    path.unlink()
+                    unlink(path)
                 elif path.exists() and not path.is_file():
                     raise ValueError("output path is no longer a file")
                 elif content is not None and link is None and path.is_file():
@@ -2228,7 +2247,7 @@ class ExtensionManager:
                         continue
                 if content is None:
                     if path.is_file():
-                        path.unlink()
+                        unlink(path)
                     if not parent_existed and path.parent.is_dir():
                         try:
                             path.parent.rmdir()
@@ -2238,10 +2257,11 @@ class ExtensionManager:
                     ensure_safe_shared_directory(root, path.parent)
                     if link is not None:
                         if path.is_file():
-                            path.unlink()
-                        path.symlink_to(link)
+                            unlink(path)
+                        with changing_file(path):
+                            path.symlink_to(link)
                     else:
-                        path.write_bytes(content)
+                        write_bytes(path, content)
             except (OSError, ValueError) as exc:
                 errors.append(f"{path}: {exc}")
         if errors:
@@ -2309,6 +2329,7 @@ class ExtensionManager:
     ) -> None:
         """Clean recorded generic paths even after the configured directory moves."""
         from ..shared_infra import validate_safe_shared_directory
+        from ..integrations._file_changes import unlink, write_bytes
 
         manifest = self.get_extension(extension_id)
         registered = metadata.get("registered_commands", {})
@@ -2358,10 +2379,10 @@ class ExtensionManager:
             content = path.read_bytes()
             if hashlib.sha256(content).hexdigest() != expected:
                 if path.is_symlink():
-                    path.unlink()
-                    path.write_bytes(content)
+                    unlink(path)
+                    write_bytes(path, content)
                 continue
-            path.unlink()
+            unlink(path)
             if skill_output:
                 try:
                     path.parent.rmdir()
@@ -2396,6 +2417,8 @@ class ExtensionManager:
                 every configured agent's skills directory is scanned
                 instead of resolving just the currently active one.
         """
+        from ..integrations._file_changes import changing_file, unlink
+
         generic_roots = {
             Path(path).parent.parent
             for path in (generic_hashes or {})
@@ -2422,13 +2445,14 @@ class ExtensionManager:
                         skill_file.read_bytes()
                     ).hexdigest():
                         continue
-                    skill_file.unlink()
+                    unlink(skill_file)
                     try:
                         skill_subdir.rmdir()
                     except OSError:
                         pass
                     continue
-            shutil.rmtree(skill_subdir)
+            with changing_file(skill_subdir, removal=True):
+                shutil.rmtree(skill_subdir)
 
     def _extension_owned_skill_names(
         self, skill_names: List[str], extension_id: str
@@ -2721,6 +2745,17 @@ class ExtensionManager:
                 f"extension. Install from a copy in a different location instead."
             )
 
+        from ..integrations._file_changes import (
+            after_file_change, before_file_change, changing_file, file_change_observer,
+        )
+
+        package_paths = (
+            dest_dir, self.extensions_dir / ".backup" / manifest.id,
+            self._rescue_staging_dir(manifest.id),
+        )
+        for package_path in package_paths:
+            before_file_change(package_path, removal=True)
+
         # Remove existing installation AFTER all validations pass so that a
         # validation failure doesn't leave the user with a half-uninstalled
         # extension (configs stranded in .backup/).
@@ -2735,32 +2770,38 @@ class ExtensionManager:
             backup_config_dir = self.extensions_dir / ".backup" / manifest.id
             # Check is_symlink first: is_dir() follows symlinks so a
             # symlink-to-directory would pass, but rmtree() raises on them.
-            if backup_config_dir.is_symlink():
-                backup_config_dir.unlink()
-            elif backup_config_dir.is_dir():
-                shutil.rmtree(backup_config_dir)
-            elif backup_config_dir.exists():
-                backup_config_dir.unlink()
-            # A cloned or hand-edited workspace can carry a registry that
-            # already lists this extension as installed while dest_dir holds
-            # bytes the installer never produced (see _capture_custom_payload).
-            # Snapshot those now, while the old payload is still live, so the
-            # rmtree inside remove() below cannot discard them.
-            if dest_dir.is_dir() and not dest_dir.is_symlink():
-                custom_payload = _capture_custom_payload(
-                    dest_dir,
-                    self.workspace_root,
-                    old_metadata,
-                    excluded_suffixes=_NON_GENERATED_CONFIG_SUFFIXES,
-                )
-            if custom_payload:
-                # Durably persist the captured payload before remove()'s
-                # rmtree so a later restore failure (e.g. a structural
-                # collision with the fresh package tree) still has a
-                # recovery copy on disk, not just this process's memory.
-                custom_payload_staging_dir = _reinstall_staging_dir(self.extensions_dir)
-                _stage_custom_payload_durably(custom_payload_staging_dir, custom_payload)
-            did_remove = self.remove(manifest.id)
+            try:
+                if backup_config_dir.is_symlink():
+                    backup_config_dir.unlink()
+                elif backup_config_dir.is_dir():
+                    shutil.rmtree(backup_config_dir)
+                elif backup_config_dir.exists():
+                    backup_config_dir.unlink()
+                # A cloned or hand-edited workspace can carry a registry that
+                # already lists this extension as installed while dest_dir holds
+                # bytes the installer never produced (see _capture_custom_payload).
+                # Snapshot those now, while the old payload is still live, so the
+                # rmtree inside remove() below cannot discard them.
+                if dest_dir.is_dir() and not dest_dir.is_symlink():
+                    custom_payload = _capture_custom_payload(
+                        dest_dir,
+                        self.workspace_root,
+                        old_metadata,
+                        excluded_suffixes=_NON_GENERATED_CONFIG_SUFFIXES,
+                    )
+                if custom_payload and file_change_observer.get() is None:
+                    # Durably persist the captured payload before remove()'s
+                    # rmtree so a later restore failure (e.g. a structural
+                    # collision with the fresh package tree) still has a
+                    # recovery copy on disk, not just this process's memory.
+                    # Inside an integration transaction, its snapshot of
+                    # dest_dir is that copy and its rollback restores it.
+                    custom_payload_staging_dir = _reinstall_staging_dir(self.extensions_dir)
+                    _stage_custom_payload_durably(custom_payload_staging_dir, custom_payload)
+                did_remove = self.remove(manifest.id)
+            finally:
+                after_file_change(dest_dir)
+                after_file_change(backup_config_dir)
 
         # Load and validate .extensionignore BEFORE reading/creating the rescue
         # staging directory (and thus before deleting dest_dir). The loader can
@@ -3127,11 +3168,13 @@ class ExtensionManager:
                 # proceeding destructively.
                 shutil.rmtree(rescue_staging_dir, ignore_errors=True)
                 raise
+            finally:
+                after_file_change(rescue_staging_dir)
+
+        after_file_change(rescue_staging_dir)
+        after_file_change(self.extensions_dir / ".backup" / manifest.id)
 
         # Install extension (dest_dir computed above during self-install guard)
-        if dest_dir.exists():
-            shutil.rmtree(dest_dir)
-
         def _restore_stranded_config_file(
             target: Path, content: bytes, preserved_mode: int
         ) -> None:
@@ -3207,31 +3250,37 @@ class ExtensionManager:
                     f"{exc}.{_staging_hint()}"
                 ) from exc
 
+        before_file_change(dest_dir, removal=True)
         try:
-            shutil.copytree(source_dir, dest_dir, ignore=ignore_fn)
-        except BaseException:
-            # copytree failed — dest_dir may be absent or only partially
-            # created.  Write the rescued configs back now so they are not
-            # permanently lost even though the install did not complete.
-            if stranded_configs:
-                dest_dir.mkdir(parents=True, exist_ok=True)
-                for filename, (content, mode) in stranded_configs.items():
-                    target = dest_dir / filename
-                    _restore_stranded_config_file(target, content, mode)
-            # Same reasoning for a preserved custom/edited payload: restore
-            # it now, before the exception propagates, rather than only on
-            # the happy path below. A later step (registration, registry.add)
-            # is not the only thing that can lose it — copytree itself can.
-            if custom_payload:
-                dest_dir.mkdir(parents=True, exist_ok=True)
-                for rel, (content, mode) in custom_payload.items():
-                    _restore_custom_payload_entry(dest_dir / rel, content, mode)
-            raise
+            if dest_dir.exists():
+                shutil.rmtree(dest_dir)
+            try:
+                shutil.copytree(source_dir, dest_dir, ignore=ignore_fn)
+            except BaseException:
+                # copytree failed — dest_dir may be absent or only partially
+                # created.  Write the rescued configs back now so they are not
+                # permanently lost even though the install did not complete.
+                if stranded_configs:
+                    dest_dir.mkdir(parents=True, exist_ok=True)
+                    for filename, (content, mode) in stranded_configs.items():
+                        target = dest_dir / filename
+                        _restore_stranded_config_file(target, content, mode)
+                # Same reasoning for a preserved custom/edited payload: restore
+                # it now, before the exception propagates, rather than only on
+                # the happy path below. A later step (registration, registry.add)
+                # is not the only thing that can lose it — copytree itself can.
+                if custom_payload:
+                    dest_dir.mkdir(parents=True, exist_ok=True)
+                    for rel, (content, mode) in custom_payload.items():
+                        _restore_custom_payload_entry(dest_dir / rel, content, mode)
+                raise
 
-        # Restore stranded configs rescued before the rmtree above.
-        for filename, (content, mode) in stranded_configs.items():
-            target = dest_dir / filename
-            _restore_stranded_config_file(target, content, mode)
+            # Restore stranded configs rescued before the rmtree above.
+            for filename, (content, mode) in stranded_configs.items():
+                target = dest_dir / filename
+                _restore_stranded_config_file(target, content, mode)
+        finally:
+            after_file_change(dest_dir)
 
         # A record without a producer baseline (written before
         # generated_files existed) cannot tell edits from old package bytes,
@@ -3389,7 +3438,8 @@ class ExtensionManager:
                                 or cfg_file.name.endswith("-config.local.yml")
                             )
                         ):
-                            shutil.copy2(cfg_file, dest_dir / cfg_file.name)
+                            with changing_file(dest_dir / cfg_file.name):
+                                shutil.copy2(cfg_file, dest_dir / cfg_file.name)
                 elif backup_config_dir.exists():
                     backup_config_dir.unlink()
 
@@ -3459,7 +3509,8 @@ class ExtensionManager:
                     except Exception as error:
                         rollback_errors.append(f"hooks: {error}")
                 try:
-                    rollback_generic_registration()
+                    with changing_file(dest_dir, removal=True):
+                        rollback_generic_registration()
                 except Exception as error:
                     rollback_errors.append(f"artifacts: {error}")
                 if rollback_errors:
@@ -3487,7 +3538,8 @@ class ExtensionManager:
                 # Retain the backup until registry commit so failed force
                 # reinstalls can still restore the user's configuration.
                 try:
-                    shutil.rmtree(backup_config_dir)
+                    with changing_file(backup_config_dir, removal=True):
+                        shutil.rmtree(backup_config_dir)
                 except OSError as exc:
                     from .. import print_cli_warning
 
@@ -3507,9 +3559,10 @@ class ExtensionManager:
             # crash mid-cleanup cannot leave a staging dir that a retry would
             # wrongly trust as a complete durable backup.
             try:
-                rescue_complete_marker.unlink(missing_ok=True)
-                _fsync_directory(rescue_staging_dir)
-                shutil.rmtree(rescue_staging_dir)
+                with changing_file(rescue_staging_dir, removal=True):
+                    rescue_complete_marker.unlink(missing_ok=True)
+                    _fsync_directory(rescue_staging_dir)
+                    shutil.rmtree(rescue_staging_dir)
                 _fsync_directory(rescue_staging_dir.parent)
             except OSError:
                 pass  # Best-effort; install already committed to the registry.
@@ -3843,7 +3896,7 @@ class ExtensionManager:
             if "generic" in safe_commands:
                 safe_commands.pop("generic")
             if safe_commands:
-                CommandRegistrar().unregister_commands(
+                CommandRegistrar(self.project_root, include_generic=False).unregister_commands(
                     safe_commands, self.project_root
                 )
         if metadata:
@@ -4133,6 +4186,7 @@ class ExtensionManager:
             if updates:
                 self.registry.update(ext_id, updates)
 
+    @project_registration
     def _retire_legacy_flat_extension_commands(
         self,
         agent_name: str,
@@ -4669,10 +4723,10 @@ class CommandRegistrar:
 
     AGENT_CONFIGS = _AgentRegistrar.AGENT_CONFIGS
 
-    def __init__(self, project_root: Path | None = None):
+    def __init__(self, project_root: Path | None = None, *, include_generic: bool = True):
         from ..agents import CommandRegistrar as _Registrar
 
-        self._registrar = _Registrar(project_root)
+        self._registrar = _Registrar(project_root, include_generic=include_generic)
         self.AGENT_CONFIGS = self._registrar.AGENT_CONFIGS
 
     # Delegate static/utility methods
@@ -6038,8 +6092,11 @@ class HookExecutor:
         Args:
             config: Configuration dictionary to save
         """
+        from ..integrations._file_changes import write_text
+
         self.config_file.parent.mkdir(parents=True, exist_ok=True)
-        self.config_file.write_text(
+        write_text(
+            self.config_file,
             yaml.dump(
                 config, default_flow_style=False, sort_keys=False, allow_unicode=True
             ),

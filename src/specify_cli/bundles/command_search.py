@@ -8,6 +8,7 @@ from pathlib import Path
 import typer
 from rich.markup import escape as _escape_markup
 
+from .._file_policy import ProjectPolicyError
 from ..terminal import console
 from . import BundlerError
 from ._commands import bundle_app, _build_stack, _fail, _trust_badge, _trust_level
@@ -26,7 +27,7 @@ def bundle_search(
         stack = _build_stack(project_root, offline=offline)
         results = stack.search(query)
     except BundlerError as exc:
-        _fail(str(exc))
+        _fail(str(exc), as_json=as_json and isinstance(exc.__cause__, ProjectPolicyError))
         return
 
     if as_json:

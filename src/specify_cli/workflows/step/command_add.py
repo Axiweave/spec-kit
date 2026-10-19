@@ -8,6 +8,7 @@ directory, and ``--from`` archive URL). All three sources converge on
 
 from __future__ import annotations
 
+import hashlib
 import sys
 from typing import Annotated
 
@@ -257,7 +258,10 @@ def _install_from_url(
     _print_installed(step_id, entry)
 
 
-def _install_from_catalog(project_root: cli.Path, step_id: str, *, force: bool) -> None:
+def _install_from_catalog(
+    project_root: cli.Path, step_id: str, *, force: bool, version: str | None = None,
+    selected_info: dict | None = None,
+) -> None:
     """Install a step package from the step catalog.
 
     The catalog fetch (URL/derivation/count preflight) stays a catalog concern;
@@ -267,16 +271,26 @@ def _install_from_catalog(project_root: cli.Path, step_id: str, *, force: bool) 
 
     from . import installer
     from .catalog import StepCatalog, StepCatalogError
+    from .catalog._versions import validate_checksums
 
-    catalog = StepCatalog(project_root)
-    try:
-        info = catalog.get_step_info(step_id)
-    except StepCatalogError as exc:
-        raise installer.StepInstallError(str(exc)) from exc
+    if selected_info is not None:
+        info = selected_info
+    else:
+        catalog = StepCatalog(project_root)
+        try:
+            info = (
+                catalog.get_step_info(step_id, version=version)
+                if version is not None
+                else catalog.get_step_info(step_id)
+            )
+        except StepCatalogError as exc:
+            raise installer.StepInstallError(str(exc)) from exc
 
     if not info:
         raise installer.StepInstallError(
-            f"Step type '{step_id}' not found in catalog"
+            f"Step type '{step_id}' version '{version}' not found in the winning catalog"
+            if version is not None
+            else f"Step type '{step_id}' not found in catalog"
         )
 
     if not info.get("_install_allowed", True):
@@ -287,6 +301,12 @@ def _install_from_catalog(project_root: cli.Path, step_id: str, *, force: bool) 
         )
         cli.console.print("Direct installation is not enabled for this catalog source.")
         raise cli.typer.Exit(1)
+
+    try:
+        validate_checksums(info, step_id, required=version is not None)
+    except StepCatalogError as exc:
+        raise installer.StepInstallError(str(exc)) from exc
+    checksums = info.get("sha256")
 
     # Reject built-in collisions and duplicates before any download. A
     # registered catalog step is a restore, not a duplicate.
@@ -380,6 +400,14 @@ def _install_from_catalog(project_root: cli.Path, step_id: str, *, force: bool) 
                 label="step package response",
             )
 
+    def _fetch_checked(url: str, name: str) -> bytes:
+        content = _safe_fetch(url)
+        if checksums and (
+            hashlib.sha256(content).hexdigest().lower() != checksums[name].lower()
+        ):
+            raise installer.StepInstallError(f"SHA-256 checksum mismatch for '{name}'")
+        return content
+
     try:
         package_tmp = tempfile.TemporaryDirectory(prefix="speckit-step-package-")
     except OSError as exc:
@@ -390,8 +418,8 @@ def _install_from_catalog(project_root: cli.Path, step_id: str, *, force: bool) 
     committed = False
     try:
         try:
-            step_yml_content = _safe_fetch(step_yml_url)
-            init_py_content = _safe_fetch(init_url)
+            step_yml_content = _fetch_checked(step_yml_url, "step.yml")
+            init_py_content = _fetch_checked(init_url, "__init__.py")
         except Exception as exc:
             raise installer.StepInstallError(
                 f"Failed to download step files: {exc}"
@@ -443,7 +471,7 @@ def _install_from_catalog(project_root: cli.Path, step_id: str, *, force: bool) 
                     "directory"
                 ) from None
             try:
-                file_content = _safe_fetch(file_url)
+                file_content = _fetch_checked(file_url, rel_path)
             except Exception as exc:
                 raise installer.StepInstallError(
                     f"Failed to download extra file '{rel_path}': {exc}"
@@ -461,6 +489,24 @@ def _install_from_catalog(project_root: cli.Path, step_id: str, *, force: bool) 
                 raise installer.StepInstallError(
                     f"Failed to write extra file '{rel_path}': {exc}"
                 ) from exc
+
+        if version is not None or "releases" in info:
+            from packaging.version import InvalidVersion, Version
+
+            step_meta = installer.validate_step_package(package_dir, step_id)
+            declared_version = step_meta.get("version")
+            try:
+                matches = (
+                    isinstance(declared_version, str)
+                    and Version(declared_version) == Version(info["version"])
+                )
+            except (InvalidVersion, TypeError, KeyError):
+                matches = False
+            if not matches:
+                raise installer.StepInstallError(
+                    f"step.yml version ({declared_version!r}) does not match "
+                    f"catalog version ({info.get('version')!r})"
+                )
 
         entry = installer.install_step_package(
             project_root,
@@ -497,12 +543,28 @@ def _install_from_catalog(project_root: cli.Path, step_id: str, *, force: bool) 
     _print_installed(step_id, entry)
 
 
+def _install_preselected_step(
+    step_id: str, *, version: str | None, selected_info: dict,
+) -> None:
+    """Install a bundle-selected release with the normal step ID preflight."""
+    project_root = cli._require_specify_project()
+    step_helpers._validate_step_id_or_exit(step_id)
+    _install_from_catalog(
+        project_root, step_id, force=False, version=version,
+        selected_info=selected_info,
+    )
+
+
 @step_app.command("add")
 def workflow_step_add(
     step_id: str = cli.typer.Argument(..., help="Step type ID"),
     dev: Annotated[str | None, cli.typer.Option("--dev", help="Install from a local step package directory")] = None,
     from_url: Annotated[str | None, cli.typer.Option("--from", help="Install from a .zip/.tar.gz/.tgz archive URL")] = None,
     force: Annotated[bool, cli.typer.Option("--force", help="Replace an existing installation")] = False,
+    version: Annotated[
+        str | None,
+        cli.typer.Option("--version", help="Install an exact catalog release"),
+    ] = None,
 ):
     """Install a custom step type from the catalog, a local directory, or a URL."""
     from . import installer
@@ -520,6 +582,12 @@ def workflow_step_add(
     if from_url is not None and not from_url.strip():
         cli.console.print("[red]Error:[/red] --from value must not be empty")
         raise cli.typer.Exit(1)
+    if version is not None and (dev is not None or from_url is not None):
+        cli.console.print("[red]Error:[/red] --version requires a catalog step ID")
+        raise cli.typer.Exit(1)
+    if version is not None and not version.strip():
+        cli.console.print("[red]Error:[/red] --version value must not be empty")
+        raise cli.typer.Exit(1)
 
     step_helpers._validate_step_id_or_exit(step_id)
 
@@ -529,7 +597,7 @@ def workflow_step_add(
         elif from_url is not None:
             _install_from_url(project_root, step_id, from_url, force=force)
         else:
-            _install_from_catalog(project_root, step_id, force=force)
+            _install_from_catalog(project_root, step_id, force=force, version=version)
     except installer.StepInstallError as exc:
         notes = getattr(exc, "__notes__", ())
         for note in notes:

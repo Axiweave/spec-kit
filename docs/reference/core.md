@@ -15,6 +15,7 @@ specify init [<project_name>]
 | `--script sh\|ps\|py`    | Script type: `sh` (bash/zsh), `ps` (PowerShell), or `py` (Python)       |
 | `--here`                 | Initialize in the current directory instead of creating a new one        |
 | `--force`                | Force merge/overwrite when initializing in an existing directory         |
+| `--allow-symlinks`       | Persist permission for contained symlinks in migrated FileHelper operations; default is deny |
 | `--ignore-agent-tools`   | Skip checks for AI coding agent CLI tools                                |
 | `--preset <id>`          | Install a preset during initialization                                   |
 | `--storage local\|external` | Keep Spec Kit assets in the repository or use a separate workspace |
@@ -36,6 +37,32 @@ For new projects, setup uses explicit options, then the integration environment 
 Unset choices prompt in interactive terminals. The storage prompt defaults to local storage.
 Non-interactive setup uses local storage, sequential numbering, the platform script type, and GitHub Copilot when no other choice applies.
 When `--integration` is omitted, `--global-commands` selects `omp`. Reinitialization keeps the project's saved integration.
+
+### Persisted filesystem policy
+
+Only `init` accepts `--allow-symlinks`. It records `allow_symlinks: true` in
+`.specify/init-options.json`; omitting it records `false`, including on re-init.
+Project-scoped CLI commands read the current value on each invocation, so a
+manual edit takes effect immediately. A missing file or key means deny; the
+value must be a JSON boolean, not a string, number or null. Invalid/unreadable
+configuration is an error, not a fallback. Unrelated recorded init options are
+preserved.
+
+The configuration bootstrap hierarchy (`.specify` and `init-options.json`)
+must always be non-symlinked below the trusted project root, even in allow mode.
+Help, version, check and projectless tool/catalog operations do not gain a
+project requirement. Init uses its explicit target, not `SPECIFY_INIT_DIR`.
+`check` can consume installed project integrations: it validates any present
+policy at its selected cwd or `SPECIFY_INIT_DIR` boundary before loading them
+or checking tools. It still works in a projectless cwd without `.specify` or
+init options. Help and version do not read project policy.
+
+**Migration limit:** policy is enforced by FileHelper operations, currently
+including init-options bootstrap I/O. Loading policy does not yet route all
+other command filesystem operations through FileHelper. Shared infrastructure,
+registration, managed storage, scripts and runtime operations retain their
+existing behavior until migrated. See [FileHelper design](../../design/file-helper.md)
+for the boundary and handoff contract.
 
 ### Examples
 
@@ -643,7 +670,11 @@ Other integrations do not support `--global` or `--global-commands`.
 >
 > **Version control.** `specify init` scaffolds a managed `.specify/.gitignore` that excludes machine-local state — `feature.json` (the current-feature pointer, rewritten on every feature switch) and per-machine extension `extensions/*/local-config.yml` overrides — while leaving everything else under `.specify/` (constitution, templates, scripts, extension config) shareable so teams stay aligned. Like the rest of `.specify/`'s shared scripts and templates, the file is tracked in the shared-infrastructure manifest: your edits are preserved on re-init and `specify init --here --force` restores the managed content. It is intentionally left in place by `specify integration uninstall`, which only removes the uninstalled agent's own files.
 >
-> **Symlinked project roots.** `SPECIFY_INIT_DIR` relocates *where* the project is, not *how* a command treats symlinks: each command keeps its existing cwd-path stance. Commands that traverse and write project files through broad input paths (`bundle`, `workflow run <file>`) refuse a symlinked `.specify/` to preserve write confinement. Other project-scoped commands keep their existing behavior when `SPECIFY_INIT_DIR` points at a project root, which may include following a symlinked `.specify/`.
+> **Symlinked project roots.** An explicitly established project-root alias is
+> trusted, including OS ancestors above it. The configuration hierarchy below
+> that root is always checked in deny mode: `.specify/` and `init-options.json`
+> cannot be symlinks. Unmigrated operations elsewhere in the project retain
+> their existing symlink behavior.
 
 ## Naming Features with the Helper Scripts
 
@@ -679,6 +710,10 @@ specify check
 
 Checks that CLI-based AI coding agents are available on your system. IDE-based agents are skipped since they don't require a CLI tool.
 
+Installed project integrations are included when available. Any present
+filesystem policy at the selected project boundary must be valid; a projectless
+cwd remains supported without configuration.
+
 This command stays offline. If a command behaves like an older Spec Kit version or an expected CLI feature is missing, run `specify self check` to check whether your local CLI is behind the latest release.
 
 ## Version Information
@@ -693,11 +728,20 @@ To inspect local CLI capabilities without checking the network:
 
 ```bash
 specify version --features
-specify version --features --json
 ```
 
-The JSON form is intended for scripts and coding agents that need to choose a
-workflow based on the installed CLI's supported features.
+To print complete version, runtime, system, and feature information as JSON,
+use:
+
+```bash
+specify version --json
+```
+
+Combining `--features` and `--json` emits the same complete JSON output;
+`--features` does not filter the result in JSON mode. If OpenSSL information
+is unavailable, `runtime.openssl` is `null`.
+Successful JSON output is written only to stdout. Failures leave stdout empty
+and write one sanitized JSON error object to stderr.
 
 A quick version check is also available via:
 
@@ -705,3 +749,14 @@ A quick version check is also available via:
 specify --version
 specify -V
 ```
+
+## Experimental MCP Server
+
+```bash
+specify mcp
+```
+
+Starts the experimental stdio-only MCP server. The initial server exposes only
+the stable `version` JSON command through generic list, describe, and run tools.
+See the [MCP Server reference](mcp.md) for the tool names, result contract, and
+current limitations.

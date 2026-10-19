@@ -7,6 +7,7 @@ import json as _json
 import typer
 from rich.markup import escape as _escape_markup
 
+from .._file_policy import ProjectPolicyError
 from ..terminal import console
 from . import BundlerError
 from ._commands import _fail, bundle_app
@@ -23,7 +24,7 @@ def bundle_list(
         project_root = require_project_root()
         records = load_records(project_root)
     except BundlerError as exc:
-        _fail(str(exc))
+        _fail(str(exc), as_json=as_json and isinstance(exc.__cause__, ProjectPolicyError))
         return
 
     if as_json:
@@ -40,6 +41,6 @@ def bundle_list(
         console.print(
             f"  [bold]{_escape_markup(str(record.bundle_id))}[/bold] "
             f"v{_escape_markup(str(record.version))} "
-            f"[dim]({len(record.contributed_components)} components, "
+            f"[dim]({len(record.required_components)} components, "
             f"installed {_escape_markup(str(record.installed_at))})[/dim]"
         )

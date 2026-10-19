@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Any
 import yaml
 import typer
 
+from ..integrations._file_changes import unlink as _unlink_file, write_text as _write_text
 from ..workspace import workspace_root_for
 
 if TYPE_CHECKING:
@@ -1466,11 +1467,12 @@ def install_integration_events(
     dispatcher_content = _EVENTS_DISPATCHER_TEMPLATE.replace(
         "EXTERNAL_WORKSPACE = False", f"EXTERNAL_WORKSPACE = {workspace_root != project_root}", 1,
     )
-    dispatcher_path.write_text(dispatcher_content, encoding="utf-8")
+    _write_text(dispatcher_path, dispatcher_content, encoding="utf-8")
     dispatcher_path.chmod(0o755)
     manifest.record_file(
         EVENTS_DISPATCHER_REL,
         dispatcher_path.read_bytes(),
+        ownership="shared",
     )
     created.append(dispatcher_path)
 
@@ -1486,6 +1488,7 @@ def install_integration_events(
         return created
 
     config_path = project_root / config_file
+    manifest.set_ownership(config_file, "partial")
 
     if fmt == "ts-plugin":
         # Opencode TS plugin custom merge
@@ -1501,7 +1504,8 @@ def install_integration_events(
             if hashlib.sha256(plugin_path.read_bytes()).hexdigest() != expected_hash:
                 raise ValueError(f"Event plugin contains user content: {plugin_path}")
         plugin_path.parent.mkdir(parents=True, exist_ok=True)
-        plugin_path.write_text(
+        _write_text(
+            plugin_path,
             _build_opencode_plugin(
                 filtered, canonical_to_native,
                 workspace_root / EVENTS_DISPATCHER_REL if workspace_root != project_root else None,
@@ -1520,8 +1524,7 @@ def install_integration_events(
         # user's untouched file.
         if _merge_opencode_plugin_ref(config_path, f"./{plugin_rel}"):
             rel = str(config_path.relative_to(project_root))
-            if rel not in manifest.files:
-                manifest.record_existing(rel)
+            manifest.record_existing(rel, ownership="partial")
             created.append(config_path)
 
     elif fmt == "copilot-json":
@@ -1560,8 +1563,7 @@ def install_integration_events(
         # S5: only track when the merge wrote (skips on JSONC/malformed).
         if _merge_copilot_json(config_path, copilot_hooks):
             rel = str(config_path.relative_to(project_root))
-            if rel not in manifest.files:
-                manifest.record_existing(rel)
+            manifest.record_existing(rel, ownership="partial")
             created.append(config_path)
 
     elif fmt == "toml":
@@ -1585,8 +1587,7 @@ def install_integration_events(
         # S5: only track when the merge wrote (skips on unreadable file).
         if _merge_toml_fragment(config_path, "\n".join(lines)):
             rel = str(config_path.relative_to(project_root))
-            if rel not in manifest.files:
-                manifest.record_existing(rel)
+            manifest.record_existing(rel, ownership="partial")
             created.append(config_path)
 
     elif fmt == "toml-vibe":
@@ -1634,8 +1635,7 @@ def install_integration_events(
         # S5: only track when the merge wrote (skips on unreadable file).
         if _merge_vibe_toml_fragment(config_path, "\n".join(lines)):
             rel = str(config_path.relative_to(project_root))
-            if rel not in manifest.files:
-                manifest.record_existing(rel)
+            manifest.record_existing(rel, ownership="partial")
             created.append(config_path)
 
     elif fmt == "json-flat":
@@ -1663,8 +1663,7 @@ def install_integration_events(
         # S5: only track when the merge wrote (skips on JSONC/malformed).
         if _merge_json_fragment(config_path, cursor_hooks, version=1):
             rel = str(config_path.relative_to(project_root))
-            if rel not in manifest.files:
-                manifest.record_existing(rel)
+            manifest.record_existing(rel, ownership="partial")
             created.append(config_path)
 
     elif fmt == "json-nested":
@@ -1700,8 +1699,7 @@ def install_integration_events(
         # S5: only track when the merge wrote (skips on JSONC/malformed).
         if _merge_json_fragment(config_path, nested_hooks):
             rel = str(config_path.relative_to(project_root))
-            if rel not in manifest.files:
-                manifest.record_existing(rel)
+            manifest.record_existing(rel, ownership="partial")
             created.append(config_path)
 
     elif fmt == "json-root-nested":
@@ -1730,8 +1728,7 @@ def install_integration_events(
             ]
         if _merge_json_root(config_path, root_hooks):
             rel = str(config_path.relative_to(project_root))
-            if rel not in manifest.files:
-                manifest.record_existing(rel)
+            manifest.record_existing(rel, ownership="partial")
             created.append(config_path)
 
     return created
@@ -1851,7 +1848,7 @@ def _cleanup_shared_dispatcher(
         if dispatcher_path.exists() and expected_hash:
             _ensure_safe_destination(dispatcher_path)
             if hashlib.sha256(dispatcher_path.read_bytes()).hexdigest() == expected_hash:
-                dispatcher_path.unlink(missing_ok=True)
+                _unlink_file(dispatcher_path, missing_ok=True)
 
 
 def remove_integration_events(
@@ -1877,7 +1874,7 @@ def remove_integration_events(
             if plugin_path.exists():
                 _ensure_safe_destination(plugin_path)
                 if plugin_rel not in manifest.check_modified():
-                    plugin_path.unlink(missing_ok=True)
+                    _unlink_file(plugin_path, missing_ok=True)
             manifest.remove(plugin_rel)
 
 
@@ -1934,6 +1931,17 @@ def refresh_integration_events(project_root: Path) -> None:
     the lifecycle command can't claim the extension was fully deactivated
     while a stale native hook may still be active (R3).
     """
+    from ..integrations.installer import IntegrationInstallError, project_integrations
+
+    try:
+        with project_integrations(project_root):
+            _refresh_loaded_integration_events(project_root)
+    except (IntegrationInstallError, OSError) as exc:
+        raise EventRefreshError([("installed adapters", str(exc))]) from exc
+
+
+def _refresh_loaded_integration_events(project_root: Path) -> None:
+    """Refresh against the pinned project registry."""
     from ..integrations import get_integration
     from ..integrations.helpers import read_integration_json, resolve_integration_options_or_exit
     from ..integrations.manifest import IntegrationManifest
@@ -1982,8 +1990,15 @@ def refresh_integration_events(project_root: Path) -> None:
             # install_integration_events handles both the populated case
             # (writes new config, stripping stale owned entries) and the empty
             # case (strips prior hooks for --events false / disabled override).
-            install_integration_events(integration, project_root, manifest, events_map)
+            written = install_integration_events(integration, project_root, manifest, events_map)
             manifest.save()
+            from ..integrations.installer import update_event_recovery_ownership
+
+            touched = {path.relative_to(project_root).as_posix() for path in written}
+            config = getattr(integration, "events_config_file", None)
+            if config and config in manifest.files:
+                touched.add(config)
+            update_event_recovery_ownership(project_root, key, manifest, touched)
         except Exception as exc:
             logger.warning("Failed to refresh events for '%s': %s", key, exc)
             failures.append((key, str(exc)))
@@ -2255,7 +2270,7 @@ def _remove_opencode_entries(config_path: Path) -> bool:
         else:
             existing.pop("plugin", None)
     if not existing:
-        config_path.unlink(missing_ok=True)
+        _unlink_file(config_path, missing_ok=True)
         return True
     _safe_write_json(config_path, existing)
     return False
@@ -2294,7 +2309,7 @@ def _merge_toml_fragment(dst: Path, fragment: str) -> bool:
     if not fragment and stripped == existing:
         return False
     dst.parent.mkdir(parents=True, exist_ok=True)
-    dst.write_text(stripped.rstrip() + "\n\n" + fragment + "\n", encoding="utf-8")
+    _write_text(dst, stripped.rstrip() + "\n\n" + fragment + "\n", encoding="utf-8")
     return True
 
 
@@ -2330,7 +2345,7 @@ def _merge_vibe_toml_fragment(dst: Path, fragment: str) -> bool:
         flags=re.DOTALL,
     )
     dst.parent.mkdir(parents=True, exist_ok=True)
-    dst.write_text(existing.rstrip() + "\n\n" + fragment + "\n", encoding="utf-8")
+    _write_text(dst, existing.rstrip() + "\n\n" + fragment + "\n", encoding="utf-8")
     return True
 
 
@@ -2379,9 +2394,9 @@ def _remove_toml_entries(dst: Path) -> bool:
         if line.strip() and not line.strip().startswith("#")
     )
     if not stripped:
-        dst.unlink(missing_ok=True)
+        _unlink_file(dst, missing_ok=True)
         return True
-    dst.write_text(cleaned, encoding="utf-8")
+    _write_text(dst, cleaned, encoding="utf-8")
     return False
 
 
@@ -2416,9 +2431,9 @@ def _remove_vibe_toml_entries(dst: Path) -> bool:
         if line.strip() and not line.strip().startswith("#")
     )
     if not stripped:
-        dst.unlink(missing_ok=True)
+        _unlink_file(dst, missing_ok=True)
         return True
-    dst.write_text(cleaned, encoding="utf-8")
+    _write_text(dst, cleaned, encoding="utf-8")
     return False
 
 
@@ -2487,7 +2502,7 @@ def _remove_copilot_entries(dst: Path) -> bool:
     # ``version`` key would remain — no user content to preserve.
     user_keys = {k for k in existing if k != "version"}
     if not user_keys:
-        dst.unlink(missing_ok=True)
+        _unlink_file(dst, missing_ok=True)
         return True
     _safe_write_json(dst, existing)
     return False
@@ -2584,7 +2599,7 @@ def _merge_json_root(dst: Path, new_hooks: dict) -> bool:
     else:
         existing = {}
     if not existing:
-        dst.unlink(missing_ok=True)
+        _unlink_file(dst, missing_ok=True)
         return True
     _safe_write_json(dst, existing)
     return True
@@ -2610,7 +2625,7 @@ def _remove_json_root_entries(dst: Path) -> bool:
         if kept_entries:
             cleaned[event] = kept_entries
     if not cleaned:
-        dst.unlink(missing_ok=True)
+        _unlink_file(dst, missing_ok=True)
         return True
     _safe_write_json(dst, cleaned)
     return False
@@ -2675,7 +2690,8 @@ def _safe_write_json(dst: Path, data: dict) -> None:
     _ensure_safe_destination(dst)
     dst.parent.mkdir(parents=True, exist_ok=True)
     # A lone surrogate (\ud800) can't be UTF-8 encoded; write it back as its JSON escape.
-    dst.write_text(
+    _write_text(
+        dst,
         json.dumps(data, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
         errors="backslashreplace",
@@ -2741,7 +2757,7 @@ def _remove_json_entries(dst: Path) -> bool:
     # doesn't leave a generated stub behind.
     user_keys = {k for k in existing if k != "version"}
     if not user_keys:
-        dst.unlink(missing_ok=True)
+        _unlink_file(dst, missing_ok=True)
         return True
     _safe_write_json(dst, existing)
     return False

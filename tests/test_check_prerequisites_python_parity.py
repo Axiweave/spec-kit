@@ -661,7 +661,6 @@ def test_plan_prerequisite_diagnostics(
         assert plan.read_bytes() == bodies[plan_state]
         assert plan.stat().st_mtime_ns == before
 
-
 def test_python_branch_falls_back_to_feature_dir_basename(prereq_repo: Path) -> None:
     (prereq_repo / "specs" / "001-my-feature").mkdir(parents=True)
     _write_feature_json(prereq_repo)

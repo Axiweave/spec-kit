@@ -275,7 +275,7 @@ class GenericIntegration(MarkdownIntegration):
                 )
                 dst_file = self.write_file_and_record(
                     skill_content, dest / skill_name / "SKILL.md",
-                    project_root, manifest
+                    project_root_resolved, manifest
                 )
                 created.append(dst_file)
                 continue
@@ -287,7 +287,7 @@ class GenericIntegration(MarkdownIntegration):
             )
             dst_name = self.command_filename(src_file.stem)
             dst_file = self.write_file_and_record(
-                processed, dest / dst_name, project_root, manifest
+                processed, dest / dst_name, project_root_resolved, manifest
             )
             created.append(dst_file)
 

@@ -142,7 +142,12 @@ class HermesIntegration(SkillsIntegration):
         # Create project-local marker directory so extension commands
         # (e.g. git) can detect Hermes as an active integration.
         # Hermes itself ignores this directory — skills live globally.
-        manifest.file_path(".hermes/skills").mkdir(parents=True, exist_ok=True)
+        marker = manifest.file_path(".hermes/skills")
+        if not marker.exists():
+            from .._file_changes import changing_file
+
+            with changing_file(marker):
+                marker.mkdir(parents=True, exist_ok=True)
         modified = set(global_manifest.check_modified())
         owned = global_manifest.files
 
@@ -245,6 +250,7 @@ class HermesIntegration(SkillsIntegration):
 
             skill_content = self.post_process_skill_content(skill_content)
 
+
             normalized = skill_content.replace("\r\n", "\n")
             if not skill_file.exists() or skill_file.read_bytes() != normalized.encode("utf-8"):
                 global_manifest.record_file(relative, normalized)
@@ -283,10 +289,15 @@ class HermesIntegration(SkillsIntegration):
             skipped.extend(global_skipped)
 
         if local_skills_dir.is_dir() and not any(local_skills_dir.iterdir()):
-            local_skills_dir.rmdir()
+            from .._file_changes import changing_file
+
+            with changing_file(local_skills_dir, removal=True):
+                local_skills_dir.rmdir()
             hermes_dir = local_skills_dir.parent
             if not any(hermes_dir.iterdir()):
-                hermes_dir.rmdir()
+                with changing_file(hermes_dir, removal=True):
+                    hermes_dir.rmdir()
+
 
         return removed, skipped
 

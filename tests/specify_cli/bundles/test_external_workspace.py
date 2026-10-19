@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -143,7 +144,7 @@ def test_missing_external_mapping_fails_without_repository_metadata(tmp_path: Pa
     mapping.unlink()
     result = runner.invoke(app, ["bundle", *command])
     assert result.exit_code == 1
-    assert "Missing workspace mapping" in result.output
+    assert "Missing workspace mapping" in " ".join(result.output.split())
     assert sorted(path.name for path in (repository / ".specify").iterdir()) == ["project.json"]
 
 
@@ -257,6 +258,11 @@ def test_primitive_lifecycle_keeps_external_ownership(tmp_path, monkeypatch, kin
         bodies[entry["url"]] = yaml.safe_dump(
             document if version != "3.0.0" else []
         ).encode()
+        if kind == "steps":
+            entry["sha256"] = {
+                "step.yml": hashlib.sha256(bodies[entry["url"]]).hexdigest(),
+                "__init__.py": hashlib.sha256(bodies[entry["init_url"]]).hexdigest(),
+            }
         bodies[catalog_url] = json.dumps({kind: {"storage-probe": entry}}).encode()
         variable = "SPECKIT_WORKFLOW_CATALOG_URL" if kind == "workflows" else "SPECKIT_STEP_CATALOG_URL"
         monkeypatch.setenv(variable, catalog_url)

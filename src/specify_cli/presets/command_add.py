@@ -136,6 +136,9 @@ def preset_add(
         "--priority",
         help="Resolution priority (lower = higher precedence, default 10)",
     ),
+    version: str | None = typer.Option(
+        None, "--version", help="Install an exact version from a catalog"
+    ),
 ):
     """Install a preset."""
-    _commands._install_preset(preset_id, from_url, dev, priority)
+    _commands._install_preset(preset_id, from_url, dev, priority, version=version)

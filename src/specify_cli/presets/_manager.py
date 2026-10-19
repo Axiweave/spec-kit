@@ -294,6 +294,10 @@ class PresetManager(_PresetCommandMethods, _PresetSkillMethods):
         self.presets_dir = self.workspace_root / ".specify" / "presets"
         self.registry = PresetRegistry(self.presets_dir)
 
+    def _command_registrar(self):
+        from ..agents import CommandRegistrar
+        return CommandRegistrar(self.project_root, include_generic=False)
+
     def check_compatibility(
         self,
         manifest: PresetManifest,
@@ -525,39 +529,20 @@ class PresetManager(_PresetCommandMethods, _PresetSkillMethods):
 
         self.check_compatibility(manifest, speckit_version)
 
+        from ..integrations._file_changes import (
+            after_file_change, before_file_change, changing_file, file_change_observer,
+        )
+
         custom_payload: dict[str, tuple[bytes, int]] = {}
         old_metadata: dict[str, Any] | None = None
         custom_payload_staging_dir: Path | None = None
-        if self.registry.is_installed(manifest.id):
-            if not force:
-                raise PresetError(
-                    f"Preset '{manifest.id}' is already installed. "
-                    f"Use 'specify preset remove {manifest.id}' first."
-                )
-            old_metadata = self.registry.get(manifest.id)
-            old_dest_dir = self.presets_dir / manifest.id
-            # A cloned or hand-edited workspace can carry a registry that
-            # already lists this preset as installed while old_dest_dir
-            # holds bytes the installer never produced (see
-            # _capture_custom_payload). Snapshot those now, while the old
-            # payload is still live, so remove()'s rmtree cannot discard
-            # them.
-            if old_dest_dir.is_dir() and not old_dest_dir.is_symlink():
-                custom_payload = _capture_custom_payload(
-                    old_dest_dir, self.workspace_root, old_metadata
-                )
-            if custom_payload:
-                # Durably persist the captured payload before remove()'s
-                # rmtree so a later restore failure (e.g. a structural
-                # collision with the fresh package tree) still has a
-                # recovery copy on disk, not just this process's memory.
-                custom_payload_staging_dir = _reinstall_staging_dir(self.presets_dir)
-                _stage_custom_payload_durably(custom_payload_staging_dir, custom_payload)
-            self.remove(manifest.id)
-
         dest_dir = self.presets_dir / manifest.id
-        if dest_dir.exists():
-            shutil.rmtree(dest_dir)
+        installed = self.registry.is_installed(manifest.id)
+        if installed and not force:
+            raise PresetError(
+                f"Preset '{manifest.id}' is already installed. "
+                f"Use 'specify preset remove {manifest.id}' first."
+            )
 
         def _staging_hint() -> str:
             if custom_payload_staging_dir is None:
@@ -581,50 +566,78 @@ class PresetManager(_PresetCommandMethods, _PresetSkillMethods):
                     f"{exc}.{_staging_hint()}"
                 ) from exc
 
+        before_file_change(dest_dir, removal=True)
         try:
-            shutil.copytree(source_dir, dest_dir)
-        except BaseException:
-            # copytree failed — dest_dir may be absent or only partially
-            # created. Write the preserved custom/edited payload back now
-            # so it is not permanently lost even though the install did
-            # not complete.
-            if custom_payload:
-                dest_dir.mkdir(parents=True, exist_ok=True)
-                for rel, (content, mode) in custom_payload.items():
-                    _restore_custom_payload_file(dest_dir / rel, content, mode)
-            raise
+            if installed:
+                old_metadata = self.registry.get(manifest.id)
+                # A cloned or hand-edited workspace can carry a registry that
+                # already lists this preset as installed while dest_dir
+                # holds bytes the installer never produced (see
+                # _capture_custom_payload). Snapshot those now, while the old
+                # payload is still live, so remove()'s rmtree cannot discard
+                # them.
+                if dest_dir.is_dir() and not dest_dir.is_symlink():
+                    custom_payload = _capture_custom_payload(
+                        dest_dir, self.workspace_root, old_metadata
+                    )
+                if custom_payload and file_change_observer.get() is None:
+                    # Durably persist the captured payload before remove()'s
+                    # rmtree so a later restore failure (e.g. a structural
+                    # collision with the fresh package tree) still has a
+                    # recovery copy on disk, not just this process's memory.
+                    # Inside an integration transaction, its snapshot of
+                    # dest_dir is that copy and its rollback restores it.
+                    custom_payload_staging_dir = _reinstall_staging_dir(self.presets_dir)
+                    _stage_custom_payload_durably(custom_payload_staging_dir, custom_payload)
+                self.remove(manifest.id)
+            if dest_dir.exists():
+                shutil.rmtree(dest_dir)
+            try:
+                shutil.copytree(source_dir, dest_dir)
+            except BaseException:
+                # copytree failed — dest_dir may be absent or only partially
+                # created. Write the preserved custom/edited payload back now
+                # so it is not permanently lost even though the install did
+                # not complete.
+                if custom_payload:
+                    dest_dir.mkdir(parents=True, exist_ok=True)
+                    for rel, (content, mode) in custom_payload.items():
+                        _restore_custom_payload_file(dest_dir / rel, content, mode)
+                raise
 
-        # A record without a producer baseline (written before
-        # generated_files existed) cannot tell edits from old package bytes,
-        # so the new source owns every file it ships. Only files it does not
-        # ship are kept.
-        if old_metadata is not None and not isinstance(
-            old_metadata.get("generated_files"), dict
-        ):
-            replaced = sorted(
-                rel for rel, (content, _) in custom_payload.items()
-                if (dest_dir / rel).is_file() and (dest_dir / rel).read_bytes() != content
-            )
-            custom_payload = {
-                rel: entry for rel, entry in custom_payload.items()
-                if not (dest_dir / rel).is_file()
-            }
-            if replaced:
-                from ..terminal import err_console
-
-                err_console.print(
-                    f"Replaced files in preset '{manifest.id}' with the new release. "
-                    "The old record cannot tell your edits from old package files: "
-                    + ", ".join(replaced),
-                    markup=False,
+            # A record without a producer baseline (written before
+            # generated_files existed) cannot tell edits from old package bytes,
+            # so the new source owns every file it ships. Only files it does not
+            # ship are kept.
+            if old_metadata is not None and not isinstance(
+                old_metadata.get("generated_files"), dict
+            ):
+                replaced = sorted(
+                    rel for rel, (content, _) in custom_payload.items()
+                    if (dest_dir / rel).is_file() and (dest_dir / rel).read_bytes() != content
                 )
+                custom_payload = {
+                    rel: entry for rel, entry in custom_payload.items()
+                    if not (dest_dir / rel).is_file()
+                }
+                if replaced:
+                    from ..terminal import err_console
 
-        # Restore any preserved custom/edited payload now, before the still
-        # -fallible registration and registry.add() steps below run — so a
-        # failure there finds the user's bytes already durably on disk
-        # instead of only held in this function's memory.
-        for rel, (content, mode) in custom_payload.items():
-            _restore_custom_payload_file(dest_dir / rel, content, mode)
+                    err_console.print(
+                        f"Replaced files in preset '{manifest.id}' with the new release. "
+                        "The old record cannot tell your edits from old package files: "
+                        + ", ".join(replaced),
+                        markup=False,
+                    )
+
+            # Restore any preserved custom/edited payload now, before the still
+            # -fallible registration and registry.add() steps below run — so a
+            # failure there finds the user's bytes already durably on disk
+            # instead of only held in this function's memory.
+            for rel, (content, mode) in custom_payload.items():
+                _restore_custom_payload_file(dest_dir / rel, content, mode)
+        finally:
+            after_file_change(dest_dir)
         if custom_payload:
             from ..terminal import err_console
 
@@ -709,7 +722,8 @@ class PresetManager(_PresetCommandMethods, _PresetSkillMethods):
                 )
             try:
                 if dest_dir.exists():
-                    shutil.rmtree(dest_dir)
+                    with changing_file(dest_dir, removal=True):
+                        shutil.rmtree(dest_dir)
             except OSError:
                 pass  # best-effort cleanup; don't mask the original error
             self.registry.remove(manifest.id)
@@ -831,6 +845,7 @@ class PresetManager(_PresetCommandMethods, _PresetSkillMethods):
         *,
         catalog_name: str | None = None,
         expected_id: str | None = None,
+        expected_version: str | None = None,
     ) -> PresetManifest:
         """Install a preset from a supported archive.
 
@@ -874,6 +889,27 @@ class PresetManager(_PresetCommandMethods, _PresetSkillMethods):
                     "No preset.yml found in archive"
                 )
 
+            if expected_id is not None or expected_version is not None:
+                manifest = PresetManifest(manifest_path)
+                if expected_id is not None and manifest.id != expected_id:
+                    raise PresetValidationError(
+                        f"Preset archive ID '{manifest.id}' does not match catalog ID '{expected_id}'."
+                    )
+                if expected_version is not None:
+                    try:
+                        matches_version = (
+                            pkg_version.Version(manifest.version)
+                            == pkg_version.Version(expected_version)
+                        )
+                    except (pkg_version.InvalidVersion, TypeError):
+                        raise PresetValidationError(
+                            f"Invalid expected catalog version: {expected_version!r}"
+                        ) from None
+                    if not matches_version:
+                        raise PresetValidationError(
+                            f"Preset archive version '{manifest.version}' does not match catalog version '{expected_version}'."
+                        )
+
             return self.install_from_directory(
                 pack_dir,
                 speckit_version,
@@ -892,6 +928,7 @@ class PresetManager(_PresetCommandMethods, _PresetSkillMethods):
         *,
         catalog_name: str | None = None,
         expected_id: str | None = None,
+        expected_version: str | None = None,
     ) -> PresetManifest:
         """Backward-compatible wrapper for archive installation."""
         return self.install_from_archive(
@@ -901,6 +938,7 @@ class PresetManager(_PresetCommandMethods, _PresetSkillMethods):
             force=force,
             catalog_name=catalog_name,
             expected_id=expected_id,
+            expected_version=expected_version,
         )
 
     def remove(self, pack_id: str) -> bool:
@@ -956,7 +994,7 @@ class PresetManager(_PresetCommandMethods, _PresetSkillMethods):
         # winner for the current agent, leaving the inactive integration
         # with a missing/stale file (#2948).
         try:
-            from ..agents import CommandRegistrar as _CommandRegistrarForScope
+            _CommandRegistrarForScope = self._command_registrar()
         except ImportError:
             _CommandRegistrarForScope = None
         affected_command_agents = {
@@ -1083,7 +1121,7 @@ class PresetManager(_PresetCommandMethods, _PresetSkillMethods):
                 restore_from_bundled_core=True,
             )
             try:
-                from ..agents import CommandRegistrar
+                CommandRegistrar = self._command_registrar()
             except ImportError:
                 CommandRegistrar = None
             if CommandRegistrar is not None:

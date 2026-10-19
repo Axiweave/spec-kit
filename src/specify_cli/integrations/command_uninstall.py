@@ -3,15 +3,18 @@ from __future__ import annotations
 
 
 import typer
+from rich.markup import escape
 
 from ..terminal import console
 from .._utils import _display_project_path
 from ..integration_state import default_integration_key as _default_integration_key, installed_integration_keys as _installed_integration_keys, integration_settings as _integration_settings
 from ._commands import integration_app
+from ._lifecycle import external_lifecycle, lifecycle_success
 from .helpers import _MANIFEST_READ_ERRORS, clear_init_options_for_integration, read_integration_json, register_extensions_for_agent, register_presets_for_agent, _remove_integration_json, resolve_integration_options_or_exit, _set_default_integration_or_exit, save_integration_json, _unregister_extensions_for_agent, _unregister_presets_for_agent
 
 
 @integration_app.command("uninstall")
+@external_lifecycle("uninstall")
 def integration_uninstall(
     key: str = typer.Argument(None, help="Integration key to uninstall (default: current integration)"),
     force: bool = typer.Option(False, "--force", help="Remove files even if modified"),
@@ -154,7 +157,7 @@ def integration_uninstall(
         raise typer.Exit(0)
 
     name = (integration.config or {}).get("name", key) if integration else key
-    console.print(f"\n[green]✓[/green] Integration '{name}' uninstalled")
+    lifecycle_success(f"\n[green]✓[/green] Integration '{escape(str(name))}' uninstalled")
     _print_removal(project_root, removed, skipped)
     if project:
         console.print(
