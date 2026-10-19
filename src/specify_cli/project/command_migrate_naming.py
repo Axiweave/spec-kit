@@ -221,7 +221,7 @@ def _print(doc: dict, footer: tuple[str, ...] = ()) -> None:
     _section("Conflicts", [f"[{item['code']}] {item['path']}: {item['message']}" for item in doc["conflicts"]])
     _section("Caller notices", [_notice(item) for item in doc["caller_notices"]])
     if status == "applied":
-        _say("Not changed by this command: other worktrees, external callers, source files, and Git history.")
+        _say("Not changed by this command: clones on other machines, external callers, source files, and Git history.")
     for line in footer:
         _say(line)
 
