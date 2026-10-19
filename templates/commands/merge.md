@@ -327,8 +327,9 @@ A no-operation application creates no temporary resources and changes no artifac
 - Do not claim a refusal changed data or created original backups.
 - Existing `.merge-specs.lock` or `.merge-specs-recovery-*` entries block transfer and naming migration.
 - Do not remove existing resources by hand merely because their names match this namespace.
-- Tell the user to run `specify project recover` to list leftover locks and recovery folders, with each owner process state.
-- `specify project recover --apply` restores and removes only the leftovers whose owner process stopped.
+- Tell the user to run `specify project recover` from the destination repository to list leftover locks and recovery folders, with each owner process state.
+- `specify project recover --apply`, run from the destination repository, restores and removes only the leftovers whose owner process stopped.
+- `specify project recover` does not see a raw `set` destination. For a raw set, give the user the manual steps below.
 - Do not choose replacement resources after approval.
 - On complete restoration after handled failure, report transfer `failed`, data `completely restored`, and review `not performed`.
 - On incomplete restoration, report transfer `failed`, data `recovery required`, and review `incomplete review`.
@@ -344,10 +345,21 @@ A no-operation application creates no temporary resources and changes no artifac
 - Keep readiness blocked while any cleanup or recovery remains.
 - After recovery, require a new reconciliation before a clean review result.
 
-Recovery uses `journal.json`, indexed `originals/000000.bin`, and indexed `staged/000000.bin` beneath the disclosed directory.
+Recovery uses `journal.json`, indexed `originals/000000.bin`, `staged/000000.bin`, and `written/000000.bin` beneath the disclosed directory.
 Recovery resources are not feature directories, transferred artifacts, executable instructions, or permanent reports.
 The helper's restoration guarantee covers handled failures only.
-After a forced stop or a Ctrl-C during application, the journal stays behind: point the user to `specify project recover`.
+After a forced stop or a Ctrl-C during application, the journal stays behind.
+For a repository destination, point the user to `specify project recover` in the destination repository.
+For a raw `set` destination, give the user these manual steps:
+
+1. Make sure that the process named by `pid` in `.merge-specs.lock` and `journal.json` no longer runs.
+2. Read the `operations` in `journal.json` in reverse order. Skip each row whose `state` is not `attempting` or `completed`.
+3. For a `write` row, skip the row when `path` already holds the saved `original` bytes, or is absent and the row has no `original`.
+4. Otherwise compare the file at `path` with the row's `written` copy. If they differ, stop and keep both: another writer changed the file.
+5. For a `write` row with `original`, copy that saved original back to `path`. Restore `original_mode` and `original_mtime_ns`.
+6. For a `write` row without `original`, delete the file at `path`.
+7. For a `create_directory` row, delete the directory at `path` only when it is empty.
+8. Delete the recovery folder and `.merge-specs.lock`.
 
 **Complete only when:**
 

@@ -53,44 +53,6 @@ class _MergeSpecsCommand(TyperCommand):
             raise
 
 
-def _validate_selectors(selection: dict, *, replay: bool = False) -> None:
-    if not isinstance(selection, dict) or set(selection) - _SELECTORS:
-        raise ValueError("Selections must contain only supported selector fields.")
-    for key, value in selection.items():
-        if value is not None and (not isinstance(value, str) or not value.strip()):
-            raise ValueError(f"The {key} selector must contain a nonempty string.")
-    source_kind = selection.get("source_kind")
-    destination_kind = selection.get("destination_kind")
-    if source_kind is not None and source_kind not in ("repository", "set", "branch"):
-        raise ValueError("Source kind must be repository, set, or branch.")
-    if destination_kind is not None and destination_kind not in ("repository", "set"):
-        raise ValueError("Destination kind must be repository or set.")
-    numbering = selection.get("destination_numbering")
-    if numbering is not None and numbering not in ("sequential", "timestamp"):
-        raise ValueError("Destination numbering must be sequential or timestamp.")
-    if selection.get("source") is None and (source_kind is not None or selection.get("source_branch") is not None):
-        raise ValueError("Source kind and branch selectors require an explicit source path.")
-    if source_kind == "branch" and selection.get("source_branch") is None:
-        raise ValueError("A branch source requires an explicit source branch.")
-    if selection.get("source_branch") is not None and source_kind != "branch":
-        raise ValueError("A source branch requires source kind branch.")
-    if destination_kind == "set" and selection.get("destination") is None:
-        raise ValueError("A raw destination set requires an explicit destination path.")
-    raw_context = ("destination_numbering", "destination_principles", "destination_context")
-    if destination_kind != "set" and any(selection.get(key) is not None for key in raw_context):
-        raise ValueError("Destination numbering, principles, and context flags require destination kind set.")
-    if replay:
-        from pathlib import Path
-
-        if selection.get("destination") is None or destination_kind is None:
-            raise ValueError("Replay selections require the resolved destination path and kind.")
-        if selection.get("source") is not None and source_kind is None:
-            raise ValueError("Replay selections require an explicit source kind.")
-        for key in ("source", "destination", "destination_principles", "destination_context"):
-            if selection.get(key) is not None and not Path(selection[key]).is_absolute():
-                raise ValueError(f"Replay selections require an absolute {key} path.")
-
-
 def _json_object(pairs: list[tuple[str, object]]) -> dict:
     result = {}
     for key, value in pairs:
@@ -121,7 +83,6 @@ def _read_payload(apply: bool) -> dict:
     for key in ("snapshot_digest", "proposal_digest") if apply else ("snapshot_digest",):
         if not isinstance(payload[key], str) or not _DIGEST.fullmatch(payload[key]):
             raise ValueError(f"The {key} field must contain the original SHA-256 digest.")
-    _validate_selectors(payload["selections"], replay=True)
     if not isinstance(payload["relationship"], dict):
         raise ValueError("The relationship decision must contain an object.")
     for key in ("correspondences", "artifact_decisions", "dependent_features"):
@@ -211,27 +172,18 @@ def register(app: typer.Typer) -> None:
             from .spec_merge import inspect_spec_sets
 
             if proposal is None and not apply:
-                _validate_selectors(selection)
                 document = inspect_spec_sets(selection).to_json()
                 mode = "inspection"
             else:
                 from .spec_merge import apply_spec_merge, prepare_spec_merge
 
                 payload = _read_payload(apply)
-                inspection = inspect_spec_sets(payload["selections"])
-                if inspection.to_json()["snapshot_digest"] != payload["snapshot_digest"]:
-                    raise ValueError("The original snapshot is stale. Inspect the selected sets and prepare a new proposal.")
-                preview = prepare_spec_merge(inspection, payload)
+                preview = prepare_spec_merge(inspect_spec_sets(payload["selections"]), payload)
                 document = preview.to_json()
-                if document["snapshot_digest"] != payload["snapshot_digest"]:
-                    raise ValueError("The prepared snapshot differs from the original snapshot. Prepare a new proposal.")
                 mode = "preview"
                 if apply:
-                    if document["proposal_digest"] != payload["proposal_digest"]:
-                        raise ValueError("The proposal differs from the approved proposal. Review and approve a new preview.")
-                    if not document.get("conflicts"):
-                        document = apply_spec_merge(preview).to_json()
-                        mode = "application"
+                    document = apply_spec_merge(preview).to_json()
+                    mode = "application"
         except (OSError, ValueError, TypeError, RecursionError) as error:
             _refuse(error, json_output)
         if json_output:

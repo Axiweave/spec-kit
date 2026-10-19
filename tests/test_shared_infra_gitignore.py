@@ -58,10 +58,15 @@ def test_git_ignores_the_intended_paths(tmp_path: Path) -> None:
     ext_local = project / ".specify" / "extensions" / "git" / "local-config.yml"
     ext_local.parent.mkdir(parents=True, exist_ok=True)
     ext_local.write_text("x\n", encoding="utf-8")
+    (project / ".specify" / "naming-recovery-x1").mkdir()
+    (project / ".specify" / "naming-recovery-x1" / "manifest.json").write_text("{}", encoding="utf-8")
+    (project / ".specify" / "naming-migration.lock").write_text("{}", encoding="utf-8")
 
     for rel in (
         ".specify/feature.json",
         ".specify/extensions/git/local-config.yml",
+        ".specify/naming-recovery-x1/manifest.json",
+        ".specify/naming-migration.lock",
     ):
         result = subprocess.run(
             ["git", "check-ignore", rel],

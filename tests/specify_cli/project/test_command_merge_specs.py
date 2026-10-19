@@ -147,7 +147,8 @@ def test_inspect_and_proposal_are_read_only_then_replay_copies_exact_bytes(cli, 
     assert (destination / "002-new/spec.md").read_bytes() == SOURCE_TEXT
     assert (destination / "002-new/custom.bin").read_bytes() == b"\x00\xff\xfeopaque"
     assert (destination / "002-new/spec.md").stat().st_mtime_ns == 0
-    assert stat.S_IMODE((destination / "002-new/spec.md").stat().st_mode) == 0o640
+    if os.name == "posix":  # Windows keeps only the read-only bit
+        assert stat.S_IMODE((destination / "002-new/spec.md").stat().st_mode) == 0o640
     assert not any(path.name.startswith(".merge-specs-recovery-") for path in destination.iterdir())
     assert not (destination / ".merge-specs.lock").exists()
 
@@ -160,8 +161,23 @@ def test_authored_base64_replacement_and_zero_metadata_replay_exactly(cli, world
     assert document(result)["data_outcome"] == "applied"
     artifact = Path(world["destination"]) / "001-existing/spec.md"
     assert artifact.read_bytes() == COMBINED_TEXT
-    assert stat.S_IMODE(artifact.stat().st_mode) == 0o640
+    if os.name == "posix":  # Windows keeps only the read-only bit
+        assert stat.S_IMODE(artifact.stat().st_mode) == 0o640
     assert artifact.stat().st_mtime_ns == 0
+
+
+def test_apply_of_a_proposal_with_open_conflicts_reports_a_refused_application(cli, world):
+    decisions = proposal(cli, world, revision=True)
+    decisions["artifact_decisions"] = []  # the differing spec.md stays undecided
+    reviewed = cli("--proposal", "-", "--json", input=json.dumps(decisions))
+    replay = document(reviewed)["replay_inputs"]
+    before = state(Path(world["destination"]))
+    result = apply(cli, replay)
+    outcome = document(result)
+    assert result.exit_code == 1
+    assert (outcome["transfer"], outcome["data_outcome"]) == ("refused", "unchanged")
+    assert outcome["conflicts"]
+    assert state(Path(world["destination"])) == before
 
 
 def test_collision_allocation_becomes_an_explicit_replay_name(cli, world):

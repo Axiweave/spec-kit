@@ -31,6 +31,10 @@ feature.json
 
 # Per-machine extension config overrides.
 extensions/*/local-config.yml
+
+# Recovery data and the lock of a naming migration that did not finish.
+naming-recovery-*/
+naming-migration.lock
 """
 
 # Matches a SHA-256 digest in its normalized form: exactly 64 hexadecimal

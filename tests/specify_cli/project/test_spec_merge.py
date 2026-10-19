@@ -4,12 +4,14 @@ from __future__ import annotations
 import base64
 import dataclasses
 import errno
+import hashlib
 import json
 import os
 import random
 import stat
+from datetime import datetime, timezone
 from pathlib import Path
-from uuid import uuid4
+from uuid import uuid1, uuid4
 
 import pytest
 
@@ -129,6 +131,43 @@ def test_real_external_locators_distinguish_separate_and_shared_sets(merge, isol
     assert separate.transfer_needed is True
     assert separate.relationship["relationship"] == "unconfirmed"
     assert separate.source.spec_root != separate.destination.spec_root
+
+
+def test_two_workspaces_with_one_project_id_are_the_same_project(merge, isolated):
+    identity = str(uuid4())
+    source = external(isolated, "source-repo", isolated / "global/one", identity)
+    destination = external(isolated, "destination-repo", isolated / "global/two", identity)
+    inspection = merge.inspect_spec_sets({"source": str(source), "destination": str(destination)})
+    assert inspection.transfer_needed is True
+    assert inspection.source.project_id == inspection.destination.project_id == identity
+    assert inspection.relationship["relationship"] == "same_project"
+    assert inspection.relationship["evidence"] == "matching_project_id"
+
+
+def test_a_repository_without_specs_is_an_empty_destination(merge, isolated):
+    source, repository = isolated / "source", isolated / "repository"
+    put(source, "001-feature/spec.md", "# Source\n")
+    (repository / ".specify").mkdir(parents=True)
+    selection = {"source": str(source), "source_kind": "set", "destination": str(repository)}
+    inspection = merge.inspect_spec_sets(selection)
+    assert not inspection.destination.files and not inspection.destination.features
+    assert not (repository / "specs").exists()
+    preview = merge.prepare_spec_merge(inspection, approved(inspection, [{"source_feature": "001-feature", "relation": "independent"}]))
+
+    put(source, "001-feature/spec.md", "# Changed\n")
+    assert merge.apply_spec_merge(preview).transfer == "refused"
+    assert not (repository / "specs").exists()  # a refused transfer creates no root
+
+    inspection = merge.inspect_spec_sets(selection)
+    preview = merge.prepare_spec_merge(inspection, approved(inspection, [{"source_feature": "001-feature", "relation": "independent"}]))
+    assert merge.apply_spec_merge(preview).data_outcome == "applied"
+    assert (repository / "specs/001-feature/spec.md").read_bytes() == b"# Changed\n"
+    assert not [path for path in (repository / "specs").iterdir() if path.name.startswith(".merge-specs")]
+
+
+def test_a_missing_raw_destination_set_still_refuses(merge, isolated):
+    with pytest.raises(ValueError):
+        merge.inspect_spec_sets(raw(None, isolated / "absent"))
 
 
 def test_missing_external_mapping_refuses_without_local_fallback(merge, isolated):
@@ -304,7 +343,7 @@ def git(repository: Path, *arguments: str):
         ["git", "-C", str(repository), *arguments],
         check=True,
         capture_output=True,
-        env={**os.environ, "GIT_OPTIONAL_LOCKS": "0"},
+        env={**os.environ, "GIT_OPTIONAL_LOCKS": "0", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"},
     ).stdout
 
 
@@ -937,6 +976,13 @@ def test_changed_operation_and_compact_replay_payload_bindings_refuse(merge, iso
     assert state(isolated) == before
 
 
+def test_the_recovery_directory_name_needs_a_version_4_uuid(merge):
+    resources = {"lock": ".merge-specs.lock", "recovery_directory": ".merge-specs-recovery-" + uuid4().hex}
+    assert merge._resource_paths(resources, True) == resources
+    with pytest.raises(ValueError):
+        merge._resource_paths({**resources, "recovery_directory": ".merge-specs-recovery-" + uuid1().hex}, True)
+
+
 def test_under_lock_revalidation_refuses_new_drift_and_claims_no_originals(merge, isolated, monkeypatch):
     source, destination = isolated / "source", isolated / "destination"
     changed_file = put(source, "001-feature/spec.md", "# Source\n")
@@ -1499,7 +1545,7 @@ def test_current_marker_bytes_and_metadata_restore_after_failed_update(merge, is
     assert (stat.S_IMODE(marker.stat().st_mode), marker.stat().st_mtime_ns) == (marker_mode, 0)
 
 
-def test_shared_standalone_and_empty_sets_need_no_resources_and_state_the_review_scope(merge, isolated):
+def test_shared_standalone_and_empty_sets_need_no_resources(merge, isolated):
     destination = isolated / "destination"
     put(destination, "001-feature/spec.md", "# Feature\n")
     put(destination, "002-dependent/spec.md", "# Dependent\n")
@@ -1510,7 +1556,6 @@ def test_shared_standalone_and_empty_sets_need_no_resources_and_state_the_review
     shared = merge.prepare_spec_merge(merge.inspect_spec_sets(raw(alias, destination, destination_principles=str(principles))), {})
     assert not shared.conflicts
     assert not shared.operations
-    assert shared.to_json()["review_scope"] == ["001-feature", "002-dependent"]
     assert shared.to_json()["review"] == "not_performed"
     assert merge.apply_spec_merge(shared).transfer == "not_needed"
     standalone = merge.prepare_spec_merge(merge.inspect_spec_sets(raw(None, destination, destination_principles=str(principles))),
@@ -1838,8 +1883,23 @@ def test_recorded_branch_transfer_copies_supported_metadata_without_git_writes(m
     assert target.read_bytes() == b"# Recorded specification\n"
     assert stat.S_IMODE(target.stat().st_mode) == native_mode
     assert stat.S_IMODE(marker.stat().st_mode) == native_mode
-    assert target.stat().st_mtime_ns == marker.stat().st_mtime_ns == 0
+    committed = int(git(repository, "log", "-1", "--format=%ct", "main")) * 1_000_000_000
+    assert target.stat().st_mtime_ns == marker.stat().st_mtime_ns == committed > 0
     assert state(repository) == source_before
+
+
+def test_a_branch_import_takes_its_timestamp_name_from_the_commit_time(merge, isolated):
+    repository = recorded_source(isolated)
+    destination = isolated / "destination"
+    put(destination, "001-feature/spec.md", "# Destination\n")
+    committed = datetime.fromtimestamp(int(git(repository, "log", "-1", "--format=%ct", "main")), timezone.utc)
+    inspected = merge.inspect_spec_sets({
+        **raw(repository, destination, destination_numbering="timestamp"), "source_kind": "branch", "source_branch": "main",
+    })
+    preview = merge.prepare_spec_merge(inspected, approved(inspected, [{
+        "source_feature": "001-feature", "relation": "independent",
+    }]))
+    assert [row["destination_feature"] for row in preview.correspondences] == [f"{committed:%Y%m%d-%H%M%S}-feature"]
 
 
 @pytest.mark.parametrize("fail_after_replace", [False, True])
@@ -2311,7 +2371,7 @@ def test_lock_and_journal_name_the_owner_and_cleanup_reads_the_lock_as_json(merg
     real_replace = os.replace
 
     def replace(source_path, destination_path):
-        if not seen:
+        if not seen and Path(destination_path).name != "journal.json":  # the first content write
             seen["lock"] = json.loads(lock.read_bytes())
             seen["journal"] = json.loads(next(destination.glob(".merge-specs-recovery-*/journal.json")).read_text())
             if rewrite is not None:
@@ -2331,6 +2391,31 @@ def test_lock_and_journal_name_the_owner_and_cleanup_reads_the_lock_as_json(merg
         assert lock.read_bytes() == rewrite
         assert [row["operation"] for row in result["remaining_operations"]] == ["inspect-lock"]
 
+
+def test_the_journal_names_its_owner_before_any_other_recovery_data(merge, isolated, monkeypatch):
+    source, destination = isolated / "source", isolated / "destination"
+    put(source, "001-feature/spec.md", "# Source\n")
+    destination.mkdir()
+    preview = preview_for(merge, source, destination, [{"source_feature": "001-feature", "relation": "independent"}])
+    recovery = destination / preview.temporary_resources["recovery_directory"]
+    real_mkdir, seen = Path.mkdir, {}
+
+    def mkdir(path, *args, **kwargs):
+        if path == recovery / "originals":  # the first recovery data after the folder itself
+            seen["entries"] = sorted(entry.name for entry in recovery.iterdir())
+            seen["journal"] = json.loads((recovery / "journal.json").read_text())
+        return real_mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", mkdir)
+    assert merge.apply_spec_merge(preview).data_outcome == "applied"
+    assert seen["entries"] == ["journal.json"]
+    assert seen["journal"]["pid"] == os.getpid() and seen["journal"]["operations"] == []
+
+
+def test_a_binary_difference_reports_sizes_without_content_digests(merge):
+    difference = merge._difference(b"\0old", b"\0newer", "001-feature/blob.bin")
+    assert "4" in difference and "6" in difference
+    assert hashlib.sha256(b"\0newer").hexdigest() not in difference
 
 
 def test_recovery_replacement_after_rollback_staging_preserves_foreign_payloads(merge, isolated, monkeypatch):

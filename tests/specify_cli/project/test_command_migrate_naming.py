@@ -1418,6 +1418,7 @@ def test_human_lock_release_failure_reports_the_committed_work(project, monkeypa
         for notice in reviewed["caller_notices"]:
             assert notice["message"] in result.stdout, notice
         assert "timestamp" in result.stdout and str(lock) in result.stderr
+        assert "specify project recover --apply" in result.stderr
         assert_no_content(result)
         assert [recovery.resolve()] == [path.resolve() for path in (project.root / ".specify").glob("naming-recovery-*")]
     finally:

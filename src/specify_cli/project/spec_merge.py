@@ -406,6 +406,9 @@ def _branch_set(selection: Mapping) -> SpecSet:
     commit = _git(repository, "rev-parse", "--verify", "--end-of-options", ref + "^{commit}").decode().strip()
     normalized = _git(repository, "rev-parse", "--symbolic-full-name", "--verify", "--end-of-options", ref).decode().strip()
     normalized = normalized or commit
+    header = _git(repository, "cat-file", "commit", commit).split(b"\n\n", 1)[0]
+    committer = next(line for line in header.split(b"\n") if line.startswith(b"committer "))
+    mtime_ns = int(committer.rsplit(b" ", 2)[1]) * 1_000_000_000  # branch entries carry the commit's committer time
     entries = _git(repository, "ls-tree", "-r", "-z", "--full-tree", commit, "--", "specs")
     objects, pending = [], set()
     for entry in entries.split(b"\0"):
@@ -437,7 +440,7 @@ def _branch_set(selection: Mapping) -> SpecSet:
             length = int(length)
             content = raw[end + 1:end + 1 + length]
             position = end + length + 2
-            files[relative] = FileSnapshot(relative, content, hashlib.sha256(content).hexdigest(), mode, length, 0, "readable")
+            files[relative] = FileSnapshot(relative, content, hashlib.sha256(content).hexdigest(), mode, length, mtime_ns, "readable")
             if Path(relative).name == ".merge-specs.json":
                 markers[relative] = files[relative]
             parts = relative.split("/")
@@ -447,7 +450,7 @@ def _branch_set(selection: Mapping) -> SpecSet:
                 if index < len(parts) - 1:
                     memberships.setdefault("/".join(parts[:index + 1]), {})
     directories = {
-        path: DirectorySnapshot(path, 0o755, 0, 0, tuple(sorted(children.items())))
+        path: DirectorySnapshot(path, 0o755, 0, mtime_ns, tuple(sorted(children.items())))
         for path, children in sorted(memberships.items())
     }
     reservations = {"sequential": set(), "timestamp": set()}
@@ -538,6 +541,8 @@ def _resolve(selection: Mapping, role: str) -> SpecSet:
         if locator.availability != "missing":
             capture(checkout_record_path(repository), repository)
             capture(workspace / ".specify/workspace.json", workspace)
+        if locator.availability == "readable":
+            identity = _object(locator).get("project_id")
         root = _path(workspace / "specs", "specification root")
         if role == "destination":
             options = capture(workspace / ".specify/init-options.json", workspace)
@@ -570,11 +575,18 @@ def _resolve(selection: Mapping, role: str) -> SpecSet:
         conditions.append(Availability("principles", "missing", "governance"))
     try:
         info = root.lstat()
+    except FileNotFoundError:
+        if kind != "repository" or role != "destination":
+            raise ValueError(f"Specification set is unavailable: {root}") from None
+        info = None  # A project without specs/ yet is an empty set. Application creates the root.
     except OSError as exc:
         raise ValueError(f"Specification set is unavailable: {root}") from exc
-    if not stat.S_ISDIR(info.st_mode):
+    if info is not None and not stat.S_ISDIR(info.st_mode):
         raise ValueError(f"Unsafe specification root. Select a directory: {root}")
-    files, directories, features, names, prefixes, availability, markers, pending = _inventory(root)
+    files, directories, features, names, prefixes, availability, markers, pending = _inventory(root) if info else (
+        MappingProxyType({}), MappingProxyType({}), (), MappingProxyType({}),
+        MappingProxyType({"sequential": (), "timestamp": ()}), (), MappingProxyType({}), (),
+    )
     # Make sure public resolution and captured metadata describe the same inputs.
     for entry in context:
         path = Path(entry.path)
@@ -584,7 +596,7 @@ def _resolve(selection: Mapping, role: str) -> SpecSet:
     return SpecSet(
         kind, repository, workspace, root, identity, numbering, principles, code,
         tuple(context), files, directories, features, names, prefixes,
-        tuple([*availability, *conditions]), markers, pending, (info.st_dev, info.st_ino),
+        tuple([*availability, *conditions]), markers, pending, (info.st_dev, info.st_ino) if info else None,
     )
 
 
@@ -760,11 +772,7 @@ def _difference(before: bytes | None, after: bytes | None, path: str) -> str:
             raise UnicodeError
         original, replacement = before.decode("utf-8"), after.decode("utf-8")
     except UnicodeError:
-        return (
-            f"Binary difference: {path}\n"
-            f"Before: {len(before)} bytes, SHA-256 {hashlib.sha256(before).hexdigest()}\n"
-            f"After: {len(after)} bytes, SHA-256 {hashlib.sha256(after).hexdigest()}\n"
-        )
+        return f"Binary difference: {path}\nBefore: {len(before)} bytes\nAfter: {len(after)} bytes\n"
     rows = difflib.unified_diff(original.splitlines(keepends=True), replacement.splitlines(keepends=True),
                                 fromfile=f"destination/{path}", tofile=f"proposed/{path}")
     return "".join(row if row.endswith(("\n", "\r")) else row + "\n\\ No newline at end of file\n" for row in rows)
@@ -824,9 +832,6 @@ class SpecMergePreview:
             "temporary_resources": _json(self.temporary_resources), "notices": _json(self.notices),
             "affected_features": list(self.affected_features), "dependent_features": list(self.dependent_features),
             "review": self.inspection.to_json()["review"], "planning": self.inspection.to_json()["planning"],
-            "review_scope": sorted(set(self.affected_features) | set(self.dependent_features)) if self.operations else (
-                list(self.dependent_features) if self.dependent_features else [feature.path for feature in self.inspection.destination.features]
-            ),
             "proposal_digest": self.proposal_digest, "replay_inputs": _json(self.replay_inputs),
         }
 
@@ -1465,6 +1470,14 @@ def prepare_spec_merge(inspection: SpecInspection, decisions: Mapping[str, Any])
         artifacts.append(_issue("artifact", path, "Write the approved artifact bytes.", classification=classification,
                                 resolution=resolution, difference=difference))
 
+    def preserve(preserved: str, marker: FileSnapshot, resolution: str) -> None:
+        add_directory(preserved.rpartition("/")[0] or ".")
+        mode, mtime = _metadata({}, marker)
+        operations[preserved] = MergeOperation("write", preserved, marker.content, mode, mtime, resolution,
+                                              difference=_difference(None, marker.content, preserved))
+        artifacts.append(_issue("artifact", preserved, "Preserve reserved-name custom content.", classification="source_only",
+                                resolution=resolution, difference=operations[preserved].difference))
+
     transferred = set()
     for row in active if inspection.transfer_needed else []:
         feature, target = row["source_feature"], row.get("destination_feature")
@@ -1519,12 +1532,7 @@ def prepare_spec_merge(inspection: SpecInspection, decisions: Mapping[str, Any])
                 preserved = f"{target}/{relative}"
                 if preserved in destination.files or preserved in destination.directories or preserved in operations:
                     raise ValueError(f"The approved custom-marker preservation path is occupied: {preserved}")
-                add_directory(preserved.rpartition("/")[0])
-                mode, mtime = _metadata({}, selected_marker)
-                operations[preserved] = MergeOperation("write", preserved, selected_marker.content, mode, mtime,
-                                                      label, difference=_difference(None, selected_marker.content, preserved))
-                artifacts.append(_issue("artifact", preserved, "Preserve reserved-name custom content.", classification="source_only",
-                                        resolution=label, difference=operations[preserved].difference))
+                preserve(preserved, selected_marker, label)
                 transferred.add(target)
 
     if inspection.transfer_needed:
@@ -1548,13 +1556,7 @@ def prepare_spec_merge(inspection: SpecInspection, decisions: Mapping[str, Any])
                     not source_root_marker and (owner is None or not preserved.startswith(owner + "/"))
                 ):
                     raise ValueError("Custom marker preservation must remain in its containing feature or approved source-root scope.")
-                add_directory(preserved.rpartition("/")[0] or ".")
-                resolution = "preserve_source_marker" if source_marker is not None else "preserve_destination_marker"
-                mode, mtime = _metadata({}, marker)
-                operations[preserved] = MergeOperation("write", preserved, marker.content, mode, mtime, resolution,
-                                                      difference=_difference(None, marker.content, preserved))
-                artifacts.append(_issue("artifact", preserved, "Preserve reserved-name custom content.", classification="source_only",
-                                        resolution=resolution, difference=operations[preserved].difference))
+                preserve(preserved, marker, "preserve_source_marker" if source_marker is not None else "preserve_destination_marker")
                 consumed.add(path)
                 if source_root_marker:
                     continue
@@ -1590,6 +1592,10 @@ def prepare_spec_merge(inspection: SpecInspection, decisions: Mapping[str, Any])
             content = (json.dumps(marker, sort_keys=True, indent=2) + "\n").encode("utf-8")
             original = destination.markers.get(marker_path)
             mode, mtime = _metadata({}, original)
+            if original is None:  # A new marker takes the newest time of its feature's content.
+                times = [operation.mtime_ns for path, operation in operations.items() if path.startswith(feature + "/")]
+                times += [value.mtime_ns for value in _feature_files(destination, feature).values() if value.mtime_ns is not None]
+                mtime = max(times, default=mtime)
             add_directory(feature)
             operations[marker_path] = MergeOperation("write", marker_path, content, mode, mtime, "delivery_state",
                                                    difference=_difference(original.content if original else None, content, marker_path))
@@ -1709,10 +1715,12 @@ def _check_recovery(recovery: Path, identity: tuple[int, int] | None) -> None:
 
 
 def _journal_write(recovery: Path, journal: dict, identity: tuple[int, int] | None) -> None:
-    # This file belongs only to the disclosed recovery directory, not to a feature tree.
+    """Replace journal.json in one step, so a forced stop never leaves a partial journal."""
     _check_recovery(recovery, identity)
-    _ordinary(recovery / "journal.json", recovery.parent)
-    (recovery / "journal.json").write_text(json.dumps(journal, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary = recovery / "journal.json.tmp"
+    _ordinary(temporary, recovery.parent)
+    temporary.write_text(json.dumps(journal, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(temporary, recovery / "journal.json")
 
 
 def _payload_write(path: Path, content: bytes, mode: int, mtime_ns: int, root: Path,
@@ -1827,10 +1835,10 @@ def _rollback_merge(preview: SpecMergePreview, recovery: Path, journal: dict, cr
         original = preview.inspection.destination.files.get(operation.path)
         restore = {
             "operation": "restore-file" if original is not None else "remove-created-file",
-            "path": operation.path, "expected_fingerprint": hashlib.sha256(operation.content).hexdigest(),
+            "path": operation.path, "expected": row["written"],
         }
         if original is not None:
-            restore.update(original=f"originals/{row['index']:06d}.bin", mode=original.mode, mtime_ns=original.mtime_ns)
+            restore.update(original=row["original"], mode=original.mode, mtime_ns=original.mtime_ns)
         try:
             _merge_root(preview)
             if _checked_file(path, original, root):
@@ -1839,7 +1847,7 @@ def _rollback_merge(preview: SpecMergePreview, recovery: Path, journal: dict, cr
             if row.get("relaxed_original_mode") and original is not None:
                 relaxed = dataclasses.replace(original, mode=0o666)
                 if _checked_file(path, relaxed, root):
-                    restore["expected_fingerprint"] = original.digest
+                    restore["expected"] = row["original"]
                     path.chmod(original.mode)
                     if not _checked_file(path, original, root):
                         raise OSError("The restored artifact metadata differs from its saved original.")
@@ -1847,8 +1855,6 @@ def _rollback_merge(preview: SpecMergePreview, recovery: Path, journal: dict, cr
                     continue
             if not _checked_file(path, operation, root, descriptors.get(operation.path)):
                 raise ValueError("An unexpected writer changed this artifact. Preserve current content and the saved original before recovery.")
-            if original is not None:
-                _check_recovery(recovery, recovery_identity)
             if os.name == "nt" and not operation.mode & 0o200:
                 path.chmod(0o666)
             if original is None:
@@ -1861,7 +1867,6 @@ def _rollback_merge(preview: SpecMergePreview, recovery: Path, journal: dict, cr
                     if os.name == "nt":
                         staged.chmod(0o666)
                     staged.unlink()
-                _check_recovery(recovery, recovery_identity)
                 original_path = recovery / restore["original"]
                 _ordinary(original_path, root)
                 saved = original_path.read_bytes()
@@ -1870,7 +1875,7 @@ def _rollback_merge(preview: SpecMergePreview, recovery: Path, journal: dict, cr
                 descriptor = _payload_write(staged, saved, original.mode, original.mtime_ns, root,
                                             recovery_identity, retain=not original.mode & 0o400)
                 try:
-                    _check_recovery(recovery, recovery_identity)
+                    _check_recovery(recovery, recovery_identity)  # a replaced folder may hold a foreign staged file
                     os.replace(staged, path)
                     if not _checked_file(path, original, root, descriptor):
                         raise OSError("The restored artifact does not match its saved original.")
@@ -1930,12 +1935,24 @@ def apply_spec_merge(preview: SpecMergePreview) -> MergeResult:
         transfer = "not_requested" if preview.inspection.source is None else "not_needed"
         return MergeResult(transfer, "unchanged")
     root = preview.inspection.destination.spec_root
+    root_created = preview.inspection.destination.filesystem_identity is None
+    if root_created:  # The reviewed repository had no specs/ yet. Apply into a new empty root.
+        try:
+            root.mkdir()
+            info = root.lstat()
+        except OSError as exc:
+            return MergeResult("refused", "unchanged", conflicts=(_freeze(_issue("application", ".", str(exc))),))
+        destination = dataclasses.replace(
+            preview.inspection.destination, filesystem_identity=(info.st_dev, info.st_ino),
+            directories=MappingProxyType({".": DirectorySnapshot(".", stat.S_IMODE(info.st_mode), info.st_size, info.st_mtime_ns, ())}),
+        )
+        preview = dataclasses.replace(preview, inspection=dataclasses.replace(preview.inspection, destination=destination))
     lock, recovery = (root / preview.temporary_resources[name] for name in ("lock", "recovery_directory"))
     original_root = preview.inspection.destination.directories["."]
     lock_owned, recovery_owned = False, False
     lock_identity = None
     recovery_identity = None
-    known = {"originals", "staged", "journal.json"}
+    known = {"originals", "staged", "written", "journal.json", "journal.json.tmp"}
     created, changed = {}, []
     descriptors = {}
     journal = {
@@ -1965,12 +1982,12 @@ def apply_spec_merge(preview: SpecMergePreview) -> MergeResult:
         recovery_owned = True
         info = recovery.lstat()
         recovery_identity = (info.st_dev, info.st_ino)
+        _journal_write(recovery, journal, recovery_identity)  # names the owner before any other recovery data
         resource_state = root.lstat()
         _under_lock_inspection(preview, resource_state)
-        _check_recovery(recovery, recovery_identity)
-        (recovery / "originals").mkdir(mode=0o700)
-        _check_recovery(recovery, recovery_identity)
-        (recovery / "staged").mkdir(mode=0o700)
+        for folder in ("originals", "staged", "written"):
+            _check_recovery(recovery, recovery_identity)
+            (recovery / folder).mkdir(mode=0o700)
         for index, operation in enumerate(preview.operations):
             _merge_root(preview)
             original = preview.inspection.destination.files.get(operation.path)
@@ -1980,16 +1997,16 @@ def apply_spec_merge(preview: SpecMergePreview) -> MergeResult:
             }
             journal["operations"].append(row)
             if operation.kind == "write":
-                row["fingerprint"] = hashlib.sha256(operation.content).hexdigest()
-                row["staged"] = f"staged/{index:06d}.bin"
-                known.add(row["staged"])
+                row["staged"], row["written"] = f"staged/{index:06d}.bin", f"written/{index:06d}.bin"
+                known.update((row["staged"], row["written"]))
                 descriptor = _payload_write(recovery / row["staged"], operation.content, operation.mode, operation.mtime_ns, root,
                                             recovery_identity, retain=not operation.mode & 0o400)
                 if descriptor is not None:
                     descriptors[operation.path] = descriptor
+                # recover compares the target with this copy. The staged file moves into place.
+                _payload_write(recovery / row["written"], operation.content, 0o600, operation.mtime_ns, root, recovery_identity)
                 if original is not None:
-                    row.update(original=f"originals/{index:06d}.bin", original_fingerprint=original.digest,
-                               original_mode=original.mode, original_mtime_ns=original.mtime_ns)
+                    row.update(original=f"originals/{index:06d}.bin", original_mode=original.mode, original_mtime_ns=original.mtime_ns)
                     known.add(row["original"])
                     _payload_write(recovery / row["original"], original.content, 0o600, original.mtime_ns, root, recovery_identity)
         _journal_write(recovery, journal, recovery_identity)
@@ -2073,20 +2090,19 @@ def apply_spec_merge(preview: SpecMergePreview) -> MergeResult:
         elif recovery_owned and result_known and result.data_outcome == "recovery_required":
             try:
                 _check_recovery(recovery, recovery_identity)
-                needed = {action.get("original") for action in remaining if action.get("original")}
+                needed = {action.get(key) for action in remaining for key in ("original", "expected")}
                 for row in journal["operations"]:
-                    for field in ("original", "staged"):
+                    for field in ("original", "staged", "written"):
                         relative = row.get(field)
                         if relative and relative not in needed:
                             with contextlib.suppress(OSError, ValueError):
                                 _merge_root(preview)
-                                _check_recovery(recovery, recovery_identity)
                                 _ordinary(recovery / relative, root)
                                 (recovery / relative).unlink()
-                _check_recovery(recovery, recovery_identity)
             except (OSError, ValueError) as exc:
                 for action in remaining:
                     action.pop("original", None)
+                    action.pop("expected", None)
                 result = dataclasses.replace(result, cleanup_required=True, originals=(), remaining_operations=_freeze(remaining))
                 if not any(action["operation"] == "inspect-recovery-directory" for action in remaining):
                     cleanup.append({"operation": "inspect-recovery-directory", "path": str(recovery), "message": str(exc)})
@@ -2130,4 +2146,7 @@ def apply_spec_merge(preview: SpecMergePreview) -> MergeResult:
             journal["data_outcome"] = result.data_outcome  # recover never reverses an applied merge
             with contextlib.suppress(OSError, ValueError):
                 _journal_write(recovery, journal, recovery_identity)
+    if root_created and result.data_outcome in ("unchanged", "completely_restored"):
+        with contextlib.suppress(OSError):
+            root.rmdir()  # Only an empty root goes. A kept resource keeps it.
     return result

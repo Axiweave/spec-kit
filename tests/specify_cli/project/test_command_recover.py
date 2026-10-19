@@ -199,15 +199,43 @@ def test_an_unknown_owner_stays_byte_identical(project, name, content):
     assert tree(project) == before
 
 
-def test_a_move_recovery_folder_is_report_only(project):
-    folder = put(project, ".specify-move-x/specs/001-a/spec.md", "# Original A\n").parents[2]
+@pytest.mark.parametrize(("name", "kind"), [(".specify-move-x", "move-recovery"), (".specify-convert-x", "convert-recovery")])
+def test_a_move_or_conversion_recovery_folder_is_report_only(project, name, kind):
+    folder = put(project, f"{name}/specs/001-a/spec.md", "# Original A\n").parents[2]
     before = tree(project)
 
     diagnosis = recover("--json")
     applied = recover("--apply")
 
     [row] = json.loads(diagnosis.stdout)["resources"]
-    assert (row["kind"], row["path"], row["owner"]) == ("move-recovery", str(folder), "unknown")
-    assert "delete the folder" in row["choices"][0]
+    assert (row["kind"], row["path"], row["owner"]) == (kind, str(folder), "unknown")
     assert applied.exit_code == 1 and f"Not changed: {folder}" in applied.stderr
     assert tree(project) == before
+
+
+@pytest.mark.parametrize("tamper", ["workspace", "backup", "merge-original"])
+def test_recovery_data_that_points_outside_its_project_is_refused(project, tmp_path, tamper):
+    outside = put(tmp_path, "outside.bin", "# Outside\n")
+    if tamper == "merge-original":
+        put(tmp_path / "source", "001-a/spec.md", "# A from the source\n")
+        stop_child(MERGE_STOP, tmp_path / "source", project / "specs")
+        [path] = (project / "specs").glob(".merge-specs-recovery-*/journal.json")
+        journal = json.loads(path.read_text())
+        next(row for row in journal["operations"] if row.get("original"))["original"] = str(outside)
+        path.write_text(json.dumps(journal))
+    else:
+        stop_child(RENAME_STOP, project)
+        [path] = (project / ".specify").glob("naming-recovery-*/manifest.json")
+        manifest = json.loads(path.read_text())
+        if tamper == "workspace":
+            manifest["workspace_root"] = str(tmp_path / "another-workspace")
+        else:
+            manifest["files"][0]["backup"] = str(outside)
+        path.write_text(json.dumps(manifest))
+    before = tree(project)
+
+    result = recover("--apply")
+
+    assert result.exit_code == 1
+    assert tree(project) == before
+    assert outside.read_bytes() == b"# Outside\n"

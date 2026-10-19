@@ -14,6 +14,7 @@ from uuid import UUID
 import typer
 
 from ..workspace import find_repository
+from . import naming
 
 TOKEN_VERSION = 1
 MAX_TOKEN = 16 * 1024
@@ -259,7 +260,7 @@ def _explain(doc: dict, listed: bool) -> None:
         for item in operations:
             _say(f"  {item['operation']}: {item['from']} -> {item['to']}", err=True)
             _say(f"    {item['message']}", err=True)
-        _say("Complete the remaining operations by hand. Keep any backup files until recovery is complete.", err=True)
+        _say("Run specify project recover --apply after every writer stops. Keep the recovery directory until then.", err=True)
 
 
 def _finish(doc: dict, json_output: bool, footer: tuple[str, ...] = ()) -> NoReturn:
@@ -294,14 +295,10 @@ def _confirmed() -> bool:
 
 
 def _prepare(target: str, clock: datetime | None = None):
-    from . import naming  # Loaded on use so that other commands start fast.
-
     return naming.prepare_naming_migration(find_repository(), target, clock=clock)
 
 
 def _apply(preview):
-    from . import naming
-
     return naming.apply_naming_migration(preview)
 
 

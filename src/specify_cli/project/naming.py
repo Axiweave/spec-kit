@@ -28,6 +28,7 @@ from types import MappingProxyType
 from typing import Any
 from urllib.parse import unquote
 
+from specify_cli.private_checkout import _worktrees
 from specify_cli.workspace import checkout_record_path, read_json, workspace_root_for
 
 _SCHEMES = ("sequential", "timestamp")
@@ -50,7 +51,8 @@ _EXTERNAL = (
 )
 _WORKTREE = (
     "Other worktrees that share this workspace keep their own native context files. "
-    "Update each one with the reported mappings."
+    "Update each one with the reported mappings. "
+    "A clone on another machine keeps its old active feature: run `specify project select <new path>` there."
 )
 _OPAQUE = (
     "This workflow value can still refer to an old feature path. "
@@ -341,10 +343,24 @@ def classify_feature_name(name: str) -> tuple[str, object, str]:
     return "custom", None, name
 
 
+def _feature_dirs(path: Path, rel: str = "specs"):
+    """Yield each feature directory under specs/. Read directories only and follow no symlink."""
+    children = list(os.scandir(path))
+    if rel != "specs" and any(c.name == "spec.md" and c.is_file(follow_symlinks=False) for c in children):
+        yield rel
+        return
+    for child in children:
+        if child.is_dir(follow_symlinks=False) and not (rel == "specs" and child.name.startswith(".merge-specs")):
+            yield from _feature_dirs(Path(child.path), f"{rel}/{child.name}")
+
+
 def duplicate_prefixes(workspace: Path) -> list[list[str]]:
     """Group the features that share a scheme and a prefix. Custom names and unusable prefixes form no group."""
+    root = workspace / "specs"
+    if root.is_symlink() or not root.is_dir():
+        return []
     groups: dict = {}
-    for rel in _survey(workspace).features:
+    for rel in _feature_dirs(root):
         try:
             scheme, key, _ = classify_feature_name(rel.rsplit("/", 1)[1])
         except ValueError:
@@ -538,27 +554,47 @@ def _plan_markdown(workspace: Path, found: _Survey, renames: dict, new_of: dict,
     return edits
 
 
-def _plan_selection(repo: Path, workspace: Path, project_id: str | None, renames: dict, read, conflicts: list) -> list:
-    """Follow an existing saved pointer into a renamed feature. Never create or select one."""
-    if project_id:
-        key, path = "active_feature", checkout_record_path(repo)
-    else:
-        key, path = "feature_directory", workspace / ".specify/feature.json"
+def _sibling_records(repo: Path) -> list[Path]:
+    """Return the checkout records of the other local worktrees of repo. Empty without Git."""
     try:
-        data, mode, mtime = read(path)
-        record = None if data is None else _load_object(data, path)
-    except ValueError:
-        conflicts.append(_conflict(
-            "invalid-selection", _display(path, workspace), "The saved feature selection cannot be read. Fix or remove it."
-        ))
+        trees = _worktrees(repo)
+    except (OSError, ValueError):
         return []
-    value = record.get(key) if record else None
-    usable = isinstance(value, str) and value and not (project_id and Path(value).is_absolute())
-    moved = _moved(value, workspace, renames) if usable else None
-    if moved is None:
-        return []
-    replacement = _replace_member(data.decode("utf-8"), key, moved).encode()
-    return [ReferenceEdit("selection", path, path, f"/{key}", data, replacement, mode, mtime)]
+    return [checkout_record_path(tree) for tree in trees if tree.resolve() != repo]
+
+
+def _plan_selection(repo: Path, workspace: Path, project_id: str | None, renames: dict, read, conflicts: list) -> list:
+    """Follow existing saved pointers into a renamed feature. Never create or select one.
+
+    With external storage, every local worktree on this workspace saves its own pointer. All of them move.
+    """
+    if project_id:
+        key, paths = "active_feature", [checkout_record_path(repo), *_sibling_records(repo)]
+    else:
+        key, paths = "feature_directory", [workspace / ".specify/feature.json"]
+    edits = []
+    for path in paths:
+        try:
+            data, mode, mtime = read(path)
+            record = None if data is None else _load_object(data, path)
+        except ValueError:
+            conflicts.append(_conflict(
+                "invalid-selection", _display(path, workspace), "The saved feature selection cannot be read. Fix or remove it."
+            ))
+            continue
+        if record is None:
+            continue
+        if path != paths[0]:
+            target = record.get("workspace")
+            if not isinstance(target, str) or Path(target).resolve() != workspace:
+                continue  # another worktree that uses another workspace
+        value = record.get(key)
+        usable = isinstance(value, str) and value and not (project_id and Path(value).is_absolute())
+        moved = _moved(value, workspace, renames) if usable else None
+        if moved is not None:
+            replacement = _replace_member(data.decode("utf-8"), key, moved).encode()
+            edits.append(ReferenceEdit("selection", path, path, f"/{key}", data, replacement, mode, mtime))
+    return edits
 
 
 def _strings(value, pointer: str = ""):
@@ -833,22 +869,24 @@ def _files(preview: MigrationPreview) -> dict[Path, ReferenceEdit]:
 
 
 def _backup(preview: MigrationPreview, files: dict, recovery: Path) -> dict[Path, Path]:
-    """Save the original bytes of every edited file and an operation manifest before any change."""
-    folder = recovery / "backups"
+    """Save the original and the new bytes of every edited file and an operation manifest before any change."""
+    folder, replacements = recovery / "backups", recovery / "new"
     folder.mkdir(mode=0o700)
+    replacements.mkdir(mode=0o700)
     (recovery / "done").mkdir(mode=0o700)
     backups, listing = {}, []
     for index, (path, edit) in enumerate(files.items()):
         if edit.original:
             backups[path] = folder / str(index)
             backups[path].write_bytes(edit.original)
+        (replacements / str(index)).write_bytes(edit.replacement)
         listing.append({
             "path": str(path),
             "new_path": str(edit.new_path),
             "backup": str(backups[path]) if path in backups else None,
+            "new": str(replacements / str(index)),
             "mode": edit.mode,
             "mtime_ns": edit.mtime_ns,
-            "new_sha256": hashlib.sha256(edit.replacement).hexdigest(),
         })
     manifest = {
         "pid": os.getpid(),
@@ -993,12 +1031,10 @@ def apply_naming_migration(preview: MigrationPreview) -> MigrationResult:
         )
         return MigrationResult(preview, "rejected", None, (_conflict(code, _display(lock, preview.workspace_root), message),))
     result = None
-    started = False
     interrupted = None
     try:
         with os.fdopen(handle, "w") as stream:
             json.dump({"operation": "naming", "pid": os.getpid()}, stream)
-        started = True
         result = _transact(preview, recovery)
     except OSError as exc:
         result = MigrationResult(preview, "rejected", None, (_conflict("lock-unavailable", _display(lock, preview.workspace_root), str(exc)),))
@@ -1037,6 +1073,7 @@ def apply_naming_migration(preview: MigrationPreview) -> MigrationResult:
                     transaction_status=result.status,
                 )
         else:
-            if (result is not None and result.recovery is None) or (interrupted is not None and not started):
+            # An interrupt before the manifest leaves nothing that recover could restore.
+            if (result is not None and result.recovery is None) or not (recovery / "manifest.json").exists():
                 shutil.rmtree(recovery, ignore_errors=True)
     return result

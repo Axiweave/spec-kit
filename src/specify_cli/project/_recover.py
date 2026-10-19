@@ -1,21 +1,26 @@
-"""Report and restore what a forcibly stopped rename, merge, or move left behind."""
+"""Report and restore what a forcibly stopped rename, merge, move, or conversion left behind."""
 from __future__ import annotations
 
 import ctypes
-import hashlib
 import json
 import os
 import shutil
+from functools import partial
 from pathlib import Path
 
 from specify_cli.workspace import confined
 
-from .naming import _rollback, _write
+from .naming import _rollback, _sibling_records, _write
 
 _MOVE_STEPS = (
     "Compare the original files in this folder with the repository and the workspace. "
     "Move back any file that the repository lost, then delete the folder."
 )
+_CONVERT_STEPS = (
+    "The workspace was not changed. If the repository lost its .specify folder, "
+    "move this folder's .specify back into the repository. Then delete the folder."
+)
+_REPORT_ONLY = {"move-recovery": _MOVE_STEPS, "convert-recovery": _CONVERT_STEPS}
 
 
 def _pid_alive(pid: int) -> bool:
@@ -69,6 +74,7 @@ def scan(repository: Path, workspace: Path) -> list[dict]:
         *(("merge-recovery", path, path / "journal.json", None) for path in sorted(specs.glob(".merge-specs-recovery-*"))),
         ("merge-lock", specs / ".merge-specs.lock", specs / ".merge-specs.lock", "merge-specs"),
         *(("move-recovery", path, None, None) for path in sorted(repository.glob(".specify-move-*"))),
+        *(("convert-recovery", path, None, None) for path in sorted(repository.glob(".specify-convert-*"))),
     ]
     rows = []
     for kind, path, record, operation in found:
@@ -76,8 +82,8 @@ def scan(repository: Path, workspace: Path) -> list[dict]:
             continue
         pid = _owner(record, operation) if record else None
         owner = "unknown" if pid is None else "running" if _pid_alive(pid) else "stopped"
-        if kind == "move-recovery":
-            choices = [_MOVE_STEPS]
+        if kind in _REPORT_ONLY:
+            choices = [_REPORT_ONLY[kind]]
         elif owner == "stopped":
             choices = ["specify project recover --apply"]
         elif owner == "running":
@@ -96,17 +102,33 @@ def _refusal(row: dict) -> str | None:
     return None
 
 
-def _sha256(path: Path) -> str | None:
+def _content(path: Path) -> bytes | None:
+    """Return the bytes of an ordinary file. None when the path is absent or is not an ordinary file."""
     if path.is_symlink() or not path.is_file():
         return None
-    with path.open("rb") as handle:
-        return hashlib.file_digest(handle, "sha256").hexdigest()
+    return path.read_bytes()
 
 
-def _restore_naming(folder: Path) -> list[str]:
-    """Undo every marked step and the one step that may have started. Refuse a file changed after the stop."""
+def _restore_naming(folder: Path, repository: Path, workspace: Path) -> list[str]:
+    """Undo every marked step and the one step that may have started. Refuse a file changed after the stop.
+
+    Every manifest path must stay in this project: renames in the workspace, files in the workspace,
+    the repository, or the record of another local worktree, and saved bytes in this folder.
+    """
     manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
-    root = Path(manifest["workspace_root"])
+    root = workspace.resolve()
+    if Path(manifest["workspace_root"]).resolve() != root:
+        raise ValueError(f"The manifest names another workspace: {manifest['workspace_root']}")
+    records = set(_sibling_records(repository.resolve()))
+
+    def owned(value: str) -> Path:
+        if Path(value) in records:
+            return Path(value)
+        try:
+            return confined(root, value)
+        except ValueError:
+            return confined(repository, value)
+
     marked = {path.name for path in (folder / "done").iterdir()}
     if "applied" in marked:
         return []  # The rename finished. Only its backups remain.
@@ -118,15 +140,15 @@ def _restore_naming(folder: Path) -> list[str]:
     changed = []
     for name, entry in steps:
         if name.startswith("rename-"):
-            source, target = root / entry["from"], root / entry["to"]
+            source, target = confined(root, entry["from"]), confined(root, entry["to"])
             if os.path.lexists(source) == os.path.lexists(target):
                 changed.append(target)
             done["renames"].append((source, target))
         else:
-            path, new_path = Path(entry["path"]), Path(entry["new_path"])
-            backup = Path(entry["backup"]) if entry["backup"] else None
+            path, new_path = owned(entry["path"]), owned(entry["new_path"])
+            backup = confined(folder, entry["backup"]) if entry["backup"] else None
             location = new_path if os.path.lexists(new_path) else path
-            if _sha256(location) not in {entry["new_sha256"], _sha256(backup) if backup else None}:
+            if _content(location) not in {confined(folder, entry["new"]).read_bytes(), _content(backup) if backup else None}:
                 changed.append(location)
             if backup:
                 done["writes"].append((path, backup, entry["mode"], entry["mtime_ns"]))
@@ -153,23 +175,22 @@ def _restore_merge(folder: Path) -> list[str]:
         if row["kind"] == "create_directory":
             actions.append((path, None, row))
             continue
-        current, saved = _sha256(path), folder / row["original"] if row.get("original") else None
-        if current == row.get("original_fingerprint") or (current is None and saved is None):
+        current = _content(path)
+        original = confined(folder, row["original"]).read_bytes() if row.get("original") else None
+        if current == original:
             continue  # Already restored, or never written.
-        if current != row["fingerprint"]:
+        if current != confined(folder, row["written"]).read_bytes():
             changed.append(path)
-        elif saved and _sha256(saved) != row["original_fingerprint"]:
-            changed.append(saved)
         else:
-            actions.append((path, saved, row))
+            actions.append((path, original, row))
     if changed:
         return [f"Changed after the stop, not restored: {path}" for path in changed]
-    for path, saved, row in actions:
+    for path, original, row in actions:
         if row["kind"] == "create_directory":
             if path.is_dir() and not any(path.iterdir()):
                 path.rmdir()
-        elif saved:
-            _write(path, saved.read_bytes(), row["original_mode"], row["original_mtime_ns"])
+        elif original is not None:
+            _write(path, original, row["original_mode"], row["original_mtime_ns"])
         else:
             path.unlink()
     return []
@@ -178,7 +199,8 @@ def _restore_merge(folder: Path) -> list[str]:
 def apply(repository: Path, workspace: Path) -> list[dict]:
     """Restore stopped rename and merge leftovers. Each row gets the refusals that kept it."""
     rows = scan(repository, workspace)
-    for family, restore in (("naming", _restore_naming), ("merge", _restore_merge)):
+    naming = partial(_restore_naming, repository=repository, workspace=workspace)
+    for family, restore in (("naming", naming), ("merge", _restore_merge)):
         lock = next((row for row in rows if row["kind"] == f"{family}-lock"), None)
         held = _refusal(lock) if lock else None  # A running or unknown lock owner may still write.
         folders = [row for row in rows if row["kind"] == f"{family}-recovery"]
@@ -206,6 +228,6 @@ def apply(repository: Path, workspace: Path) -> list[dict]:
                 except OSError as exc:
                     lock["refusals"] = [f"Not removed: {lock['path']}: {exc}"]
     for row in rows:
-        if row["kind"] == "move-recovery":
-            row["refusals"] = [f"Not changed: {row['path']}. {_MOVE_STEPS}"]
+        if row["kind"] in _REPORT_ONLY:
+            row["refusals"] = [f"Not changed: {row['path']}. {_REPORT_ONLY[row['kind']]}"]
     return rows

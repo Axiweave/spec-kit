@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import dataclasses
 import errno
-import hashlib
 import json
 import os
 import random
@@ -465,6 +464,14 @@ def test_duplicate_prefixes_is_empty_without_shared_prefixes(naming, local):
     assert naming.duplicate_prefixes(local) == []
 
 
+@pytest.mark.skipif(os.name != "posix" or os.geteuid() == 0, reason="needs a file that this user cannot read")
+def test_duplicate_prefixes_reads_no_file_content(naming, local):
+    feature(local, "specs/001-a", {"data.bin": b"\x00\xff"})
+    feature(local, "specs/0001-b")
+    (local / "specs/001-a/data.bin").chmod(0)
+    assert naming.duplicate_prefixes(local) == [["specs/0001-b", "specs/001-a"]]
+
+
 @pytest.mark.parametrize("location", ["local", "external"])
 @pytest.mark.parametrize("reserved", [".merge-specs.lock", ".merge-specs-recovery-", ".merge-specs-recovery-leftover"])
 @pytest.mark.parametrize("kind", ["file", "directory", "symlink", "pipe"])
@@ -696,7 +703,8 @@ def test_markdown_links_and_complete_paths_follow_renamed_features(naming, local
         assert (local / doc).parent.joinpath(unquote(dest)).resolve().is_file(), (doc, dest)
     moved = (local / f"specs/{b}/spec.md").stat()
     assert moved.st_mtime_ns == STAMP
-    assert moved.st_mode & 0o777 == 0o640
+    if os.name == "posix":  # Windows keeps only the read-only bit
+        assert moved.st_mode & 0o777 == 0o640
 
 
 def test_a_link_that_reads_two_ways_blocks_application(naming, local):
@@ -787,6 +795,36 @@ def test_external_selection_follows_a_renamed_feature_without_copies(naming, ext
     else:
         assert record.read_text() == original
     assert json.loads((workspace / ".specify/init-options.json").read_text())["feature_selection"] == mode
+
+
+def test_every_local_worktree_on_the_workspace_follows_a_renamed_feature(naming, external, monkeypatch):
+    import subprocess
+
+    repo, workspace, record, identity = external
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+    def git(*args):
+        subprocess.run(["git", "-C", str(repo), "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", *args],
+                       check=True, capture_output=True)
+
+    git("init", "--initial-branch=main")
+    git("commit", "--allow-empty", "-m", "Fixture")
+    same, other = repo.parent / "same workspace", repo.parent / "other workspace"
+    git("worktree", "add", "-b", "same", str(same))
+    git("worktree", "add", "-b", "other", str(other))
+    feature(workspace, "specs/001-a")
+    pointer = {"schema_version": 1, "active_feature": "specs/001-a"}
+    put(same, ".specify/checkout.json", json.dumps({**pointer, "workspace": str(workspace)}))
+    put(other, ".specify/checkout.json", json.dumps({**pointer, "workspace": str(repo.parent / "another workspace")}))
+    unrelated = (other / ".specify/checkout.json").read_bytes()
+
+    preview = prepare(naming, repo, "timestamp")
+    assert naming.apply_naming_migration(preview).status == "applied"
+
+    new = dict(preview.mappings)["specs/001-a"]
+    assert json.loads((same / ".specify/checkout.json").read_text())["active_feature"] == new
+    assert (other / ".specify/checkout.json").read_bytes() == unrelated
 
 
 def run(repo: Path, run_id: str, status: str, workflow_dir: Path | None, **owner) -> Path:
@@ -1292,6 +1330,21 @@ def test_an_interrupt_restores_everything_and_propagates(naming, local, isolated
     assert tree(local) == before and outside(isolated, local) == elsewhere
 
 
+def test_an_interrupt_before_the_first_step_leaves_no_recovery_folder(naming, local, isolated, monkeypatch):
+    transaction_project(local)
+    preview = prepare(naming, local, "timestamp")
+    before, elsewhere = tree(local), outside(isolated, local)
+
+    def interrupted(*args, **kwargs):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(naming, "prepare_naming_migration", interrupted)  # the fresh check under the lock
+    with pytest.raises(KeyboardInterrupt):
+        naming.apply_naming_migration(preview)
+
+    assert tree(local) == before and outside(isolated, local) == elsewhere
+
+
 def test_failed_restoration_retains_original_bytes_and_lists_the_remaining_rename(naming, local, monkeypatch):
     transaction_project(local)
     preview = prepare(naming, local, "timestamp")
@@ -1306,7 +1359,8 @@ def test_failed_restoration_retains_original_bytes_and_lists_the_remaining_renam
     assert result.status == "recovery_required" and result.recovery is not None
     directory = Path(result.recovery["directory"])
     assert directory.parent == local.resolve() / ".specify" and directory.name.startswith("naming-recovery-")
-    assert stat.S_IMODE(directory.stat().st_mode) & 0o077 == 0
+    if os.name == "posix":  # Windows keeps only the read-only bit
+        assert stat.S_IMODE(directory.stat().st_mode) & 0o077 == 0
     operations = result.recovery["remaining_operations"]
     assert [(o["from"], o["to"]) for o in operations] == [(str(new_a), str(old_a))]
     assert all(o["operation"] and o["message"] for o in operations)
@@ -1599,6 +1653,7 @@ def test_rename_backup_and_lock_stay_in_the_workspace_and_name_their_owner(namin
                 manifest=json.loads((folder / "manifest.json").read_text()),
                 done={path.name for path in (folder / "done").iterdir()},
             )
+            seen["copies"] = [Path(entry["new"]).read_bytes() for entry in seen["manifest"]["files"]]
         return real_replace(src, dst, *args, **kwargs)
 
     monkeypatch.setattr(os, "replace", replace)
@@ -1607,8 +1662,8 @@ def test_rename_backup_and_lock_stay_in_the_workspace_and_name_their_owner(namin
     manifest = seen["manifest"]
     assert seen["folder"].parent == workspace.resolve() / ".specify"
     assert seen["lock"] == {"operation": "naming", "pid": os.getpid()} and manifest["pid"] == os.getpid()
-    for entry in manifest["files"]:
-        assert entry["new_sha256"] == hashlib.sha256(Path(entry["new_path"]).read_bytes()).hexdigest()
+    # The folder keeps the exact new bytes of every edited file, so recover can compare them.
+    assert seen["copies"] == [Path(entry["new_path"]).read_bytes() for entry in manifest["files"]]
     # Every step before the preference write ran and left its marker.
     assert seen["done"] == {f"rename-{index}" for index in range(len(manifest["renames"]))} | {
         f"file-{index}" for index in range(len(manifest["files"]) - 1)

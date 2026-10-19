@@ -15,7 +15,7 @@ def register(app: typer.Typer) -> None:
         apply: bool = typer.Option(False, "--apply", help="Restore rename and merge leftovers whose owner stopped."),
         json_output: bool = typer.Option(False, "--json", help="Print the leftover resources as JSON."),
     ) -> None:
-        """Report, or restore, what an interrupted rename, merge, or move left behind."""
+        """Report, or restore, what an interrupted rename, merge, move, or conversion left behind."""
         try:
             repository = find_repository()
             workspace = workspace_root_for(repository)
