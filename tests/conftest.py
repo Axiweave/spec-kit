@@ -192,6 +192,8 @@ def _isolate_user_env(monkeypatch: pytest.MonkeyPatch, base: Path) -> None:
     )
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(gitconfig))
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    # Script tests run bash helpers that call python3. Use this interpreter, which has the test dependencies.
+    monkeypatch.setenv("PATH", os.pathsep.join([str(Path(sys.executable).parent), os.environ.get("PATH", "")]))
 
 
 @pytest.fixture(scope="session", autouse=True)
