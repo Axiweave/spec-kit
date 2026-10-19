@@ -169,6 +169,46 @@ def _strip_specify_env(monkeypatch):
             monkeypatch.delenv(key, raising=False)
 
 
+def _isolate_user_env(monkeypatch: pytest.MonkeyPatch, base: Path) -> None:
+    """Point home, user config/data dirs, and global git config under *base*."""
+    home = base / "home"
+    dirs = {
+        "HOME": home,
+        "USERPROFILE": home,
+        "XDG_CACHE_HOME": base / "cache",
+        "XDG_CONFIG_HOME": base / "config",
+        "XDG_DATA_HOME": base / "data",
+        "XDG_STATE_HOME": base / "state",
+        "APPDATA": base / "roaming",
+        "LOCALAPPDATA": base / "local",
+    }
+    for name, path in dirs.items():
+        path.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setenv(name, str(path))
+    gitconfig = base / "gitconfig"
+    gitconfig.write_text(
+        "[user]\n\tname = Spec Kit Tests\n\temail = tests@example.com\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(gitconfig))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _isolate_user_env_session(tmp_path_factory):
+    """Isolate the user environment for module-/package-scoped fixtures too."""
+    monkeypatch = pytest.MonkeyPatch()
+    _isolate_user_env(monkeypatch, tmp_path_factory.mktemp("session-user-env"))
+    yield
+    monkeypatch.undo()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_user_env_per_test(monkeypatch, tmp_path_factory):
+    """Give each test a fresh home so a real user config or git identity never leaks in."""
+    _isolate_user_env(monkeypatch, tmp_path_factory.mktemp("user-env"))
+
+
 @pytest.fixture
 def clean_environ(monkeypatch):
     """Strip any real GH_TOKEN / GITHUB_TOKEN from the test environment."""

@@ -29,6 +29,18 @@ EVENTS = {"pre_tool_use": [{"command": "speckit.external.boot"}]}
 PAYLOAD = '{"message": "café"}'
 
 
+def _real_bun() -> str | None:
+    # Version-manager shims (asdf, mise) read HOME, which the test fixtures isolate.
+    # Resolve the real binary at import time, before isolation starts.
+    if not (bun := shutil.which("bun")):
+        return None
+    found = subprocess.run([bun, "-e", "console.log(process.execPath)"], text=True, capture_output=True)
+    return found.stdout.strip() if found.returncode == 0 else None
+
+
+BUN = _real_bun()
+
+
 def write_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value), encoding="utf-8")
@@ -177,7 +189,7 @@ def test_native_hook_invokes_external_dispatcher(external_project, key):
 
 
 def test_opencode_plugin_uses_workspace_with_repository_directory(external_project, tmp_path):
-    bun = shutil.which("bun")
+    bun = BUN
     if not bun:
         pytest.skip("Bun is required to execute the native TypeScript plugin.")
     repository, workspace, _ = external_project

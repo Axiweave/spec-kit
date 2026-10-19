@@ -3,6 +3,8 @@
 import urllib.error
 from unittest.mock import patch
 
+import pytest
+
 from specify_cli import app
 
 from tests.specify_cli.self_upgrade_helpers import (
@@ -92,14 +94,37 @@ def test_missing_fork_tag_explains_failed_install(uv_tool_argv0, clean_environ):
     ) in out
 
 
-def test_existing_tag_failure_does_not_claim_tag_is_missing(uv_tool_argv0, clean_environ):
-    with patch("specify_cli.authentication.http.urllib.request.urlopen") as mock_urlopen, patch(
-        "specify_cli._version.shutil.which", return_value="uv"
-    ), patch(
+def _forbidden(request, *args, **kwargs):
+    raise urllib.error.HTTPError(
+        url=request.full_url, code=403, msg="Forbidden", hdrs={}, fp=None  # type: ignore[arg-type]
+    )
+
+
+def _offline(request, *args, **kwargs):
+    raise urllib.error.URLError("network unreachable")
+
+
+@pytest.mark.parametrize(
+    "lookup",
+    [
+        lambda request, *a, **k: mock_urlopen_response({"ref": "refs/tags/v1.0.13"}),
+        _forbidden,
+        _offline,
+    ],
+    ids=["tag-exists", "http-403", "url-error"],
+)
+def test_unconfirmed_tag_failure_does_not_claim_tag_is_missing(
+    uv_tool_argv0, clean_environ, lookup
+):
+    with patch(
+        "specify_cli.authentication.http.urllib.request.urlopen", side_effect=lookup
+    ) as mock_urlopen, patch("specify_cli._version.shutil.which", return_value="uv"), patch(
         "specify_cli._version.subprocess.run", side_effect=[_completed_process(1)]
     ), patch("specify_cli._version._get_installed_version", return_value="1.0.12"):
-        mock_urlopen.return_value = mock_urlopen_response({"ref": "refs/tags/v1.0.13"})
         result = runner.invoke(app, ["self", "upgrade", "--tag", "v1.0.13"])
 
     assert result.exit_code == 1
+    assert _requested_urls(mock_urlopen) == [
+        "https://api.github.com/repos/Axiweave/spec-kit/git/ref/tags/v1.0.13"
+    ]
     assert "does not exist" not in _flat_output(result)
