@@ -13,6 +13,7 @@ _CONTEXT = (
     "Error: Saved selection is ignored in context mode. Pass SPECIFY_FEATURE_DIRECTORY, "
     "or set feature_selection to automatic.\n"
 )
+PROJECT_ID = "550e8400-e29b-41d4-a716-446655440000"
 
 
 def _write(path: Path, data: dict) -> None:
@@ -21,7 +22,7 @@ def _write(path: Path, data: dict) -> None:
 
 
 def _checkout(path: Path, workspace: Path) -> Path:
-    _write(path / ".specify/project.json", {"schema_version": 1, "storage": "external", "project_id": "p1"})
+    _write(path / ".specify/project.json", {"schema_version": 1, "storage": "external", "project_id": PROJECT_ID})
     _write(path / ".specify/checkout.json", {"schema_version": 1, "workspace": str(workspace)})
     return path
 
@@ -32,7 +33,7 @@ def _project(tmp_path: Path, storage: str, mode: str = "automatic") -> tuple[Pat
     repo = tmp_path / "repo"
     root = tmp_path / "ws" if storage == "external" else repo
     if storage == "external":
-        _write(root / ".specify/workspace.json", {"schema_version": 1, "project_id": "p1"})
+        _write(root / ".specify/workspace.json", {"schema_version": 1, "project_id": PROJECT_ID})
         _checkout(repo, root)
     _write(root / ".specify/init-options.json", {"feature_selection": mode})
     for name in ("a", "b"):

@@ -320,6 +320,26 @@ def test_missing_context_fails_without_json_or_writes(tmp_path, monkeypatch, fau
     assert files_under(tmp_path) == before
 
 
+@pytest.mark.parametrize("name", ["speckit.plan", "speckit.specify"])
+def test_feature_command_refuses_a_feature_directory_that_does_not_exist(tmp_path, monkeypatch, name):
+    repository, workspace, _ = external_project(tmp_path, "Gone")
+    monkeypatch.chdir(repository)
+    monkeypatch.setenv("SPECIFY_FEATURE_DIRECTORY", "specs/009-gone")
+    before = files_under(tmp_path)
+
+    result = CliRunner().invoke(app, ["project", "command", name, "--json"])
+
+    if name == "speckit.plan":
+        assert result.exit_code == 1
+        assert result.stdout == ""
+        assert str(workspace / "specs/009-gone") in result.stderr
+    else:  # Creating a feature needs no existing feature directory.
+        assert result.exit_code == 0, result.output
+    assert not (workspace / "specs/009-gone").exists()
+    assert files_under(tmp_path) == before
+
+
+
 def test_command_edits_are_visible_without_restarting_cli(tmp_path, monkeypatch):
     repository, workspace, _ = external_project(tmp_path, "Live")
     preset, extension = add_stack(workspace, "Live")
@@ -544,8 +564,8 @@ def test_public_preset_update_changes_runtime_commands_without_rewriting_shared_
     (shared / "speckit.plan.md").write_text("Keep my global plan edits.\n", encoding="utf-8")
     (shared / "personal.md").write_text("Keep my personal command.\n", encoding="utf-8")
     shared_before = files_under(shared)
-    ownership_path = next((user_data_dir() / "integrations/omp").glob("*.json"))
-    ownership_before = json.loads(ownership_path.read_text(encoding="utf-8"))["files"]
+    ownership_path = user_data_dir() / "integrations/omp/global-commands.json"
+    [ownership_before] = json.loads(ownership_path.read_text(encoding="utf-8")).values()
     other_before = files_under(second, other_workspace)
     monkeypatch.chdir(first)
 
@@ -558,7 +578,7 @@ def test_public_preset_update_changes_runtime_commands_without_rewriting_shared_
     assert runner.invoke(app, ["project", "command", "speckit.team.legacy"]).exit_code == 1
     assert (shared / "speckit.team.current.md").is_file()
     assert {path: Path(path).read_bytes() for path in shared_before} == shared_before
-    ownership_after = json.loads(ownership_path.read_text(encoding="utf-8"))["files"]
+    [ownership_after] = json.loads(ownership_path.read_text(encoding="utf-8")).values()
     assert {name: ownership_after[name] for name in ownership_before} == ownership_before
     assert ownership_after.keys() - ownership_before.keys() == {"speckit.team.current.md"}
     assert "personal.md" not in ownership_after

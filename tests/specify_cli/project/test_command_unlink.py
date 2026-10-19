@@ -152,6 +152,8 @@ def test_unlink_in_one_worktree_keeps_the_other_worktree_attached(tmp_path, monk
     })
     other = second_worktree(repository, workspace, FEATURES[1])
     state, before = checkout_state(other), snapshot(workspace)
+    exclude = repository / ".git/info/exclude"
+    hidden = exclude.read_bytes() if exclude.exists() else None
     assert state[1:] == (workspace, workspace / FEATURES[1])
 
     result = CliRunner().invoke(app, ["project", "unlink"])
@@ -160,3 +162,15 @@ def test_unlink_in_one_worktree_keeps_the_other_worktree_attached(tmp_path, monk
     assert not checkout_record_path(repository).exists()
     assert checkout_state(other) == state
     assert snapshot(workspace) == before
+    assert (exclude.read_bytes() if exclude.exists() else None) == hidden
+
+
+def test_unlink_of_a_private_checkout_stops_hiding_its_spec_kit_files(tmp_path, monkeypatch):
+    repository, _ = external_project(tmp_path, monkeypatch, "--private")
+    assert git(repository, "status", "--porcelain", "--untracked-files=all") == ""
+
+    assert CliRunner().invoke(app, ["project", "unlink"]).exit_code == 0
+
+    visible = git(repository, "status", "--porcelain", "--untracked-files=all")
+    assert ".specify/integrations/claude.manifest.json" in visible
+    assert ".claude/skills/speckit-plan/SKILL.md" in visible

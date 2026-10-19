@@ -12,6 +12,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from specify_cli.integrations.manifest import append_gitignore
+from specify_cli.private_checkout import checkout_manifest_keys, regenerate_exclude_block
 from specify_cli.workspace import (
     Project, atomic_json, checkout_record_path, confined, is_private, read_json, workspace_root_for,
 )
@@ -323,6 +324,8 @@ def commit_move(prepared: PreparedMove, *, report: dict[str, str] | None = None)
         refreshed = True
         _command_move_managed.refresh_commands(repository)
         append_gitignore(repository, ".specify/checkout.json")
+        for relative in sorted(checkout_manifest_keys(workspace)):
+            append_gitignore(repository, relative)
         if not prepared.no_workspace_git:
             commit_id = initialize_workspace_git(workspace)
             committed = True
@@ -403,7 +406,11 @@ def commit_move(prepared: PreparedMove, *, report: dict[str, str] | None = None)
 
 
 # Workspace state that a local project does not take (research D9). `*` also matches `/`.
-_LEFT_OUT = (".specify/workspace.json", ".specify/naming-recovery-*", "specs/.merge-specs-recovery-*")
+_LEFT_OUT = (
+    ".specify/workspace.json", ".specify/naming-recovery-*", ".specify/naming-migration.lock",
+    "specs/.merge-specs-recovery-*",
+)
+_LOCKS = (".specify/naming-migration.lock", "specs/.merge-specs.lock")
 
 
 def _left_out(relative: str) -> bool:
@@ -433,7 +440,18 @@ def unlink_checkout(repository: Path) -> tuple[tuple[str, ...], bool]:
         if path.exists() or path.is_symlink():
             path.unlink()
             removed.append(path.relative_to(repository).as_posix())
+    regenerate_exclude_block(repository, create=False)
     return tuple(removed), tracked
+
+
+def local_content(repository: Path, *, private: bool) -> Path | None:
+    """Return the first `.specify/` path of local storage: not the locator, the record, or private manifests."""
+    metadata = repository / ".specify"
+    allowed = {metadata / "project.json", checkout_record_path(repository)}
+    if private:
+        allowed |= {metadata / "integrations", *(metadata / "integrations").glob("*.manifest.json")}
+    extra = sorted(set(metadata.rglob("*")) - allowed)
+    return extra[0] if extra else None
 
 
 @dataclass(frozen=True)
@@ -452,15 +470,18 @@ def prepare_local(repository: Path) -> PreparedLocal:
     workspace = workspace_root_for(repository)
     if workspace == repository:
         raise ValueError(f"Project already uses local storage: {repository}")
+    for lock in _LOCKS:
+        if (workspace / lock).exists() or (workspace / lock).is_symlink():
+            raise ValueError(
+                f"A naming migration or spec merge holds {workspace / lock}. "
+                "Wait for it to finish or run specify project recover, then retry."
+            )
     metadata = repository / ".specify"
-    allowed = {metadata / "project.json", checkout_record_path(repository)}
-    manifests = []
-    if is_private(workspace):
-        manifests = sorted((metadata / "integrations").glob("*.manifest.json"))
-        allowed |= {metadata / "integrations", *manifests}
-    extra = sorted(set(metadata.rglob("*")) - allowed)
+    private = is_private(workspace)
+    extra = local_content(repository, private=private)
     if extra:
-        raise ValueError(f"The checkout has other Spec Kit files: {extra[0]}. Move them out of {metadata}, then retry.")
+        raise ValueError(f"The checkout has other Spec Kit files: {extra}. Move them out of {metadata}, then retry.")
+    manifests = sorted((metadata / "integrations").glob("*.manifest.json")) if private else []
     record_path = checkout_record_path(repository)
     active = read_json(record_path).get("active_feature")
     roots = [".specify", "specs"]
@@ -598,4 +619,5 @@ def commit_local(prepared: PreparedLocal) -> tuple[int, tuple[Path, ...]]:
             (KeyboardInterrupt, "interrupted") if isinstance(exc, KeyboardInterrupt) else (ValueError, str(exc).rstrip("."))
         )
         raise error(f"Conversion to local storage failed: {reason}.{state} The workspace was not changed.") from exc
+    regenerate_exclude_block(repository, create=False)
     return sum(entry.digest is not None for entry in local), shared

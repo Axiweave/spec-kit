@@ -7,21 +7,25 @@ from pathlib import Path
 import typer
 
 from ..workspace import (
-    atomic_json, checkout_record_path, confined, feature_selection_mode, find_repository, is_private, read_json,
-    verify_workspace,
+    ProjectNotFoundError, atomic_json, checkout_record_path, confined, feature_selection_mode, find_repository,
+    is_private, read_json, verify_workspace,
 )
 from ..workspace_git import run_git
 
 
 def _unattached_checkout() -> Path | None:
-    """Return the Git checkout root when it has no project locator."""
+    """Return the project root without a locator, else the Git checkout root when no project exists."""
     try:
-        top = run_git(Path.cwd(), "rev-parse", "--show-toplevel", allowed_codes=(0, 128))
-    except OSError:
-        return None
-    if not top or (Path(top) / ".specify/project.json").exists():
-        return None
-    return Path(top).resolve()
+        root = find_repository()
+    except ProjectNotFoundError:
+        try:
+            top = run_git(Path.cwd(), "rev-parse", "--show-toplevel", allowed_codes=(0, 128))
+        except OSError:
+            return None
+        if not top or (Path(top) / ".specify/project.json").exists():
+            return None
+        return Path(top).resolve()
+    return None if (root / ".specify/project.json").exists() else root
 
 
 def _attach(repository: Path, workspace: Path):
@@ -29,8 +33,10 @@ def _attach(repository: Path, workspace: Path):
     from ..assets import get_speckit_version
     from ..private_checkout import (
         Restore, attach_integrations, plan_checkout_files, refuse_tracked, regenerate_exclude_block, restore_checkout,
+        restore_workspace_files,
     )
     from ..integration_state import installed_integration_keys, try_read_integration_json
+    from .move import local_content
 
     workspace = workspace.expanduser().resolve()
     identity = workspace / ".specify/workspace.json"
@@ -40,7 +46,15 @@ def _attach(repository: Path, workspace: Path):
     if not isinstance(project_id, str):
         raise ValueError(f"{workspace} is not a Spec Kit workspace.")
     workspace = verify_workspace(workspace, project_id)
-    if not is_private(workspace):
+    private = is_private(workspace)
+    specs = repository / "specs"
+    local = specs if os.path.lexists(specs) else local_content(repository, private=private)
+    if local is not None:
+        raise ValueError(
+            f"This checkout has local Spec Kit files: {local}. "
+            "Use specify project move to put local work in external storage, or move the files out, then retry."
+        )
+    if not private:
         return workspace, restore_checkout(repository, workspace, None), None
     state, error = try_read_integration_json(workspace)
     if error is not None:
@@ -50,6 +64,7 @@ def _attach(repository: Path, workspace: Path):
     refuse_tracked(repository, plan_checkout_files(
         lambda staged: attach_integrations(staged, keys, version=version), workspace=workspace,
     ))
+    restored = restore_workspace_files(workspace)
     atomic_json(repository / ".specify/project.json", {
         "schema_version": 1, "project_id": project_id, "storage": "external",
     }, exclusive=True)
@@ -58,13 +73,13 @@ def _attach(repository: Path, workspace: Path):
     })
     attach_integrations(repository, keys, version=version)
     regenerate_exclude_block(repository)
-    return workspace, Restore(0, {}, False, False, None), None
+    return workspace, Restore(len(restored), {}, False, False, None), None
 
 
 def _relink(workspace: Path):
     """Relink a checkout with a locator. Return the workspace, the restore result, and the kept feature."""
     from ..assets import get_speckit_version
-    from ..private_checkout import Restore, plan_reconcile, reconcile_checkout, restore_checkout
+    from ..private_checkout import Restore, plan_reconcile, reconcile_checkout, restore_checkout, restore_workspace_files
 
     repository = find_repository()
     if (repository / ".specify").is_symlink():
@@ -92,9 +107,10 @@ def _relink(workspace: Path):
         return workspace, restore_checkout(repository, workspace, active), active
     version = get_speckit_version()
     remove, install, modified = plan_reconcile(repository, workspace, version=version)
+    restored = restore_workspace_files(workspace)
     atomic_json(record_path, {"schema_version": 1, "workspace": str(workspace), "active_feature": active})
     reconcile_checkout(repository, remove, install, version=version)
-    return workspace, Restore(0, modified, False, False, None), active
+    return workspace, Restore(len(restored), modified, False, False, None), active
 
 
 def register(app: typer.Typer) -> None:

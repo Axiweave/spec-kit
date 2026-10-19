@@ -91,3 +91,7 @@ def register(app: typer.Typer) -> None:
             typer.echo("Workspace Git history setup was skipped (--no-workspace-git).")
         else:
             typer.echo(f"Workspace Git history: initial commit {report['commit_id']}.")
+            typer.echo(
+                "Tracks specs, plans, tasks, and saved choices. "
+                "Generated and private files stay out (see .gitignore)."
+            )

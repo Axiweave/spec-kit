@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import random
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -13,7 +14,7 @@ from specify_cli.integrations.base import IntegrationBase
 from specify_cli.integrations.manifest import IntegrationManifest
 from specify_cli.workspace import resolve_project, save_active_feature
 from tests.specify_cli.project.test_command_unlink import (
-    FEATURES, checkout_state, external_project, second_worktree,
+    FEATURES, checkout_state, external_project, git, second_worktree,
 )
 
 
@@ -538,7 +539,7 @@ def test_interrupt_at_each_cutover_step_restores_the_state_before_the_move(local
         raise KeyboardInterrupt
 
     monkeypatch.setattr(_command_move_managed if step == "refresh_commands" else move, step, interrupt)
-    with pytest.raises(KeyboardInterrupt, match=f"Source remains usable at {repo}"):
+    with pytest.raises(KeyboardInterrupt, match=re.escape(f"Source remains usable at {repo}")):
         move.commit_move(prepared)
 
     assert_local(repo, before)
@@ -576,6 +577,56 @@ def test_second_interrupt_during_rollback_keeps_one_complete_copy_and_names_it(l
     for name, content in before.items():
         copies = [root / name for root in (repo, recovery) if (root / name).is_file()]
         assert [path.read_bytes() for path in copies] == [content], name
+
+
+def test_failed_rename_of_the_second_root_restores_the_first(local_project, monkeypatch):
+    from specify_cli.project import move
+
+    repo, workspace, home = local_project
+    before = snapshot(repo)
+    prepared = move.prepare_move(repo, workspace)
+    staged = snapshot(workspace)
+    real_rename = Path.rename
+
+    def rename(self, target):
+        if self == repo / "specs":
+            raise OSError("Injected rename failure")
+        return real_rename(self, target)
+
+    monkeypatch.setattr(Path, "rename", rename)
+    with pytest.raises(ValueError, match=re.escape(f"Source remains usable at {repo}")):
+        move.commit_move(prepared)
+
+    assert_local(repo, before)
+    assert snapshot(workspace) == staged
+    assert not list(repo.glob(".specify-move-*"))
+
+
+def test_move_to_external_ignores_every_integration_file_in_the_checkout(local_project):
+    from typer.testing import CliRunner
+
+    from specify_cli import app
+    from specify_cli.project.move import commit_move, prepare_move
+
+    repo, workspace, _ = local_project
+    shutil.rmtree(repo / ".specify")
+    git(repo, "init", "-q")
+    result = CliRunner().invoke(app, [
+        "init", "--here", "--force", "--integration", "claude", "--script", "sh", "--ignore-agent-tools",
+        "--offline", "--non-interactive", "--storage", "local",
+    ])
+    assert result.exit_code == 0, result.output
+
+    commit_move(prepare_move(repo, workspace, no_workspace_git=True))
+
+    owned = [
+        name for path in (workspace / ".specify/integrations").glob("*.manifest.json")
+        for name in json.loads(path.read_text(encoding="utf-8"))["files"] if not name.startswith(".specify/")
+    ]
+    assert ".claude/skills/speckit-plan/SKILL.md" in owned
+    for name in owned:
+        assert subprocess.run(["git", "check-ignore", "-q", name], cwd=repo).returncode == 0, name
+    assert subprocess.run(["git", "check-ignore", "-q", "src/application.py"], cwd=repo).returncode == 1
 
 
 def selected_external(tmp_path, monkeypatch, *options):
@@ -632,6 +683,22 @@ def test_to_local_refuses_existing_local_content_before_any_write(tmp_path, monk
 
     assert snapshot(repository) == before
     assert not list(repository.glob(".specify-convert-*"))
+    assert snapshot(workspace) == workspace_before
+    assert resolve_project(repository).workspace_root == workspace
+
+
+@pytest.mark.parametrize("lock", [".specify/naming-migration.lock", "specs/.merge-specs.lock"])
+def test_to_local_refuses_while_a_naming_or_merge_lock_exists(tmp_path, monkeypatch, lock):
+    from specify_cli.project.move import prepare_local
+
+    repository, workspace = selected_external(tmp_path, monkeypatch)
+    put(workspace, lock, b"held\n")
+    before, workspace_before = snapshot(repository), snapshot(workspace)
+
+    with pytest.raises(ValueError, match=re.escape(str(workspace / lock))):
+        prepare_local(repository)
+
+    assert snapshot(repository) == before
     assert snapshot(workspace) == workspace_before
     assert resolve_project(repository).workspace_root == workspace
 
@@ -703,6 +770,8 @@ def test_to_local_merges_private_checkout_manifests(tmp_path, monkeypatch):
     assert set(manifest.files) == set(own["files"]) | set(shared["files"])
     assert manifest.check_modified() == []
     assert resolve_project(repository).storage == "local"
+    visible = git(repository, "status", "--porcelain", "--untracked-files=all")
+    assert ".specify/init-options.json" in visible and ".claude/skills/speckit-plan/SKILL.md" in visible
 
 
 def test_to_local_in_one_worktree_keeps_the_other_worktree_attached(tmp_path, monkeypatch):

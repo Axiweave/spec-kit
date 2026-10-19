@@ -13,6 +13,7 @@ from typer.testing import CliRunner
 
 from specify_cli import app
 from specify_cli.workspace_git import initialize_workspace_git
+from tests.conftest import requires_bash
 
 PROJECT_ID = "550e8400-e29b-41d4-a716-446655440000"
 FOREIGN_ID = "a60e8400-e29b-41d4-a716-446655440001"
@@ -374,7 +375,7 @@ def test_repository_rename_retains_identity_mapping_and_active_feature(external_
 @pytest.mark.parametrize(
     "fault",
     [
-        "missing-locator", "malformed-locator", "invalid-project-id", "locator-version",
+        "malformed-locator", "invalid-project-id", "locator-version",
         "missing-identity", "malformed-identity", "foreign-identity", "identity-version",
         "missing-workspace", "locator-symlink", "workspace-metadata-escape",
     ],
@@ -388,9 +389,7 @@ def test_link_rejects_invalid_identity_without_writes(external_project, tmp_path
     identity = workspace / ".specify/workspace.json"
     locator_bytes, identity_bytes = locator.read_bytes(), identity.read_bytes()
     target = workspace
-    if fault == "missing-locator":
-        locator.unlink()
-    elif fault == "malformed-locator":
+    if fault == "malformed-locator":
         locator.write_text("{", encoding="utf-8")
     elif fault in {"invalid-project-id", "locator-version"}:
         value = json.loads(locator_bytes)
@@ -434,6 +433,17 @@ def test_link_rejects_invalid_identity_without_writes(external_project, tmp_path
     info = CliRunner().invoke(app, ["project", "info", "--json"])
     assert info.exit_code == 0, info.output
     assert json.loads(info.stdout)["workspace_root"] == str(workspace)
+
+
+def test_link_rewrites_a_missing_locator_from_the_workspace_identity(external_project):
+    repo, workspace, _ = external_project
+    locator = repo / ".specify/project.json"
+    locator.unlink()
+
+    result = _link(workspace)
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(locator.read_text(encoding="utf-8"))["project_id"] == PROJECT_ID
 
 
 @pytest.mark.parametrize("fault", ["missing-record", "malformed-record", "missing-workspace", "foreign-workspace"])
@@ -631,6 +641,7 @@ def shared_project(external_project, tmp_path, monkeypatch):
     return main, workspace.resolve(), tmp_path / "worktree", tmp_path / "clone"
 
 
+@requires_bash
 def test_link_restores_worktree_commands_and_the_helper_runs(shared_project, monkeypatch):
     main, workspace, worktree, _ = shared_project
     skills = {path.relative_to(main): path.read_bytes() for path in (main / ".claude/skills").rglob("SKILL.md")}
@@ -924,3 +935,56 @@ def test_link_suggests_select_only_in_automatic_mode_without_a_saved_feature(ext
     record.write_text(json.dumps({**json.loads(record.read_text()), "active_feature": None}))
     context = _link(workspace)
     assert context.exit_code == 0 and hint not in context.output
+
+
+@pytest.mark.parametrize("start", [".", "src"])
+def test_link_from_a_project_in_a_repository_subdirectory_relinks_that_project(external_project, tmp_path, monkeypatch, start):
+    repo, workspace, record = external_project
+    mono = tmp_path / "mono"
+    mono.mkdir()
+    _git(mono, "init", "-q")
+    app_root = mono / "app"
+    shutil.move(repo, app_root)
+    (app_root / "src").mkdir()
+    monkeypatch.chdir(app_root / start)
+
+    result = _link(workspace)
+
+    assert result.exit_code == 0, result.output
+    assert not (mono / ".specify").exists()
+    assert json.loads((app_root / ".specify/checkout.json").read_text())["workspace"] == str(workspace.resolve())
+
+
+@pytest.mark.parametrize("local", ["specs/001-local/spec.md", ".specify/memory/constitution.md"])
+def test_link_refuses_to_shadow_a_local_storage_checkout(private_project, tmp_path, monkeypatch, local):
+    _, workspace, _, clone = private_project
+    (clone / local).parent.mkdir(parents=True)
+    (clone / local).write_text("# Local work\n", encoding="utf-8")
+    before = snapshot(tmp_path)
+    monkeypatch.chdir(clone)
+
+    result = _link(workspace)
+
+    assert result.exit_code == 1
+    assert "specify project move" in result.output
+    assert snapshot(tmp_path) == before
+
+
+@pytest.mark.parametrize("checkout", ["attached", "unattached"])
+def test_private_link_restores_missing_workspace_helpers(private_project, monkeypatch, checkout):
+    main, workspace, worktree, _ = private_project
+    helpers = {
+        path.relative_to(workspace): path.read_bytes()
+        for folder in (".specify/scripts", ".specify/templates") for path in (workspace / folder).rglob("*")
+        if path.is_file()
+    }
+    assert any(name.name == "check-prerequisites.sh" for name in helpers)
+    shutil.rmtree(workspace / ".specify/scripts")
+    shutil.rmtree(workspace / ".specify/templates")
+    monkeypatch.chdir(main if checkout == "attached" else worktree)
+
+    result = _link(workspace)
+
+    assert result.exit_code == 0, result.output
+    assert {name: (workspace / name).read_bytes() for name in helpers} == helpers
+    assert _status(main) == "" and _status(worktree) == ""
