@@ -185,7 +185,7 @@ A nonempty `storage_root` selects external storage for new projects.
 Setup expands `~` without changing the saved string.
 Explicit `--storage local` and `--workspace` override that location choice.
 For a new project, `SPECKIT_INTEGRATION_DEFAULT` outranks the personal `integration` value. An explicit `--integration` outranks both.
-The variable never skips the interactive prompt. The prompt preselects it, and non-interactive setup uses it.
+The variable supplies the integration without a prompt.
 Without the variable, a personal `integration` value applies with no prompt.
 Changed personal defaults do not change an existing project's workspace or saved choices, including during forced reinitialization.
 
