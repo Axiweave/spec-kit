@@ -560,9 +560,11 @@ def test_exact_cli_install_refuses_discovery_only_catalog(tmp_path, monkeypatch)
     assert "discovery-only" in result.output
 
 
-def test_exact_cli_does_not_bypass_discovery_policy_via_bundled_copy(
+def test_exact_cli_installs_shipped_bundled_version_despite_discovery_catalog(
     tmp_path, monkeypatch
 ):
+    """`--version` equal to the bundled manifest installs the bundled copy,
+    the same copy a plain `extension add <id>` installs."""
     from specify_cli.assets import locate_bundled_extension
 
     bundled = locate_bundled_extension("agent-context")
@@ -585,11 +587,10 @@ def test_exact_cli_does_not_bypass_discovery_policy_via_bundled_copy(
         app, ["extension", "add", "agent-context", "--version", version]
     )
 
-    assert result.exit_code == 1
-    assert "discovery-only" in result.output
-    assert not (
+    assert result.exit_code == 0, result.output
+    assert ExtensionManifest(
         project / ".specify" / "extensions" / "agent-context" / "extension.yml"
-    ).exists()
+    ).version == version
 
 
 @pytest.mark.parametrize("version_case", ["exact", "equivalent", "mismatch"])

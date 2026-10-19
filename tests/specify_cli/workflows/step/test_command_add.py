@@ -1097,6 +1097,41 @@ class TestWorkflowStepRestorationPreservesCustomContent:
             == original_baseline
         )
 
+    def test_add_restore_without_baseline_takes_shipped_files_from_new_source(
+        self, project_dir, monkeypatch
+    ):
+        """A record written before generated_files existed cannot tell edits
+        from old package bytes. Restoring takes every file the catalog ships
+        and keeps only files it does not ship."""
+        from typer.testing import CliRunner
+        from specify_cli import app
+        from specify_cli.workflows.step.catalog import StepRegistry
+
+        monkeypatch.chdir(project_dir)
+        self._mock_catalog(monkeypatch)
+        runner = CliRunner()
+        first = runner.invoke(app, ["workflow", "step", "add", "my-step"])
+        assert first.exit_code == 0, first.output
+        registry = StepRegistry(project_dir)
+        legacy_entry = dict(registry.get("my-step"))
+        del legacy_entry["generated_files"]
+        registry.add("my-step", legacy_entry)
+
+        step_dir = project_dir / ".specify" / "workflows" / "steps" / "my-step"
+        (step_dir / "__init__.py").write_bytes(b"# old release init\n")
+        (step_dir / "notes.txt").write_bytes(b"user notes\n")
+
+        second = runner.invoke(app, ["workflow", "step", "add", "my-step"])
+
+        assert second.exit_code == 0, second.output
+        assert (step_dir / "__init__.py").read_bytes() == self.BODIES[
+            "https://example.com/__init__.py"
+        ]
+        assert (step_dir / "notes.txt").read_bytes() == b"user notes\n"
+        generated = StepRegistry(project_dir).get("my-step")["generated_files"]
+        assert ".specify/workflows/steps/my-step/__init__.py" in generated
+        assert ".specify/workflows/steps/my-step/notes.txt" not in generated
+
     def test_add_reinstall_preserves_unrelated_registry_fields(
         self, project_dir, monkeypatch
     ):

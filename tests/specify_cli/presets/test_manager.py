@@ -203,6 +203,75 @@ class TestPresetManager:
         )
         assert template.read_text() == new_template
 
+    def test_force_reinstall_without_baseline_takes_shipped_files_from_new_version(
+        self, project_dir, pack_dir, capsys
+    ):
+        """A 1.0.0 registry record written before ``generated_files`` existed
+        cannot tell edits from old package bytes. A force reinstall of 2.0.0
+        takes every file the new source ships, keeps only files it does not
+        ship, names the kept files, and records the version that is on disk."""
+        manifest_data = yaml.safe_load((pack_dir / "preset.yml").read_text())
+        manifest_data["preset"]["version"] = "1.0.0"
+        (pack_dir / "preset.yml").write_text(yaml.safe_dump(manifest_data))
+        manager = PresetManager(project_dir)
+        manager.install_from_directory(pack_dir, "0.1.5")
+        del manager.registry.data["presets"]["test-pack"]["generated_files"]
+        manager.registry._save()
+
+        installed_dir = project_dir / ".specify" / "presets" / "test-pack"
+        template = installed_dir / "templates" / "spec-template.md"
+        notes = installed_dir / "notes.txt"
+        notes.write_text("user notes\n")
+
+        manifest_data["preset"]["version"] = "2.0.0"
+        (pack_dir / "preset.yml").write_text(yaml.safe_dump(manifest_data))
+        new_template = "# Custom Spec Template\n\nThis is v2.\n"
+        (pack_dir / "templates" / "spec-template.md").write_text(new_template)
+        capsys.readouterr()
+
+        manager.install_from_directory(pack_dir, "0.1.5", force=True)
+
+        installed_manifest = yaml.safe_load((installed_dir / "preset.yml").read_text())
+        assert installed_manifest["preset"]["version"] == "2.0.0"
+        assert manager.registry.get("test-pack")["version"] == "2.0.0"
+        assert template.read_text() == new_template
+        assert notes.read_text() == "user notes\n"
+        generated = manager.registry.get("test-pack")["generated_files"]
+        assert generated[template.relative_to(project_dir).as_posix()] == hashlib.sha256(
+            new_template.encode()
+        ).hexdigest()
+        assert notes.relative_to(project_dir).as_posix() not in generated
+        err = capsys.readouterr().err
+        assert "notes.txt" in err
+        assert "spec-template.md" not in err
+
+    def test_failed_force_reinstall_names_staging_dir_and_retry_command(
+        self, project_dir, pack_dir, monkeypatch
+    ):
+        """When a force reinstall fails after the old package is removed,
+        the error tells the user where the kept files are and how to retry."""
+        manager = PresetManager(project_dir)
+        manager.install_from_directory(pack_dir, "0.1.5")
+        installed_dir = project_dir / ".specify" / "presets" / "test-pack"
+        (installed_dir / "notes.txt").write_text("user notes\n")
+
+        def fail(*_args, **_kwargs):
+            raise RuntimeError("registration failed")
+
+        monkeypatch.setattr(PresetManager, "_register_commands", fail)
+
+        with pytest.raises(PresetError) as excinfo:
+            manager.install_from_directory(pack_dir, "0.1.5", force=True)
+
+        staging_dirs = list(
+            (project_dir / ".specify" / "presets").glob(".reinstall-staging-*")
+        )
+        assert len(staging_dirs) == 1
+        assert (staging_dirs[0] / "notes.txt").read_text() == "user notes\n"
+        message = str(excinfo.value)
+        assert str(staging_dirs[0]) in message
+        assert "specify preset add test-pack" in message
+
     def test_copytree_failure_preserves_custom_payload(
         self, project_dir, pack_dir, monkeypatch
     ):

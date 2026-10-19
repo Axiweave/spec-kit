@@ -210,17 +210,18 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _generated_files_baseline(entry: Any) -> dict[str, str]:
-    """Read the prior install's ``generated_files`` baseline, conservatively.
+def _generated_files_baseline(entry: Any) -> dict[str, str] | None:
+    """Read the prior install's ``generated_files`` baseline.
 
-    A missing, malformed, or absent baseline yields ``{}`` -- callers then
-    treat every on-disk file as unknown/custom (preserved, never silently
-    overwritten), which is the conservative-inclusion default.
+    No prior entry yields ``{}``: callers treat every on-disk file as
+    unknown/custom and keep it. An entry without a usable baseline (written
+    before ``generated_files`` existed) yields ``None``: callers let the new
+    source replace every file it ships and keep only the rest.
     """
     if not isinstance(entry, dict):
         return {}
     baseline = entry.get("generated_files")
-    return baseline if isinstance(baseline, dict) else {}
+    return baseline if isinstance(baseline, dict) else None
 
 
 def _generated_files_entry(
@@ -279,7 +280,7 @@ def _preserve_custom_content_into_staged(
     project_root: Path,
     staged_dir: Path,
     dest_dir: Path,
-    old_baseline: dict[str, str],
+    old_baseline: dict[str, str] | None,
 ) -> dict[str, str | None]:
     """Merge *dest_dir*'s edited/custom files into *staged_dir* before an
     atomic swap, so a reinstall/restore never silently discards content
@@ -291,12 +292,16 @@ def _preserve_custom_content_into_staged(
     copy (if any) alone. Otherwise (an edited producer-matched file, or a
     path *old_baseline* never knew about at all) copy *dest_dir*'s current
     bytes into *staged_dir* at the same relative path, overwriting whatever
-    the new source staged there.
+    the new source staged there. A ``None`` *old_baseline* (a record written
+    before ``generated_files`` existed) cannot tell edits from old package
+    bytes, so the new source's own files win and only paths it does not
+    ship are copied.
 
     Raises ``OSError`` instead of writing when any path component from
     *staged_dir* down through the target leaf is already a symlink (an
     incoming/new source, or a racing concurrent process, staged one at or
-    above a path this call needs to preserve). Skipping that write would
+    above a path this call needs to preserve), or when the new source has a
+    directory at a preserved file's path. Skipping that write would
     let the later atomic swap replace the custom/edited content with the
     symlink -- discarding it -- and writing through the symlink could
     escape *staged_dir* entirely; neither is safe, so the whole install is
@@ -315,6 +320,7 @@ def _preserve_custom_content_into_staged(
     import shutil as _shutil
 
     preserved: dict[str, str | None] = {}
+    kept: list[str] = []
     if not dest_dir.exists():
         return preserved
     for path in sorted(dest_dir.rglob("*")):
@@ -322,7 +328,11 @@ def _preserve_custom_content_into_staged(
             continue
         rel_in_dir = path.relative_to(dest_dir)
         rel_ws = _workspace_relative_generated_path(project_root, path)
-        baseline_hash = old_baseline.get(rel_ws) if rel_ws is not None else None
+        baseline_hash = (
+            old_baseline.get(rel_ws)
+            if old_baseline is not None and rel_ws is not None
+            else None
+        )
         if baseline_hash is not None and _sha256_file(path) == baseline_hash:
             # Unmodified producer content: the new source's own copy (or
             # its absence) governs this path; nothing to preserve.
@@ -336,10 +346,24 @@ def _preserve_custom_content_into_staged(
                     f"at '{staged_target.relative_to(staged_dir)}', which "
                     "conflicts with existing custom content at that path"
                 )
+        if staged_target.is_dir():
+            raise OSError(
+                "Refusing to install: the new source has a directory at "
+                f"'{rel_in_dir.as_posix()}', which conflicts with existing "
+                "custom content at that path"
+            )
+        if old_baseline is None and staged_target.exists():
+            continue
         staged_target.parent.mkdir(parents=True, exist_ok=True)
         _shutil.copy2(path, staged_target)
+        kept.append(rel_in_dir.as_posix())
         if rel_ws is not None:
             preserved[rel_ws] = baseline_hash  # None for unknown custom content
+    if kept:
+        err_console.print(
+            f"Kept existing files in '{dest_dir.name}': " + ", ".join(kept),
+            markup=False,
+        )
     return preserved
 
 
@@ -422,7 +446,7 @@ def _commit_or_preserve_workflow_file(
     dest_file: Path,
     dest_dir: Path,
     existed_before: bool,
-    old_baseline: dict[str, str],
+    old_baseline: dict[str, str] | None,
     new_content: bytes,
 ) -> tuple[bool, Path | None, dict[str, str]]:
     """Commit *staged_file* onto *dest_file*, unless *dest_file* already has
@@ -431,7 +455,9 @@ def _commit_or_preserve_workflow_file(
     a recorded baseline its current bytes no longer match (a user edit) --
     then discard the staged copy and preserve that content untouched,
     exactly as a directory-package restore preserves an edited or fully
-    custom sibling file.
+    custom sibling file. A ``None`` *old_baseline* (a record written before
+    ``generated_files`` existed) always commits: the new source ships
+    *dest_file*, so it replaces the old bytes.
 
     Returns ``(committed, backup_file, generated_files_for_this_path)``.
     When ``committed`` is False nothing on disk changed and *backup_file*
@@ -443,11 +469,14 @@ def _commit_or_preserve_workflow_file(
     prior file).
     """
     rel = _workspace_relative_generated_path(project_root, dest_file)
-    baseline_hash = old_baseline.get(rel) if rel is not None else None
-    if dest_file.exists() and (
+    baseline_hash = (
+        old_baseline.get(rel) if old_baseline is not None and rel is not None else None
+    )
+    if old_baseline is not None and dest_file.exists() and (
         baseline_hash is None or _sha256_file(dest_file) != baseline_hash
     ):
         _safe_discard_staged_workflow_file(staged_file, dest_dir, existed_before)
+        err_console.print(f"Kept existing file '{dest_file}'.", markup=False)
         generated = (
             {rel: baseline_hash}
             if rel is not None and baseline_hash is not None
@@ -1657,16 +1686,23 @@ def _install_workflow_from_catalog(
             entry = dict(existing) if isinstance(existing, dict) else {}
             entry.update(
                 {
-                    "name": definition.name or info.get("name", workflow_id),
-                    "version": definition.version or info.get("version", "0.0.0"),
-                    "description": definition.description
-                    or info.get("description", ""),
                     "source": "catalog",
                     "catalog_name": info.get("_catalog_name", ""),
                     "url": workflow_url,
                     "generated_files": generated_files,
                 }
             )
+            # A kept hand-edited workflow.yml still holds the old version, so
+            # the registry keeps describing it.
+            if committed or not isinstance(existing, dict):
+                entry.update(
+                    {
+                        "name": definition.name or info.get("name", workflow_id),
+                        "version": definition.version or info.get("version", "0.0.0"),
+                        "description": definition.description
+                        or info.get("description", ""),
+                    }
+                )
             try:
                 transaction_registry.add(workflow_id, entry)
             except (OSError, TypeError, ValueError) as exc:

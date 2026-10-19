@@ -2078,8 +2078,8 @@ steps:
         """A reinstall over a hand-edited installed workflow.yml must not
         clobber the edit: the file's producer-hash baseline no longer
         matches its current bytes, so the new dev source's copy is
-        discarded and the edit is kept untouched -- the single-file
-        counterpart to a package install preserving an edited sibling."""
+        discarded and the edit is kept untouched. The registry keeps the
+        version of the kept file, so a later update still offers 2.0.0."""
         from typer.testing import CliRunner
         from specify_cli import app
         from specify_cli.workflows.catalog import WorkflowRegistry
@@ -2099,7 +2099,7 @@ steps:
         assert result.exit_code == 0, result.output
         assert workflow_file.read_text(encoding="utf-8") == edited
         registry = WorkflowRegistry(project_dir)
-        assert registry.get("align-wf")["version"] == "2.0.0"
+        assert registry.get("align-wf")["version"] == "1.0.0"
 
     def test_add_dev_reinstall_restores_workflow_yaml_missing_after_clone(
         self, project_dir, monkeypatch
@@ -2128,15 +2128,15 @@ steps:
         )
         assert WorkflowRegistry(project_dir).get("align-wf")["version"] == "2.0.0"
 
-    def test_add_dev_reinstall_preserves_file_with_no_baseline_recorded(
+    def test_add_dev_reinstall_without_baseline_replaces_shipped_workflow_yaml(
         self, project_dir, monkeypatch
     ):
-        """A pre-generated_files registry record (or one that otherwise
-        lost its baseline) has no recorded hash for its installed
-        workflow.yml at all. Reinstalling over it must treat that file as
-        unknown content -- conservatively preserved, never silently
-        overwritten, exactly like a file whose recorded baseline no
-        longer matches its current bytes."""
+        """A registry record written before generated_files existed cannot
+        tell an edit from old package bytes. The new source ships
+        workflow.yml, so a 1.0.0 -> 2.0.0 reinstall writes the new file and
+        the registry version matches the bytes on disk."""
+        import hashlib
+
         from typer.testing import CliRunner
         from specify_cli import app
         from specify_cli.workflows.catalog import WorkflowRegistry
@@ -2153,16 +2153,18 @@ steps:
         workflow_file = (
             project_dir / ".specify" / "workflows" / "align-wf" / "workflow.yml"
         )
-        legacy_bytes = workflow_file.read_bytes()
+        new_bytes = self.WORKFLOW_YAML.format(version="2.0.0").encode()
 
         src = self._write_workflow_dir(project_dir, version="2.0.0")
         result = runner.invoke(app, ["workflow", "add", str(src), "--dev"])
 
         assert result.exit_code == 0, result.output
-        assert workflow_file.read_bytes() == legacy_bytes
+        assert workflow_file.read_bytes() == new_bytes
         entry = WorkflowRegistry(project_dir).get("align-wf")
         assert entry["version"] == "2.0.0"
-        assert entry.get("generated_files", {}) == {}
+        assert entry["generated_files"] == {
+            ".specify/workflows/align-wf/workflow.yml": hashlib.sha256(new_bytes).hexdigest()
+        }
 
     def test_add_dev_reinstall_preserves_unrelated_registry_fields(
         self, project_dir, monkeypatch
@@ -2656,7 +2658,7 @@ steps:
         assert result.exit_code == 0, result.output
         assert workflow_file.read_bytes() == edited
         registry = WorkflowRegistry(project_dir)
-        assert registry.get("align-wf")["version"] == "2.0.0"
+        assert registry.get("align-wf")["version"] == "1.0.0"
 
     def test_add_catalog_reinstall_restores_workflow_yaml_missing_after_clone(
         self, project_dir, monkeypatch
@@ -3744,6 +3746,79 @@ steps:
             "generated_files"
         ]
         assert ".specify/workflows/align-wf/scripts/helper.sh" in generated
+
+    def test_reinstall_without_baseline_takes_shipped_files_from_new_version(
+        self, project_dir, monkeypatch
+    ):
+        """A 1.0.0 record written before generated_files existed cannot tell
+        edits from old package bytes. A 2.0.0 reinstall takes every file the
+        new source ships, keeps only files it does not ship, and records the
+        version that is on disk."""
+        from typer.testing import CliRunner
+        from specify_cli import app
+        from specify_cli.workflows.catalog import WorkflowRegistry
+
+        monkeypatch.chdir(project_dir)
+        src = self._write_source_package(project_dir, version="1.0.0")
+        runner = CliRunner()
+        first = runner.invoke(app, ["workflow", "add", str(src), "--dev"])
+        assert first.exit_code == 0, first.output
+        registry = WorkflowRegistry(project_dir)
+        legacy_entry = dict(registry.get("align-wf"))
+        del legacy_entry["generated_files"]
+        registry.add("align-wf", legacy_entry)
+
+        installed = project_dir / ".specify" / "workflows" / "align-wf"
+        (installed / "notes.txt").write_text("kept across reinstall\n")
+        (src / "workflow.yml").write_text(
+            self.WORKFLOW_YAML.format(version="2.0.0"), encoding="utf-8"
+        )
+        (src / "scripts" / "helper.sh").write_text("echo v2 helper\n")
+
+        second = runner.invoke(app, ["workflow", "add", str(src), "--dev"])
+
+        assert second.exit_code == 0, second.output
+        assert (installed / "workflow.yml").read_text(encoding="utf-8") == (
+            self.WORKFLOW_YAML.format(version="2.0.0")
+        )
+        assert (installed / "scripts" / "helper.sh").read_text() == "echo v2 helper\n"
+        assert (installed / "notes.txt").read_text() == "kept across reinstall\n"
+        assert "notes.txt" in second.stderr
+        assert "helper.sh" not in second.stderr
+        entry = WorkflowRegistry(project_dir).get("align-wf")
+        assert entry["version"] == "2.0.0"
+        assert ".specify/workflows/align-wf/scripts/helper.sh" in entry["generated_files"]
+        assert ".specify/workflows/align-wf/notes.txt" not in entry["generated_files"]
+
+    def test_reinstall_rejects_new_directory_at_edited_file_path(
+        self, project_dir, monkeypatch
+    ):
+        """An edited file whose path is a directory in the new package must
+        fail the install, not land inside that directory."""
+        import shutil
+
+        from typer.testing import CliRunner
+        from specify_cli import app
+        from specify_cli.workflows.catalog import WorkflowRegistry
+
+        monkeypatch.chdir(project_dir)
+        src = self._write_source_package(project_dir, version="1.0.0")
+        runner = CliRunner()
+        first = runner.invoke(app, ["workflow", "add", str(src), "--dev"])
+        assert first.exit_code == 0, first.output
+
+        installed = project_dir / ".specify" / "workflows" / "align-wf"
+        (installed / "scripts" / "helper.sh").write_text("echo user edit\n")
+        original_registry_entry = WorkflowRegistry(project_dir).get("align-wf")
+        shutil.rmtree(src / "scripts")
+        (src / "scripts" / "helper.sh").mkdir(parents=True)
+        (src / "scripts" / "helper.sh" / "main.sh").write_text("echo v2\n")
+
+        result = runner.invoke(app, ["workflow", "add", str(src), "--dev"])
+
+        assert result.exit_code != 0
+        assert (installed / "scripts" / "helper.sh").read_text() == "echo user edit\n"
+        assert WorkflowRegistry(project_dir).get("align-wf") == original_registry_entry
 
     @pytest.mark.skipif(not hasattr(os, "symlink"), reason="symlinks are unavailable")
     def test_reinstall_rejects_incoming_symlink_conflicting_with_custom_file(

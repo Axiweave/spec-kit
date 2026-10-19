@@ -111,6 +111,28 @@ class TestPresetSkills(PresetArtifactTestHelpers):
         assert parsed["argument-hint"] == arg_hint
         assert parsed["description"] == long_description
 
+    def test_force_reinstall_does_not_restore_stale_composed_command(
+        self, project_dir, temp_dir
+    ):
+        """``.composed/`` is rebuilt by registration, so a force reinstall
+        must not carry an old composed command into the new skill."""
+        skills_dir = project_dir / ".claude" / "skills"
+        skill_file = self._install_arg_hint_preset(
+            project_dir, temp_dir, "claude", skills_dir, "Hint", "<arg>"
+        )
+        installed_dir = project_dir / ".specify" / "presets" / "hint-preset-claude"
+        stale = installed_dir / ".composed" / "speckit.hinttest.cmd.md"
+        stale.parent.mkdir()
+        stale.write_text("---\ndescription: old\n---\n\nSTALE COMPOSED BODY\n")
+
+        PresetManager(project_dir).install_from_directory(
+            temp_dir / "hint-preset-claude", "0.1.5", force=True
+        )
+
+        content = skill_file.read_text(encoding="utf-8")
+        assert "STALE COMPOSED BODY" not in content
+        assert "Preset command body." in content
+
     def test_argument_hint_not_added_for_non_claude_preset_command(self, project_dir, temp_dir):
         """Non-Claude skills agents must not receive argument-hint in preset skills."""
         arg_hint = "<init | update | list | check> [area]"

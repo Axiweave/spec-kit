@@ -18,6 +18,33 @@ from . import _commands
 from . import install
 
 
+def _bundled_extension_path(extension_id: str, version: str | None) -> Path | None:
+    """Return the bundled copy of *extension_id*, or ``None`` when it is not bundled.
+
+    Exit when ``--version`` asks for a release this Spec Kit does not ship.
+    """
+    from .. import locate_bundled_extension
+    from . import ExtensionManifest
+
+    path = locate_bundled_extension(extension_id)
+    if path is None or version is None:
+        return path
+    shipped = ExtensionManifest(path / "extension.yml").version
+    try:
+        matches = Version(shipped) == Version(version)
+    except InvalidVersion:
+        matches = False
+    if not matches:
+        console.print(
+            f"[red]Error:[/red] Bundled extension '{_escape_markup(extension_id)}' "
+            f"version {_escape_markup(version)} is not shipped with this Spec Kit release "
+            f"(it ships {_escape_markup(shipped)}). "
+            "Upgrade Spec Kit to get a different version."
+        )
+        raise typer.Exit(1)
+    return path
+
+
 @_commands.extension_app.command("add")
 def extension_add(
     extension: str = typer.Argument(help="Extension name or path"),
@@ -28,7 +55,6 @@ def extension_add(
     version: Optional[str] = typer.Option(None, "--version", help="Install an exact version from a catalog"),
 ):
     """Install an extension."""
-    from .. import locate_bundled_extension
     from . import ExtensionManager, ExtensionCatalog, ExtensionError, ValidationError, CompatibilityError, REINSTALL_COMMAND
 
     # Compatibility callers invoke this function directly, in which case
@@ -145,10 +171,7 @@ def extension_add(
 
             else:
                 # Try bundled extensions first (shipped with spec-kit)
-                bundled_path = (
-                    locate_bundled_extension(extension)
-                    if version is None else None
-                )
+                bundled_path = _bundled_extension_path(extension, version)
                 if bundled_path is not None:
                     manifest = manager.install_from_directory(
                         bundled_path, speckit_version, priority=priority, force=force
@@ -170,7 +193,16 @@ def extension_add(
                         console.print("  specify extension search")
                         raise typer.Exit(1)
 
-                    if version is not None:
+                    # If catalog resolved a display name to an ID, check bundled again
+                    resolved_id = ext_info['id']
+                    if resolved_id != extension:
+                        bundled_path = _bundled_extension_path(resolved_id, version)
+                        if bundled_path is not None:
+                            manifest = manager.install_from_directory(
+                                bundled_path, speckit_version, priority=priority, force=force
+                            )
+
+                    if bundled_path is None and version is not None:
                         # Resolve within the winning catalog source. A missing
                         # historical release must not fall through to a lower
                         # priority (or discovery-only) catalog. Reuse the entry
@@ -191,39 +223,6 @@ def extension_add(
                                 "is from a discovery-only catalog and cannot be installed."
                             )
                             raise typer.Exit(1)
-
-                    # If catalog resolved a display name to an ID, check bundled again
-                    resolved_id = ext_info['id']
-                    if version is not None and ext_info.get("bundled") and not ext_info.get("download_url"):
-                        from . import ExtensionManifest
-
-                        candidate = locate_bundled_extension(resolved_id)
-                        if candidate is not None:
-                            bundled_manifest = ExtensionManifest(candidate / "extension.yml")
-                            try:
-                                packaged_matches = Version(bundled_manifest.version) == Version(
-                                    version
-                                )
-                            except InvalidVersion:
-                                packaged_matches = False
-                            if packaged_matches:
-                                bundled_path = candidate
-                                manifest = manager.install_from_directory(
-                                    bundled_path, speckit_version, priority=priority, force=force
-                                )
-                        if bundled_path is None:
-                            console.print(
-                                f"[red]Error:[/red] Bundled extension '{_escape_markup(resolved_id)}' "
-                                f"version {_escape_markup(version)} is not shipped with this Spec Kit release. "
-                                "Upgrade Spec Kit or choose an available catalog archive."
-                            )
-                            raise typer.Exit(1)
-                    if version is None and resolved_id != extension:
-                        bundled_path = locate_bundled_extension(resolved_id)
-                        if bundled_path is not None:
-                            manifest = manager.install_from_directory(
-                                bundled_path, speckit_version, priority=priority, force=force
-                            )
 
                     if bundled_path is None:
                         # Bundled extensions without a download URL must come from the local package

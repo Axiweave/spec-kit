@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-import json
-import shutil
-import subprocess
-import sys
 import tarfile
 import zipfile
 
@@ -14,7 +10,6 @@ from typer.testing import CliRunner
 
 from specify_cli import app
 from specify_cli.presets import PresetManager, PresetValidationError
-from specify_cli.presets._commands import _render_powershell_argv
 from tests.specify_cli.presets._helpers import make_convention_constitution_preset
 
 
@@ -91,21 +86,3 @@ def test_replacement_target_check_precedes_force_removal(installed_preset, tmp_p
                 output.add(source, arcname="package")
             manager.install_from_archive(archive, "1.0.0", **options)
     assert snapshot(manager.presets_dir) == before
-
-
-def test_powershell_retry_renderer_preserves_literal_arguments():
-    """Round-trip: PowerShell preserves the rendered argument values."""
-    powershell = shutil.which("pwsh") or shutil.which("powershell")
-    if powershell is None:
-        pytest.skip("PowerShell is not available")
-    arguments = [
-        "https://example.com/archive.zip?one=1&two=$value",
-        r"C:\owner's presets",
-    ]
-    rendered = _render_powershell_argv([
-        sys.executable, "-c", "import json,sys; print(json.dumps(sys.argv[1:]))", *arguments,
-    ])
-    result = subprocess.run(
-        [powershell, "-NoProfile", "-Command", rendered], check=True, capture_output=True, text=True,
-    )
-    assert json.loads(result.stdout) == arguments

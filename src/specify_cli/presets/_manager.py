@@ -87,8 +87,9 @@ def _capture_custom_payload(
     same keying ``_hash_produced_files`` uses, not the package-relative
     path under ``dest_dir`` -- and covers the declaration manifest the same
     way as any other file, since its own produced bytes are recorded in
-    ``generated_files`` too. Refuse symlinks and unreadable files before
-    removing the old package.
+    ``generated_files`` too. ``.composed/`` is skipped: registration
+    rewrites it from the priority stack after the baseline is hashed.
+    Refuse symlinks and unreadable files before removing the old package.
     """
     if not isinstance(old_metadata, dict):
         old_metadata = {}
@@ -103,6 +104,8 @@ def _capture_custom_payload(
 
     for current_dir, subdirs, files in os.walk(dest_dir, followlinks=False, onerror=fail_walk):
         current_path = Path(current_dir)
+        if current_path == dest_dir and ".composed" in subdirs:
+            subdirs.remove(".composed")
         for name in [*subdirs, *files]:
             path = current_path / name
             mode = path.lstat().st_mode
@@ -556,6 +559,15 @@ class PresetManager(_PresetCommandMethods, _PresetSkillMethods):
         if dest_dir.exists():
             shutil.rmtree(dest_dir)
 
+        def _staging_hint() -> str:
+            if custom_payload_staging_dir is None:
+                return ""
+            return (
+                f" Your kept files are saved in '{custom_payload_staging_dir}'. "
+                f"Retry with 'specify preset add {manifest.id}', then copy them "
+                f"back into '{dest_dir}'."
+            )
+
         def _restore_custom_payload_file(target: Path, content: bytes, mode: int) -> None:
             try:
                 ensure_safe_shared_directory(self.workspace_root, target.parent)
@@ -564,16 +576,9 @@ class PresetManager(_PresetCommandMethods, _PresetSkillMethods):
                 )
             except BaseException as exc:
                 rel_label = target.relative_to(dest_dir).as_posix()
-                hint = (
-                    f" A durable copy of the preserved content was retained at "
-                    f"'{custom_payload_staging_dir}'; recover it manually before "
-                    f"retrying."
-                    if custom_payload_staging_dir is not None
-                    else ""
-                )
                 raise PresetError(
                     f"Could not restore preserved content for '{rel_label}': "
-                    f"{exc}.{hint}"
+                    f"{exc}.{_staging_hint()}"
                 ) from exc
 
         try:
@@ -589,12 +594,32 @@ class PresetManager(_PresetCommandMethods, _PresetSkillMethods):
                     _restore_custom_payload_file(dest_dir / rel, content, mode)
             raise
 
+        # A record without a producer baseline (written before
+        # generated_files existed) cannot tell edits from old package bytes,
+        # so the new source owns every file it ships. Only files it does not
+        # ship are kept.
+        if old_metadata is not None and not isinstance(
+            old_metadata.get("generated_files"), dict
+        ):
+            custom_payload = {
+                rel: entry for rel, entry in custom_payload.items()
+                if not (dest_dir / rel).is_file()
+            }
+
         # Restore any preserved custom/edited payload now, before the still
         # -fallible registration and registry.add() steps below run — so a
         # failure there finds the user's bytes already durably on disk
         # instead of only held in this function's memory.
         for rel, (content, mode) in custom_payload.items():
             _restore_custom_payload_file(dest_dir / rel, content, mode)
+        if custom_payload:
+            from ..terminal import err_console
+
+            err_console.print(
+                f"Kept existing files in preset '{manifest.id}': "
+                + ", ".join(sorted(custom_payload)),
+                markup=False,
+            )
 
         # Pre-register the preset so that composition resolution can see it
         # in the priority stack when resolving composed command content.
@@ -655,7 +680,7 @@ class PresetManager(_PresetCommandMethods, _PresetSkillMethods):
             self.registry.update(manifest.id, {
                 "registered_skills": registered_skills,
             })
-        except Exception:
+        except Exception as exc:
             # Roll back all side effects. _register_skills persists each
             # successful write immediately, so reload that partial map when
             # a later template fails before the call can return.
@@ -675,6 +700,8 @@ class PresetManager(_PresetCommandMethods, _PresetSkillMethods):
             except OSError:
                 pass  # best-effort cleanup; don't mask the original error
             self.registry.remove(manifest.id)
+            if custom_payload_staging_dir is not None:
+                raise PresetError(f"{exc}.{_staging_hint()}") from exc
             raise
 
         # Post-commit cleanup: the registry now records this preset as

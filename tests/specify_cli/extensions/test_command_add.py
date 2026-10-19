@@ -1351,40 +1351,83 @@ class TestExtensionGeneratedFilesProvenance:
 
         assert manifest_path.read_text() == edited
 
-    def test_force_reinstall_conserves_unedited_content_without_baseline(
-        self, extension_dir, project_dir
+    def test_force_reinstall_without_baseline_takes_shipped_files_from_new_version(
+        self, extension_dir, project_dir, capsys
     ):
-        """A legacy registry entry predating this baseline (no
-        ``generated_files``) cannot prove any installed file is safe to
-        regenerate, so a force reinstall must conservatively keep the old
-        file instead of silently adopting a differently-worded upstream
-        update."""
+        """A 1.0.0 registry record written before ``generated_files`` existed
+        cannot tell edits from old package bytes. A force reinstall of 2.0.0
+        takes every file the new source ships, keeps only files it does not
+        ship, names the kept files, and records the version that is on disk."""
+        manifest_data = yaml.safe_load((extension_dir / "extension.yml").read_text())
+        manifest_data["extension"]["version"] = "1.0.0"
+        (extension_dir / "extension.yml").write_text(yaml.dump(manifest_data))
         manager = ExtensionManager(project_dir)
         manager.install_from_directory(
             extension_dir, "0.1.0", register_commands=False
         )
-
-        # Simulate a pre-T005 registry entry: strip the new baseline field.
         entry = manager.registry.data["extensions"]["test-ext"]
         del entry["generated_files"]
         manager.registry._save()
 
         installed_dir = project_dir / ".specify" / "extensions" / "test-ext"
         hello = installed_dir / "commands" / "hello.md"
-        original_hello = hello.read_text()
+        notes = installed_dir / "notes.txt"
+        notes.write_text("user notes\n")
 
-        # The upstream source now ships different content for the same file.
-        (extension_dir / "commands" / "hello.md").write_text(
-            "---\ndescription: Updated\n---\n\nUpdated hello\n"
-        )
+        manifest_data["extension"]["version"] = "2.0.0"
+        (extension_dir / "extension.yml").write_text(yaml.dump(manifest_data))
+        new_hello = "---\ndescription: Updated\n---\n\nUpdated hello\n"
+        (extension_dir / "commands" / "hello.md").write_text(new_hello)
+        capsys.readouterr()
 
         manager.install_from_directory(
             extension_dir, "0.1.0", register_commands=False, force=True
         )
 
-        # Without a producer baseline to prove the old file was untouched
-        # package output, conservation must win: the old bytes survive.
-        assert hello.read_text() == original_hello
+        installed_manifest = yaml.safe_load((installed_dir / "extension.yml").read_text())
+        assert installed_manifest["extension"]["version"] == "2.0.0"
+        assert manager.registry.get("test-ext")["version"] == "2.0.0"
+        assert hello.read_text() == new_hello
+        assert notes.read_text() == "user notes\n"
+        generated = manager.registry.get("test-ext")["generated_files"]
+        assert generated[hello.relative_to(project_dir).as_posix()] == hashlib.sha256(
+            new_hello.encode()
+        ).hexdigest()
+        assert notes.relative_to(project_dir).as_posix() not in generated
+        err = capsys.readouterr().err
+        assert "notes.txt" in err
+        assert "hello.md" not in err
+
+    def test_failed_force_reinstall_names_staging_dir_and_retry_command(
+        self, extension_dir, project_dir, monkeypatch
+    ):
+        """When a force reinstall fails after the old package is removed,
+        the error tells the user where the kept files are and how to retry."""
+        manager = ExtensionManager(project_dir)
+        manager.install_from_directory(
+            extension_dir, "0.1.0", register_commands=False
+        )
+        installed_dir = project_dir / ".specify" / "extensions" / "test-ext"
+        (installed_dir / "notes.txt").write_text("user notes\n")
+
+        def fail(*_args, **_kwargs):
+            raise RuntimeError("registration failed")
+
+        monkeypatch.setattr(ExtensionManager, "_register_extension_skills", fail)
+
+        with pytest.raises(ExtensionError) as excinfo:
+            manager.install_from_directory(
+                extension_dir, "0.1.0", register_commands=False, force=True
+            )
+
+        staging_dirs = list(
+            (project_dir / ".specify" / "extensions").glob(".reinstall-staging-*")
+        )
+        assert len(staging_dirs) == 1
+        assert (staging_dirs[0] / "notes.txt").read_text() == "user notes\n"
+        message = str(excinfo.value)
+        assert str(staging_dirs[0]) in message
+        assert "specify extension add test-ext" in message
 
     def test_force_reinstall_with_version_bump_updates_unedited_content(
         self, extension_dir, project_dir

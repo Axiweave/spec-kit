@@ -442,6 +442,8 @@ steps:
             )
 
         assert result.exit_code == 0, result.output
+        assert workflow_file.read_bytes() == data
+        assert WorkflowRegistry(project_dir).get("align-wf")["version"] == "2.0.0"
         assert stat.S_IMODE(workflow_file.stat().st_mode) == 0o640
 
     def test_update_skips_corrupted_registry_entry(self, project_dir, monkeypatch):

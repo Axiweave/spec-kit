@@ -186,14 +186,18 @@ def workflow_add(
                 try:
                     entry = dict(existing) if isinstance(existing, dict) else {}
                     entry.update(
-                        {
-                            "name": definition.name,
-                            "version": definition.version,
-                            "description": definition.description,
-                            "source": source_label,
-                            "generated_files": generated_files,
-                        }
+                        {"source": source_label, "generated_files": generated_files}
                     )
+                    # A kept hand-edited workflow.yml still holds the old
+                    # version, so the registry keeps describing it.
+                    if committed or not isinstance(existing, dict):
+                        entry.update(
+                            {
+                                "name": definition.name,
+                                "version": definition.version,
+                                "description": definition.description,
+                            }
+                        )
                     transaction_registry.add(definition.id, entry)
                 except (OSError, TypeError, ValueError) as exc:
                     if committed:
