@@ -6,7 +6,7 @@
     "agent-context": {
       "name": "Coding Agent Context",
       "id": "agent-context",
-      "version": "1.0.2",
+      "version": "1.0.3",
       "description": "Manages coding agent context/instruction files (e.g., CLAUDE.md, copilot-instructions.md) with project-specific plan references and configurable markers",
       "author": "spec-kit-core",
       "repository": "https://github.com/github/spec-kit",
@@ -82,7 +82,7 @@
     "git": {
       "name": "Git Branching Workflow",
       "id": "git",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "description": "Feature branch creation, numbering (sequential/timestamp), validation, and Git remote detection",
       "author": "spec-kit-core",
       "repository": "https://github.com/github/spec-kit",
@@ -97,7 +97,7 @@
     "github": {
       "name": "GitHub Integration",
       "id": "github",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "description": "GitHub platform integration for Spec Kit - create GitHub issues from a feature's task list",
       "author": "spec-kit-core",
       "repository": "https://github.com/github/spec-kit",

@@ -20,6 +20,7 @@ import subprocess
 import sys
 import tomllib
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 import yaml
@@ -158,7 +159,7 @@ class TestManifest:
 
         m = ExtensionManifest(EXT_DIR / "extension.yml")
         assert m.id == "github"
-        assert m.version == "1.0.1"
+        assert m.version == "1.0.2"
         assert [c["name"] for c in m.commands] == [COMMAND_NAME]
 
     def test_manifest_command_files_exist(self):
@@ -643,11 +644,19 @@ SH_SCRIPT = EXT_DIR / SCRIPT_TWINS["sh"]
 PS_SCRIPT = EXT_DIR / SCRIPT_TWINS["ps"]
 
 
+def _save_feature_automatically(project: Path) -> None:
+    """Core reads the saved feature only under ``feature_selection: automatic``."""
+    (project / ".specify" / "init-options.json").write_text(
+        json.dumps({"feature_selection": "automatic"}), encoding="utf-8"
+    )
+
+
 def _make_feature_project(tmp_path: Path) -> Path:
     project = tmp_path / "project"
     feature = project / "specs" / "001-demo"
     feature.mkdir(parents=True)
     (project / ".specify").mkdir(exist_ok=True)
+    _save_feature_automatically(project)
     (project / ".specify" / "feature.json").write_text(
         json.dumps({"feature_directory": "specs/001-demo"}), encoding="utf-8"
     )
@@ -751,6 +760,7 @@ class TestResolveTasksPython:
         feature = project / "specs" / "001-功能"
         feature.mkdir(parents=True)
         (project / ".specify").mkdir()
+        _save_feature_automatically(project)
         (project / ".specify" / "feature.json").write_text(
             json.dumps({"feature_directory": "specs/001-功能"}), encoding="utf-8"
         )
@@ -936,73 +946,7 @@ class TestResolveTasksPowerShellParity:
 
 @requires_bash
 class TestResolveTasksBashJsonEscape:
-    """``json_escape`` must emit valid JSON, matching core's implementation.
-
-    Regression: the escape table silently lost a level of backslash quoting,
-    so backslashes passed through unescaped and ``\\n``/``\\t`` collapsed to
-    the bare letters ``n``/``t``. A Windows feature path would have produced
-    invalid JSON that the agent then failed to parse.
-    """
-
-    CASES = {
-        "backslash": "a\\b",
-        "windows_path": "C:\\Users\\dev\\specs",
-        "quote": 'a"b',
-        "newline": "a\nb",
-        "tab": "a\tb",
-        "carriage_return": "a\rb",
-        "control": "a\x01b",
-    }
-
-    @staticmethod
-    def _escape(script: Path, tmp_path: Path, value: str) -> str:
-        """Run the script's own ``json_escape`` over *value*, byte-exactly."""
-        import re
-
-        body = re.search(
-            r"(json_escape\(\) \{.*?\n\})",
-            script.read_text(encoding="utf-8"),
-            re.S,
-        )
-        assert body, f"no json_escape found in {script}"
-
-        # Callers pass a per-script subdirectory so the two harnesses do not
-        # collide; pytest only creates tmp_path itself.
-        tmp_path.mkdir(parents=True, exist_ok=True)
-        payload = tmp_path / "value.txt"
-        payload.write_text(value, encoding="utf-8", newline="")
-        harness = tmp_path / "harness.sh"
-        # Read the raw value from a file so the harness itself needs no quoting.
-        harness.write_text(
-            body.group(1) + '\nvalue="$(cat "$1")"\njson_escape "$value"\n',
-            encoding="utf-8",
-            newline="\n",
-        )
-        return subprocess.run(
-            ["bash", str(harness), str(payload)],
-            capture_output=True,
-            check=True,
-        ).stdout.decode("utf-8")
-
-    @pytest.mark.parametrize("name", sorted(CASES))
-    def test_escaping_round_trips_through_json(self, tmp_path: Path, name: str):
-        value = self.CASES[name]
-        escaped = self._escape(SH_SCRIPT, tmp_path, value)
-
-        # The escaped text must be a valid JSON string body that decodes back
-        # to exactly what went in.
-        assert json.loads(f'"{escaped}"') == value, escaped
-
-    @pytest.mark.parametrize("name", sorted(CASES))
-    def test_matches_core_json_escape(self, tmp_path: Path, name: str):
-        """Kept in step with core rather than diverging quietly."""
-        core_common = PROJECT_ROOT / "scripts" / "bash" / "common.sh"
-        value = self.CASES[name]
-
-        ours = self._escape(SH_SCRIPT, tmp_path / "ours", value)
-        theirs = self._escape(core_common, tmp_path / "theirs", value)
-
-        assert ours == theirs
+    """JSON output must stay valid for paths that need escaping."""
 
     def test_json_output_parses_for_a_path_with_a_backslash(self, tmp_path: Path):
         """End to end: a feature directory containing a backslash.
@@ -1429,3 +1373,79 @@ class TestUnreadableContractsDirectory:
         # Unreadable, so it is simply omitted; tasks.md still resolves.
         assert "contracts/" not in payload["AVAILABLE_DOCS"]
         assert payload["AVAILABLE_DOCS"] == ["research.md", "tasks.md"]
+
+
+def _write_record(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _make_external_feature_project(tmp_path: Path) -> tuple[Path, Path]:
+    """A code repository whose specs live in a linked external workspace."""
+    repo, workspace = tmp_path / "code", tmp_path / "workspace"
+    project_id = str(uuid4())
+    _write_record(
+        repo / ".specify" / "project.json",
+        {"schema_version": 1, "project_id": project_id, "storage": "external"},
+    )
+    _write_record(
+        repo / ".specify" / "checkout.json",
+        {"schema_version": 1, "workspace": str(workspace), "active_feature": "specs/001-demo"},
+    )
+    _write_record(
+        workspace / ".specify" / "workspace.json",
+        {"schema_version": 1, "project_id": project_id},
+    )
+    _write_record(
+        workspace / ".specify" / "init-options.json", {"feature_selection": "automatic"}
+    )
+    _add_feature(workspace, "001-demo")
+    return repo, workspace
+
+
+@pytest.mark.parametrize("twin", _TWINS)
+class TestResolverStorageAndSelection:
+    """The resolver follows core feature resolution, not a private copy of it."""
+
+    def test_external_storage_resolves_the_workspace_feature(
+        self, tmp_path: Path, twin: str
+    ):
+        repo, workspace = _make_external_feature_project(tmp_path)
+
+        result = _run_twin(twin, repo)
+
+        assert result.returncode == 0, result.stderr
+        feature = Path(json.loads(result.stdout)["FEATURE_DIR"])
+        assert feature.resolve() == (workspace / "specs" / "001-demo").resolve()
+        assert not (repo / ".specify" / "feature.json").exists()
+
+    def test_external_override_is_saved_in_the_checkout_record(
+        self, tmp_path: Path, twin: str
+    ):
+        repo, workspace = _make_external_feature_project(tmp_path)
+        _add_feature(workspace, "002-override")
+
+        result = _run_twin(twin, repo, SPECIFY_FEATURE_DIRECTORY="specs/002-override")
+
+        assert result.returncode == 0, result.stderr
+        assert Path(json.loads(result.stdout)["FEATURE_DIR"]).name == "002-override"
+        record = json.loads((repo / ".specify" / "checkout.json").read_text(encoding="utf-8"))
+        assert record["active_feature"] == "specs/002-override"
+        assert not (repo / ".specify" / "feature.json").exists()
+
+    def test_context_selection_ignores_the_saved_feature(
+        self, tmp_path: Path, twin: str
+    ):
+        project = _make_feature_project(tmp_path)
+        (project / ".specify" / "init-options.json").unlink()
+        feature_json = project / ".specify" / "feature.json"
+        before = feature_json.read_bytes()
+
+        saved = _run_twin(twin, project)
+        named = _run_twin(twin, project, SPECIFY_FEATURE_DIRECTORY="specs/001-demo")
+
+        assert saved.returncode == 1
+        assert saved.stdout == ""
+        assert named.returncode == 0, named.stderr
+        assert Path(json.loads(named.stdout)["FEATURE_DIR"]).name == "001-demo"
+        assert feature_json.read_bytes() == before

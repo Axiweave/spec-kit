@@ -284,7 +284,9 @@ function Read-GitConfigValue {
 # Explicit choices bypass saved modes without changing project configuration.
 if (-not $env:GIT_BRANCH_NAME -and -not $Timestamp -and -not $PSBoundParameters.ContainsKey('Number')) {
     $mode = Read-GitConfigValue -Key 'branch_numbering'
-    if (-not $mode) {
+    if (-not $mode -and $storage -and (Get-Command Get-FeatureNumberingMode -CommandType Function -ErrorAction SilentlyContinue)) {
+        $mode = Get-FeatureNumberingMode -Storage $storage
+    } elseif (-not $mode) {
         $mode = 'sequential'
         $optionsPath = if ($storage) {
             Resolve-StoragePath $storage '.specify/init-options.json'

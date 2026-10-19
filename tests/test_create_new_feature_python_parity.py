@@ -1920,6 +1920,32 @@ def test_python_later_claim_loses_even_with_smaller_name(
     ]
 
 
+def test_python_allow_existing_new_directory_still_loses_a_later_claim(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--allow-existing-branch skips the tie rescan only when it reuses a directory."""
+    _in_process(monkeypatch, repo)
+    specs = repo / "specs"
+    (specs / "007-old").mkdir(parents=True)
+    real_resolve = create_new_feature.resolve_template_content
+    ran_x = False
+
+    def run_x_first(name: str, root: Path) -> str:
+        nonlocal ran_x
+        if not ran_x:
+            ran_x = True
+            assert create_new_feature.main(["--json", "--short-name", "zzz", "x"]) == 0
+        return real_resolve(name, root)
+
+    monkeypatch.setattr(create_new_feature, "resolve_template_content", run_x_first)
+
+    assert create_new_feature.main(
+        ["--json", "--allow-existing-branch", "--short-name", "aaa", "x"]
+    ) == 0
+
+    assert sorted(path.name for path in specs.iterdir()) == ["007-old", "008-zzz", "009-aaa"]
+
+
 @pytest.mark.parametrize("scheme", [(), ("--timestamp",)], ids=["sequential", "timestamp"])
 def test_python_forced_mutual_loss_ends_with_distinct_prefixes(
     repo: Path, monkeypatch: pytest.MonkeyPatch, scheme: tuple[str, ...]

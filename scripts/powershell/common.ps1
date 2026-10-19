@@ -12,13 +12,15 @@ function Find-SpecifyRoot {
     $resolved = Resolve-Path -LiteralPath $StartDir -ErrorAction SilentlyContinue
     $current = if ($resolved) { $resolved.Path } else { $null }
     if (-not $current) { return $null }
+    $homeDir = if ($HOME) { (Resolve-Path -LiteralPath $HOME -ErrorAction SilentlyContinue).Path } else { $null }
 
     while ($true) {
         if (Test-Path -LiteralPath (Join-Path $current ".specify") -PathType Container) {
             return $current
         }
         $parent = Split-Path $current -Parent
-        if ([string]::IsNullOrEmpty($parent) -or $parent -eq $current) {
+        # A user-level ~/.specify holds settings, so only a start at home selects it.
+        if ([string]::IsNullOrEmpty($parent) -or $parent -eq $current -or $parent -eq $homeDir) {
             return $null
         }
         $current = $parent
@@ -217,15 +219,13 @@ function Resolve-StoragePath {
     return Join-Path $Storage.Root $Path
 }
 
-# Read the project's saved-feature policy from the workspace init options.
-# Returns 'context' (the default) or 'automatic'. A context project never reads
-# or writes the saved feature, so each command names its feature with
-# SPECIFY_FEATURE_DIRECTORY. An invalid choice throws before any write.
-function Get-FeatureSelectionMode {
-    param([Parameter(Mandatory = $true)]$Storage)
+# Return one init-options choice. The first allowed value is the default.
+# An invalid choice throws before any write.
+function Get-InitOption {
+    param([Parameter(Mandatory = $true)]$Storage, [string]$Key, [string[]]$Allowed)
     $optionsPath = Resolve-StoragePath $Storage '.specify/init-options.json'
     $item = Get-Item -LiteralPath $optionsPath -Force -ErrorAction SilentlyContinue
-    if (-not $item) { return 'context' }
+    if (-not $item) { return $Allowed[0] }
     if ($item.PSIsContainer -or ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
         throw "Cannot read project choices at ${optionsPath}: Project choices must be a regular file."
     }
@@ -238,14 +238,29 @@ function Get-FeatureSelectionMode {
     if (-not $text.TrimStart().StartsWith('{') -or $options -isnot [PSCustomObject]) {
         throw "Cannot read project choices at ${optionsPath}: Project choices must be a JSON object."
     }
-    $mode = 'context'
-    if ($options.PSObject.Properties.Name -ccontains 'feature_selection') {
-        $mode = $options.feature_selection
+    $value = $Allowed[0]
+    if ($options.PSObject.Properties.Name -ccontains $Key) {
+        $value = $options.$Key
     }
-    if ($mode -isnot [string] -or $mode -cnotin @('context', 'automatic')) {
-        throw "feature_selection must be context or automatic: $optionsPath"
+    if ($value -isnot [string] -or $value -cnotin $Allowed) {
+        throw "$Key must be $($Allowed -join ' or '): $optionsPath"
     }
-    return $mode
+    return $value
+}
+
+# Read the project's saved-feature policy from the workspace init options.
+# Returns 'context' (the default) or 'automatic'. A context project never reads
+# or writes the saved feature, so each command names its feature with
+# SPECIFY_FEATURE_DIRECTORY.
+function Get-FeatureSelectionMode {
+    param([Parameter(Mandatory = $true)]$Storage)
+    return Get-InitOption -Storage $Storage -Key 'feature_selection' -Allowed @('context', 'automatic')
+}
+
+# Read the saved feature numbering: 'sequential' (the default) or 'timestamp'.
+function Get-FeatureNumberingMode {
+    param([Parameter(Mandatory = $true)]$Storage)
+    return Get-InitOption -Storage $Storage -Key 'feature_numbering' -Allowed @('sequential', 'timestamp')
 }
 
 # Only automatic projects save the active feature, and no-persist always wins.
@@ -283,8 +298,9 @@ function Save-FeatureJson {
 
     $storage = Get-StorageContext -RepoRoot $RepoRoot
     if ($storage.External) {
-        $absolute = Resolve-StoragePath $storage $FeatureDirectory
-        $relative = $absolute.Substring($storage.Root.TrimEnd('/', '\').Length).TrimStart('/', '\').Replace('\', '/')
+        $absolute = Get-CanonicalStoragePath (Resolve-StoragePath $storage $FeatureDirectory)
+        $root = Get-CanonicalStoragePath $storage.Root
+        $relative = $absolute.Substring($root.TrimEnd('/', '\').Length).TrimStart('/', '\').Replace('\', '/')
         if (-not $relative) { throw "Select a feature directory below the workspace: $absolute" }
         if ($storage.Record.active_feature -ceq $relative) { return }
         $storage.Record.active_feature = $relative

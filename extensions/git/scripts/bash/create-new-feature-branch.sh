@@ -334,12 +334,11 @@ if [ -z "${GIT_BRANCH_NAME:-}" ] && [ "$USE_TIMESTAMP" != true ] && [ -z "$BRANC
     BRANCH_NUMBERING=$(read_git_config_value "branch_numbering")
     if [ -z "$BRANCH_NUMBERING" ]; then
         BRANCH_NUMBERING=sequential
-        if [ -f "$INIT_OPTIONS" ]; then
+        if type get_feature_numbering_mode >/dev/null 2>&1; then
+            BRANCH_NUMBERING=$(get_feature_numbering_mode "$WORKSPACE_ROOT") || exit 1
+        elif [ -f "$INIT_OPTIONS" ]; then
             if command -v jq >/dev/null 2>&1; then
                 BRANCH_NUMBERING=$(jq -r 'if has("feature_numbering") then .feature_numbering else "sequential" end' "$INIT_OPTIONS") || exit 1
-            elif type _python3_command >/dev/null 2>&1 && PYTHON_SPEC=$(_python3_command); then
-                read -r -a PYTHON_CMD <<< "$PYTHON_SPEC"
-                BRANCH_NUMBERING=$("${PYTHON_CMD[@]}" -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8")).get("feature_numbering", "sequential"))' "$INIT_OPTIONS") || exit 1
             else
                 echo "Error: Reading saved numbering requires jq or updated Spec Kit core scripts: $INIT_OPTIONS" >&2
                 exit 1

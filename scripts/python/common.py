@@ -22,11 +22,13 @@ def _trim_trailing_separators(value: Path) -> str:
 
 def find_specify_root(start_dir: Path | None = None) -> Path | None:
     current = (start_dir or Path.cwd()).resolve()
+    home = Path.home().resolve()
     while True:
         if (current / ".specify").is_dir():
             return current
         parent = current.parent
-        if parent == current:
+        # A user-level ~/.specify holds settings, so only a start at home selects it.
+        if parent == current or parent == home:
             return None
         current = parent
 
@@ -155,13 +157,14 @@ def get_workspace_root(repo_root: Path, *, report: bool = False) -> Path:
 
 
 FEATURE_SELECTION_MODES = ("context", "automatic")
+FEATURE_NUMBERING_MODES = ("sequential", "timestamp")
 
 
-def feature_selection_mode(workspace_root: Path) -> str:
-    """Return the project policy for saved features: "context" (default) or "automatic"."""
+def _init_option(workspace_root: Path, key: str, allowed: tuple[str, str]) -> str:
+    """Return one init-options choice; the first allowed value is the default."""
     path = workspace_root / ".specify" / "init-options.json"
     if not os.path.lexists(path):
-        return "context"
+        return allowed[0]
     try:
         if path.is_symlink():
             raise ValueError("Project choices must not be a symlink.")
@@ -172,10 +175,20 @@ def feature_selection_mode(workspace_root: Path) -> str:
             raise ValueError("Project choices must be a JSON object.")
     except (OSError, UnicodeError, ValueError) as exc:
         _storage_error(f"Cannot read project choices at {path}: {exc}")
-    mode = options.get("feature_selection", "context")
-    if mode not in FEATURE_SELECTION_MODES:
-        _storage_error(f"feature_selection must be context or automatic: {path}")
-    return mode
+    value = options.get(key, allowed[0])
+    if value not in allowed:
+        _storage_error(f"{key} must be {' or '.join(allowed)}: {path}")
+    return value
+
+
+def feature_selection_mode(workspace_root: Path) -> str:
+    """Return the project policy for saved features: "context" (default) or "automatic"."""
+    return _init_option(workspace_root, "feature_selection", FEATURE_SELECTION_MODES)
+
+
+def feature_numbering_mode(workspace_root: Path) -> str:
+    """Return the saved feature numbering: "sequential" (default) or "timestamp"."""
+    return _init_option(workspace_root, "feature_numbering", FEATURE_NUMBERING_MODES)
 
 
 def may_persist_feature_selection(mode: str, *, no_persist: bool = False) -> bool:

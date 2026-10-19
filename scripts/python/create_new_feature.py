@@ -17,6 +17,7 @@ try:
     from common import (
         TemplateResolutionError,
         confined_workspace_path,
+        feature_numbering_mode,
         feature_selection_mode,
         get_repo_root,
         get_workspace_root,
@@ -29,6 +30,7 @@ except ImportError:  # pragma: no cover - direct execution from unusual cwd
     from common import (
         TemplateResolutionError,
         confined_workspace_path,
+        feature_numbering_mode,
         feature_selection_mode,
         get_repo_root,
         get_workspace_root,
@@ -289,21 +291,7 @@ def main(argv: list[str] | None = None) -> int:
     selection_mode = feature_selection_mode(workspace_root)
     use_timestamp = args.use_timestamp
     if not use_timestamp and not args.branch_number:
-        options_path = workspace_root / ".specify" / "init-options.json"
-        if workspace_root != repo_root:
-            confined_workspace_path(workspace_root, options_path)
-        if options_path.is_file():
-            try:
-                options = json.loads(options_path.read_text(encoding="utf-8"))
-                if not isinstance(options, dict):
-                    raise ValueError("Project choices must be a JSON object.")
-                numbering = options.get("feature_numbering", "sequential")
-                if numbering not in ("sequential", "timestamp"):
-                    raise ValueError("Feature numbering must be sequential or timestamp.")
-                use_timestamp = numbering == "timestamp"
-            except (OSError, UnicodeError, ValueError) as exc:
-                print(f"ERROR: Cannot read project choices at {options_path}: {exc}", file=sys.stderr)
-                return 1
+        use_timestamp = feature_numbering_mode(workspace_root) == "timestamp"
     specs_dir = workspace_root / "specs"
     if workspace_root != repo_root:
         confined_workspace_path(workspace_root, specs_dir)
@@ -443,7 +431,7 @@ def main(argv: list[str] | None = None) -> int:
         # Claim the directory exclusively before any write. An auto-numbered run
         # loses when any other directory has its prefix, removes its own empty
         # directory, and retries with a new prefix.
-        auto_numbered = not branch_number and not args.allow_existing
+        auto_numbered = not branch_number
         for attempt in range(1, 21):
             try:
                 feature_dir.mkdir()

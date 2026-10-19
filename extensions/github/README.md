@@ -65,7 +65,7 @@ This extension consumes the existing `before_taskstoissues` and `after_taskstois
 
 ## Scripts
 
-The extension ships its own feature-resolution script in all three supported runtimes, so it is self-contained and does not reach into core:
+The extension ships its own feature-resolution script in all three supported runtimes. Each script uses the core common helper of the same runtime to find the active feature:
 
 | Runtime    | Script                                   |
 | ---------- | ---------------------------------------- |
@@ -73,7 +73,7 @@ The extension ships its own feature-resolution script in all three supported run
 | PowerShell | `scripts/powershell/resolve-tasks.ps1`   |
 | Python     | `scripts/python/resolve_tasks.py`        |
 
-Once installed they live under `.specify/extensions/github/scripts/`. The script is a trimmed twin of core's `check-prerequisites`: it resolves the project root and active feature directory, requires `plan.md` and `tasks.md`, and reports the design docs alongside them. It matches the invocation the core command makes (`--require-tasks --include-tasks`), so `spec.md` stays optional. By default, a `SPECIFY_FEATURE_DIRECTORY` override is persisted to `.specify/feature.json` so a later run without the variable resolves to the same feature. When `SPECIFY_FEATURE_NO_PERSIST=1` or `true`, the override still selects the feature for this run, but the script does not create or modify `feature.json`.
+Once installed they live under `.specify/extensions/github/scripts/`. Feature resolution matches core's `check-prerequisites`: it supports external workspaces and the project's `feature_selection` policy. In `context` mode, name the feature with `SPECIFY_FEATURE_DIRECTORY` on each run. In `automatic` mode, an override is saved as the active feature, unless `SPECIFY_FEATURE_NO_PERSIST` is `1` or `true`. The script requires `plan.md` and `tasks.md`, and reports the design docs alongside them. It matches the invocation the core command makes (`--require-tasks --include-tasks`), so `spec.md` stays optional.
 
 Prerequisite errors name the Spec Kit command without assuming an integration's invocation syntax. Use the syntax described under [Commands](#commands) for your integration.
 

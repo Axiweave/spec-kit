@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -705,6 +706,82 @@ class TestAllowExistingBranch:
             "No git feature",
         )
         assert result.returncode == 0, result.stderr
+
+    @pytest.mark.parametrize(
+        "existing,expected",
+        [("other", "20260101-120001-new"), ("new", "20260101-120000-new")],
+        ids=["new-dir-loses-tie", "existing-dir-reused"],
+    )
+    def test_allow_existing_rescans_only_a_new_directory(
+        self, git_repo: Path, tmp_path: Path, existing: str, expected: str
+    ):
+        """The flag reuses an existing directory. A new directory still loses a prefix tie."""
+        specs = git_repo / "specs"
+        (specs / "20260101-120000-other").mkdir(parents=True)
+        (specs / f"20260101-120000-{existing}").mkdir(exist_ok=True)
+        fake_bin = tmp_path / "fake-bin"
+        fake_bin.mkdir()
+        state = tmp_path / "date-called"
+        date_shim = fake_bin / "date"
+        date_shim.write_text(
+            "#!/bin/sh\n"
+            'if [ "$1" = "+%Y%m%d-%H%M%S" ]; then\n'
+            f'  if [ -e "{state}" ]; then echo 20260101-120001; else : > "{state}"; echo 20260101-120000; fi\n'
+            "  exit 0\n"
+            "fi\n"
+            f'exec {shutil.which("date")} "$@"\n',
+            encoding="utf-8",
+        )
+        date_shim.chmod(0o755)
+        env = {**os.environ, "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}"}
+
+        result = subprocess.run(
+            ["bash", "scripts/bash/create-new-feature.sh", "--json", "--timestamp",
+             "--allow-existing-branch", "--short-name", "new", "New"],
+            cwd=git_repo, capture_output=True, text=True, env=env, timeout=60,
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert json.loads(result.stdout)["BRANCH_NAME"] == expected
+        assert (specs / expected).is_dir()
+
+
+def _python_with_space(tmp_path: Path) -> Path:
+    """A Python 3 launcher whose path contains a space."""
+    launcher = tmp_path / "python dir" / "python"
+    launcher.parent.mkdir()
+    launcher.write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n', encoding="utf-8")
+    launcher.chmod(0o755)
+    return launcher
+
+
+@requires_bash
+@pytest.mark.parametrize("variant", ["core", "git-extension"])
+def test_saved_numbering_reads_through_python_path_with_space(
+    git_repo: Path, tmp_path: Path, variant: str
+):
+    """Without jq, the saved numbering is read by a Python path that contains a space."""
+    script = "scripts/bash/create-new-feature.sh"
+    if variant == "git-extension":
+        script = ".specify/extensions/git/scripts/bash/create-new-feature-branch.sh"
+        (git_repo / script).parent.mkdir(parents=True)
+        shutil.copy(EXT_CREATE_FEATURE, git_repo / script)
+    (git_repo / ".specify" / "init-options.json").write_text(
+        json.dumps({"feature_numbering": "timestamp"}), encoding="utf-8"
+    )
+    env = {
+        **os.environ,
+        "BASH_FUNC_jq%%": "() {  return 1\n}",
+        "SPECKIT_PYTHON_EXECUTABLE": str(_python_with_space(tmp_path)),
+    }
+
+    result = subprocess.run(
+        ["bash", script, "--short-name", "spaced", "Spaced"],
+        cwd=git_repo, capture_output=True, text=True, env=env, timeout=60,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert re.search(r"^BRANCH_NAME: \d{8}-\d{6}-spaced$", result.stdout, re.M), result.stdout
 
 
 class TestAllowExistingBranchPowerShell:
@@ -1544,3 +1621,31 @@ class TestDescriptionQuoting:
         """Plain description without special characters continues to work."""
         result = run_script(git_repo, "--dry-run", "--short-name", "feat", "Add login feature")
         assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("variant", [pytest.param("bash", marks=requires_bash), "python"])
+def test_project_walk_selects_home_specify_only_at_home(tmp_path: Path, variant: str):
+    """A user-level ~/.specify holds settings. It is a project only when the walk starts at home."""
+    home = tmp_path / "home"
+    (home / ".specify").mkdir(parents=True)
+    (home / "proj" / ".specify").mkdir(parents=True)
+    (home / "proj" / "sub").mkdir()
+    (home / "work" / "sub").mkdir(parents=True)
+    env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home)}
+    if variant == "bash":
+        cmd = ["bash", "-c", 'source "$1"; find_specify_root || true', "walk", str(COMMON_SH)]
+    else:
+        cmd = [sys.executable, "-c",
+               "import sys; sys.path.insert(0, sys.argv[1]); import common; "
+               "print(common.find_specify_root() or '')",
+               str(PROJECT_ROOT / "scripts" / "python")]
+
+    def walk(cwd: Path) -> str:
+        result = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=30)
+        assert result.returncode == 0, result.stderr
+        found = result.stdout.strip()
+        return str(Path(found).resolve()) if found else ""
+
+    assert walk(home / "work" / "sub") == ""
+    assert walk(home) == str(home.resolve())
+    assert walk(home / "proj" / "sub") == str((home / "proj").resolve())

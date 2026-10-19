@@ -8,7 +8,8 @@ find_specify_root() {
     # Normalize to absolute path to prevent infinite loop with relative paths
     # Use -- to handle paths starting with - (e.g., -P, -L)
     dir="$(cd -- "$dir" 2>/dev/null && pwd)" || return 1
-    local prev_dir=""
+    local prev_dir="" home=""
+    [ -n "${HOME:-}" ] && home="$(cd -- "$HOME" 2>/dev/null && pwd -P)" || home=""
     while true; do
         if [ -d "$dir/.specify" ]; then
             echo "$dir"
@@ -20,6 +21,10 @@ find_specify_root() {
         fi
         prev_dir="$dir"
         dir="$(dirname "$dir")"
+        # A user-level ~/.specify holds settings, so only a start at home selects it.
+        if [ -n "$home" ] && [ "$(cd -- "$dir" && pwd -P)" = "$home" ]; then
+            break
+        fi
     done
     return 1
 }
@@ -84,7 +89,8 @@ _storage_json() {
             def absolute: startswith("/") or test("^[A-Za-z]:[/\\\\]");
             def uuid: text and test("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$");
             if length != 1 then error("Expected one storage record") else .[0] end |
-            if type != "object" or .schema_version != 1 then error("Invalid storage schema") else . end |
+            # tojson keeps the literal (1.0 stays "1.0") in jq 1.7+ and jaq. jq 1.6 stores 1.0 as 1.
+            if type != "object" or (.schema_version | tojson) != "1" then error("Invalid storage schema") else . end |
             if $kind == "record" then
                 if (.workspace | text and absolute) and
                     (.active_feature == null or (.active_feature | text and (absolute | not)))
@@ -231,15 +237,14 @@ check_workspace_path() {
     fi
 }
 
-# Read the project's saved-feature policy from the workspace init options.
-# Prints "context" (the default) or "automatic". A context project never reads
-# or writes the saved feature, so each command names its feature with
-# SPECIFY_FEATURE_DIRECTORY. An invalid choice fails before any write.
-get_feature_selection_mode() {
-    local workspace_root="$1"
-    local options="$workspace_root/.specify/init-options.json" mode python_spec _python_cmd_line
+# Print one choice from the workspace init options. Arguments: workspace root,
+# key, the default value, then the other allowed value. Fails when the file is
+# not a JSON object or the value is not allowed.
+_init_option() {
+    local workspace_root="$1" key="$2" default="$3" other="$4"
+    local options="$workspace_root/.specify/init-options.json" value python_spec _python_cmd_line
     if [[ ! -e "$options" && ! -L "$options" ]]; then
-        printf 'context\n'
+        printf '%s\n' "$default"
         return 0
     fi
     check_workspace_path "$workspace_root" "$options" || return 1
@@ -250,40 +255,53 @@ get_feature_selection_mode() {
     # Pick a parser by whether it runs, not by whether it exists. On Windows
     # `python3` can be a Store alias stub that fails at runtime (issue #3304).
     if command -v jq >/dev/null 2>&1 && jq -n . >/dev/null 2>&1; then
-        mode=$(jq -ers '
+        value=$(jq -ers --arg key "$key" --arg default "$default" --arg other "$other" '
             if length != 1 or (.[0] | type) != "object" then error("Project choices must be a JSON object.")
             else .[0] end
-            | if has("feature_selection") then .feature_selection else "context" end
-            | if . == "context" or . == "automatic" then . else "invalid" end
-        ' "$options" 2>/dev/null) || mode="unreadable"
+            | if has($key) then .[$key] else $default end
+            | if . == $default or . == $other then . else "invalid" end
+        ' "$options" 2>/dev/null) || value="unreadable"
     elif python_spec=$(_python3_command); then
         local -a python_cmd=()
         while IFS= read -r _python_cmd_line; do
             python_cmd+=("$_python_cmd_line")
         done <<< "$python_spec"
-        mode=$("${python_cmd[@]}" -c '
+        value=$("${python_cmd[@]}" -c '
 import json, sys
 options = json.load(open(sys.argv[1], encoding="utf-8"))
 if not isinstance(options, dict):
     sys.exit(1)
-mode = options.get("feature_selection", "context")
-print(mode if mode in ("context", "automatic") else "invalid")
-' "$options" 2>/dev/null) || mode="unreadable"
+value = options.get(sys.argv[2], sys.argv[3])
+print(value if value in sys.argv[3:] else "invalid")
+' "$options" "$key" "$default" "$other" 2>/dev/null) || value="unreadable"
     else
         echo "ERROR: Cannot read project choices at $options. Install jq or Python 3 to validate the JSON." >&2
         return 1
     fi
-    case "$mode" in
-        context|automatic) printf '%s\n' "$mode" ;;
+    case "$value" in
+        "$default"|"$other") printf '%s\n' "$value" ;;
         unreadable)
             echo "ERROR: Cannot read project choices at $options: Project choices must be a JSON object." >&2
             return 1
             ;;
         *)
-            echo "ERROR: feature_selection must be context or automatic: $options" >&2
+            echo "ERROR: $key must be $default or $other: $options" >&2
             return 1
             ;;
     esac
+}
+
+# Read the project's saved-feature policy from the workspace init options.
+# Prints "context" (the default) or "automatic". A context project never reads
+# or writes the saved feature, so each command names its feature with
+# SPECIFY_FEATURE_DIRECTORY. An invalid choice fails before any write.
+get_feature_selection_mode() {
+    _init_option "$1" feature_selection context automatic
+}
+
+# Read the saved feature numbering: "sequential" (the default) or "timestamp".
+get_feature_numbering_mode() {
+    _init_option "$1" feature_numbering sequential timestamp
 }
 
 # Only automatic projects save the active feature, and no-persist always wins.

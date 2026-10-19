@@ -700,6 +700,7 @@ def test_invalid_policy_fails_before_any_write(
     assert [_snapshot(root) for root in roots] == before
 
 
+@requires_bash
 @pytest.mark.parametrize("options", [{"feature_selection": "context"}, {"feature_selection": "automatic"}, []])
 def test_bash_policy_without_a_json_parser_refuses_without_writes(tmp_path, script_env, options):
     """A missing parser cannot turn unreadable policy into an implicit default."""
@@ -719,20 +720,48 @@ def test_bash_policy_without_a_json_parser_refuses_without_writes(tmp_path, scri
     assert _snapshot(repo) == before
 
 
-@pytest.mark.parametrize("policy", ["automatic", "context"])
-def test_bash_policy_reads_with_py_launcher_version_argument(tmp_path, script_env, policy):
+@requires_bash
+@pytest.mark.parametrize("helper,options,expected", [
+    ("get_feature_selection_mode", {"feature_selection": "automatic"}, "automatic"),
+    ("get_feature_selection_mode", {"feature_selection": "context"}, "context"),
+    ("get_feature_numbering_mode", {"feature_numbering": "timestamp"}, "timestamp"),
+    ("get_feature_numbering_mode", {}, "sequential"),
+])
+def test_bash_init_options_read_with_py_launcher_version_argument(
+    tmp_path, script_env, helper, options, expected,
+):
     """`_python3_command` prints `py` and `-3` on separate lines; both must reach the launcher."""
-    repo, workspace, _ = _make_project(tmp_path, False, policy)
+    repo, workspace, _ = _make_project(tmp_path, False, None)
+    _write_json(workspace / ".specify/init-options.json", options)
     common = workspace / ".specify/scripts/bash/common.sh"
     result = subprocess.run(
         ["/bin/bash", "-c",
          'source "$1"; PY="$3"; jq() { return 1; }; _python3_command() { printf "%s\\n" py -3; }; '
-         'py() { [ "$1" = "-3" ] || return 1; shift; "$PY" "$@"; }; get_feature_selection_mode "$2"',
+         f'py() {{ [ "$1" = "-3" ] || return 1; shift; "$PY" "$@"; }}; {helper} "$2"',
          "policy", str(common), str(workspace), sys.executable],
         cwd=repo, env=script_env, text=True, capture_output=True, timeout=30,
     )
     assert result.returncode == 0, result.stderr
-    assert result.stdout == f"{policy}\n"
+    assert result.stdout == f"{expected}\n"
+
+
+@requires_bash
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq not installed")
+def test_bash_storage_record_rejects_a_float_schema_version(tmp_path, script_env):
+    """jq compares 1.0 equal to 1, so the schema check must see the integer literal."""
+    project = _make_project(tmp_path, True)
+    repo, workspace, record = project
+    _select(project)
+    paths = ("--json", "--paths-only")
+
+    _success(_invoke("bash", workspace, repo, script_env, "check-prerequisites", *paths))
+    data = json.loads(record.read_text(encoding="utf-8"))
+    data["schema_version"] = 1.0
+    _write_json(record, data)
+    result = _invoke("bash", workspace, repo, script_env, "check-prerequisites", *paths)
+
+    assert result.returncode != 0
+    assert "Invalid storage record" in result.stderr
 
 
 @pytest.mark.parametrize("policy", ["automatic", "context"])

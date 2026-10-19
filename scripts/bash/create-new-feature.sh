@@ -281,39 +281,11 @@ cd "$REPO_ROOT"
 
 SPECS_DIR="$WORKSPACE_ROOT/specs"
 check_workspace_path "$WORKSPACE_ROOT" "$SPECS_DIR" || exit 1
-INIT_OPTIONS="$WORKSPACE_ROOT/.specify/init-options.json"
-check_workspace_path "$WORKSPACE_ROOT" "$INIT_OPTIONS" || exit 1
 # Read the saved-feature policy before any write so an invalid choice creates nothing.
 SELECTION_MODE=$(get_feature_selection_mode "$WORKSPACE_ROOT") || exit 1
-if [[ "$USE_TIMESTAMP" != true && "$NUMBER_EXPLICIT" != true && -f "$INIT_OPTIONS" ]]; then
-    if command -v jq >/dev/null 2>&1; then
-        FEATURE_NUMBERING=$(jq -er '
-            if type != "object" then error("Project choices must be a JSON object.")
-            elif has("feature_numbering") then .feature_numbering else "sequential" end
-            | if . == "sequential" or . == "timestamp" then .
-              else error("Feature numbering must be sequential or timestamp.") end
-        ' "$INIT_OPTIONS") || exit 1
-    elif PYTHON_SPEC=$(_python3_command); then
-        read -r -a PYTHON_CMD <<< "$PYTHON_SPEC"
-        FEATURE_NUMBERING=$("${PYTHON_CMD[@]}" -c '
-import json, sys
-options = json.load(open(sys.argv[1], encoding="utf-8"))
-if not isinstance(options, dict):
-    sys.exit("Project choices must be a JSON object.")
-numbering = options.get("feature_numbering", "sequential")
-if numbering not in ("sequential", "timestamp"):
-    sys.exit("Feature numbering must be sequential or timestamp.")
-print(numbering)
-' "$INIT_OPTIONS") || exit 1
-    else
-        echo "ERROR: Reading feature numbering requires jq or Python 3: $INIT_OPTIONS" >&2
-        exit 1
-    fi
-    case "$FEATURE_NUMBERING" in
-        timestamp) USE_TIMESTAMP=true ;;
-        sequential) ;;
-        *) echo "ERROR: Invalid feature numbering in $INIT_OPTIONS: $FEATURE_NUMBERING" >&2; exit 1 ;;
-    esac
+if [[ "$USE_TIMESTAMP" != true && "$NUMBER_EXPLICIT" != true ]]; then
+    FEATURE_NUMBERING=$(get_feature_numbering_mode "$WORKSPACE_ROOT") || exit 1
+    if [[ "$FEATURE_NUMBERING" == timestamp ]]; then USE_TIMESTAMP=true; fi
 fi
 if [ "$DRY_RUN" != true ]; then
     mkdir -p "$SPECS_DIR"
@@ -484,7 +456,7 @@ if [ "$DRY_RUN" != true ]; then
     # loses when any other directory has its prefix, removes its own empty
     # directory, and retries with a new prefix.
     AUTO_NUMBERED=false
-    if { [ "$NUMBER_EXPLICIT" != true ] || [ "$USE_TIMESTAMP" = true ]; } && [ "$ALLOW_EXISTING" != true ]; then
+    if [ "$NUMBER_EXPLICIT" != true ] || [ "$USE_TIMESTAMP" = true ]; then
         AUTO_NUMBERED=true
     fi
     ATTEMPT=1

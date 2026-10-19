@@ -517,7 +517,9 @@ def main(argv: list[str]) -> int:
 
         if not args.use_timestamp and not branch_number:
             numbering = read_git_config_value(config_file, "branch_numbering")
-            if not numbering:
+            if not numbering and core is not None and hasattr(core, "feature_numbering_mode"):
+                numbering = core.feature_numbering_mode(workspace_root)
+            elif not numbering:
                 numbering = "sequential"
                 if options_file.exists() or options_file.is_symlink():
                     try:

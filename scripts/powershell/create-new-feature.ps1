@@ -148,22 +148,7 @@ $selectionMode = Get-FeatureSelectionMode -Storage $storage
 # Explicit per-feature choices take precedence over saved project choices.
 $hasNumber = $PSBoundParameters.ContainsKey('Number') -and $Number -ne ''
 if (-not $Timestamp -and -not $hasNumber) {
-    $optionsPath = Resolve-StoragePath $storage '.specify/init-options.json'
-    if (Test-Path -LiteralPath $optionsPath -PathType Leaf) {
-        $text = [System.IO.File]::ReadAllText($optionsPath, [System.Text.Encoding]::UTF8)
-        $options = $text | ConvertFrom-Json
-        if (-not $text.TrimStart().StartsWith('{') -or $options -isnot [PSCustomObject]) {
-            throw "Project choices must be a JSON object: $optionsPath"
-        }
-        $numbering = 'sequential'
-        if ($options.PSObject.Properties.Name -ccontains 'feature_numbering') {
-            $numbering = $options.feature_numbering
-        }
-        if ($numbering -isnot [string] -or $numbering -cnotin @('sequential', 'timestamp')) {
-            throw "Feature numbering must be sequential or timestamp: $optionsPath"
-        }
-        $Timestamp = $numbering -ceq 'timestamp'
-    }
+    $Timestamp = (Get-FeatureNumberingMode -Storage $storage) -ceq 'timestamp'
 }
 
 Set-Location $repoRoot
@@ -322,7 +307,7 @@ if (-not $DryRun) {
     # Claim the directory exclusively before any write. An auto-numbered run
     # loses when any other directory has its prefix, removes its own empty
     # directory, and retries with a new prefix.
-    $autoNumbered = ($Timestamp -or -not $hasNumber) -and -not $AllowExistingBranch
+    $autoNumbered = $Timestamp -or -not $hasNumber
     $attempt = 1
     while ($true) {
         try {
