@@ -14,7 +14,7 @@ from ..integration_state import (
     integration_settings as _integration_settings,
 )
 from ._commands import integration_app
-from .helpers import _MANIFEST_READ_ERRORS, _SharedTemplateRefreshError, clear_init_options_for_integration, _cli_error_detail, _cli_phase_label, _get_speckit_version, read_integration_json, register_extensions_for_agent, register_presets_for_agent, _remove_integration_json, resolve_integration_options_or_exit, _resolve_script_type, _set_default_integration, _set_default_integration_or_exit, _unregister_extensions_for_agent, _unregister_presets_for_agent, save_integration_json
+from .helpers import _MANIFEST_READ_ERRORS, _SharedTemplateRefreshError, clear_init_options_for_integration, _cli_error_detail, _cli_phase_label, _get_speckit_version, read_integration_json, refuse_tracked_install_or_exit, register_extensions_for_agent, register_presets_for_agent, _remove_integration_json, resolve_integration_options_or_exit, _resolve_script_type, _set_default_integration, _set_default_integration_or_exit, _unregister_extensions_for_agent, _unregister_presets_for_agent, save_integration_json
 
 
 @integration_app.command("switch")
@@ -127,6 +127,10 @@ def integration_switch(
         target_integration, current, target, integration_options
     )
     target_integration.is_skills_mode(target_parsed_options, project_root)
+    refuse_tracked_install_or_exit(
+        project_root, target_integration, script_type=selected_script,
+        raw_options=target_raw_options, parsed_options=target_parsed_options,
+    )
 
     # Phase 1: Uninstall current integration (if any)
     if installed_key:
@@ -148,9 +152,15 @@ def integration_switch(
                 raise typer.Exit(1)
             # Private mode: the old integration stays listed, so only this checkout's files go.
             old_manifest.checkout_only = old_private
-            removed, skipped = current_integration.teardown(
-                project_root, old_manifest, force=force,
-            )
+            try:
+                removed, skipped = current_integration.teardown(
+                    project_root, old_manifest, force=force,
+                )
+            except (ValueError, OSError) as exc:
+                console.print(
+                    f"Error: Failed to uninstall integration '{installed_key}': {exc}", style="red", markup=False,
+                )
+                raise typer.Exit(1)
             if removed:
                 console.print(f"  Removed {len(removed)} file(s)")
             if skipped:

@@ -38,6 +38,15 @@ class OmpIntegration(MarkdownIntegration):
 
         if opts.get("global_commands") or global_commands_enabled(project_root):
             install_global_commands()
+            # A project that switches to global scope drops its unchanged local copies.
+            try:
+                old = IntegrationManifest.load(self.key, project_root)
+            except FileNotFoundError:
+                return []
+            local = IntegrationManifest(self.key, project_root)
+            prefix = self.registrar_config["dir"] + "/"
+            local._files = {rel: digest for rel, digest in old.files.items() if rel.startswith(prefix)}
+            local.uninstall(remove_manifest=False)
             return []
         return super().setup(project_root, manifest, parsed_options=parsed_options, **opts)
 

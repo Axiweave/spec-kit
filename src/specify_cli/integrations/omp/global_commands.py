@@ -58,29 +58,34 @@ def global_commands_enabled(repository: Path) -> bool:
     return read_json(path).get("command_scope") == "global"
 
 
-def _manifest(directory: Path) -> tuple[Path, dict[str, str]]:
-    identity = hashlib.sha256(os.fsencode(str(directory))).hexdigest()
+def _manifest_path() -> Path:
     root = user_data_dir().resolve()
-    path = root / "integrations" / "omp" / f"{identity}.json"
-    confined(root, path)
-    if not path.exists() and not path.is_symlink():
-        return path, {}
-    data = read_json(path)
-    if (type(data.get("schema_version")) is not int or data["schema_version"] != 1
-            or data.get("command_directory") != str(directory)):
-        raise ValueError(f"Invalid global OMP manifest: {path}")
-    files = data.get("files")
+    return confined(root, root / "integrations" / "omp" / "global-commands.json")
+
+
+def _manifest(directory: Path) -> tuple[dict, dict[str, str]]:
+    """Return the whole ownership record and the files owned in *directory*."""
+    path = _manifest_path()
+    data = read_json(path) if path.exists() or path.is_symlink() else {}
+    files = data.get(str(directory), {})
     if not isinstance(files, dict):
-        raise ValueError(f"Invalid global OMP manifest files: {path}")
+        raise ValueError(f"Invalid global OMP manifest: {path}")
     for name, digest in files.items():
         if (not name.endswith(".md") or not _COMMAND_NAME.fullmatch(name[:-3])
                 or not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)):
             raise ValueError(f"Invalid global OMP manifest entry: {path}: {name}")
-    return path, files
+    return data, files
 
 
-def _save_manifest(path: Path, directory: Path, files: dict[str, str]) -> None:
-    atomic_json(path, {"schema_version": 1, "command_directory": str(directory), "files": files})
+def _save_manifest(data: dict, directory: Path, files: dict[str, str]) -> None:
+    path = _manifest_path()
+    data = {key: value for key, value in data.items() if key != str(directory)}
+    if files:
+        data[str(directory)] = files
+    if data:
+        atomic_json(path, data)
+    else:
+        path.unlink(missing_ok=True)
 
 
 def _launcher(name: str) -> bytes:
@@ -99,11 +104,15 @@ def _launcher(name: str) -> bytes:
 
 
 def install_global_commands(names: Iterable[str] | None = None, *, upgrade: bool = False) -> list[Path]:
-    """Install shared names without claiming or replacing user-owned content."""
+    """Install shared launchers and return the edited or unowned paths that were skipped.
+
+    Install and upgrade refresh unchanged managed files and keep edited ones.
+    Install refuses unmanaged names. Upgrade skips them.
+    """
     from . import OmpIntegration
 
     directory = command_directory()
-    manifest_path, files = _manifest(directory)
+    data, files = _manifest(directory)
     selected = list(names) if names is not None else [
         f"speckit.{path.stem}" for path in OmpIntegration().list_command_templates()
     ]
@@ -113,25 +122,25 @@ def install_global_commands(names: Iterable[str] | None = None, *, upgrade: bool
         if not isinstance(name, str) or not _COMMAND_NAME.fullmatch(name):
             raise ValueError(f"Invalid global OMP command name: {name!r}")
     selected = sorted(set(selected))
-    conflicts = []
+    skipped = []
     pending = []
     for name in selected:
         path = directory / f"{name}.md"
-        previous = None
-        if path.is_symlink() or (path.exists() and not path.is_file()):
-            conflicts.append(path)
-            continue
-        if path.exists():
-            previous = path.read_bytes()
-            if files.get(path.name) != hashlib.sha256(previous).hexdigest():
-                conflicts.append(path)
-                continue
         content = _launcher(name)
-        if previous is None or (upgrade and previous != content):
+        if not path.exists() and not path.is_symlink():
+            pending.append((path, None, content))
+        elif path.name not in files:
+            skipped.append(path)
+        elif path.is_symlink() or not path.is_file():
+            skipped.append(path)
+        elif hashlib.sha256(previous := path.read_bytes()).hexdigest() != files[path.name]:
+            skipped.append(path)
+        elif previous != content:
             pending.append((path, previous, content))
-    if conflicts:
+    unmanaged = [path for path in skipped if path.name not in files]
+    if unmanaged and not upgrade:
         raise ValueError("Global OMP command conflicts. Move or restore these files before retrying:\n" +
-                         "\n".join(str(path) for path in conflicts))
+                         "\n".join(str(path) for path in unmanaged))
     written = []
     try:
         if pending:
@@ -144,7 +153,7 @@ def install_global_commands(names: Iterable[str] | None = None, *, upgrade: bool
                 handle.write(content)
             updated[path.name] = hashlib.sha256(content).hexdigest()
         if updated != files:
-            _save_manifest(manifest_path, directory, updated)
+            _save_manifest(data, directory, updated)
     except Exception:
         for path, previous in reversed(written):
             if previous is None:
@@ -152,13 +161,13 @@ def install_global_commands(names: Iterable[str] | None = None, *, upgrade: bool
             else:
                 path.write_bytes(previous)
         raise
-    return [directory / f"{name}.md" for name in selected]
+    return skipped
 
 
 def uninstall_global_commands() -> tuple[list[Path], list[Path]]:
     """Remove only unchanged managed launchers in the active command directory."""
     directory = command_directory()
-    manifest_path, files = _manifest(directory)
+    data, files = _manifest(directory)
     removed, conflicts = [], []
     remaining = dict(files)
     for name, digest in files.items():
@@ -174,11 +183,26 @@ def uninstall_global_commands() -> tuple[list[Path], list[Path]]:
             removed.append(path)
             remaining.pop(name)
     if remaining != files:
-        if remaining:
-            _save_manifest(manifest_path, directory, remaining)
-        else:
-            manifest_path.unlink(missing_ok=True)
+        _save_manifest(data, directory, remaining)
     return removed, conflicts
+
+
+def check_global_commands() -> tuple[list[Path], list[Path]]:
+    """Return the missing launchers and the edited or unowned launchers in the active command directory."""
+    from . import OmpIntegration
+
+    directory = command_directory()
+    _, files = _manifest(directory)
+    names = {f"speckit.{path.stem}.md" for path in OmpIntegration().list_command_templates()} | files.keys()
+    missing, modified = [], []
+    for name in sorted(names):
+        path = directory / name
+        if not path.exists() and not path.is_symlink():
+            missing.append(path)
+        elif (name not in files or path.is_symlink() or not path.is_file()
+              or hashlib.sha256(path.read_bytes()).hexdigest() != files[name]):
+            modified.append(path)
+    return missing, modified
 
 
 def run_global_command(key: str | None, action: str) -> None:
@@ -199,8 +223,12 @@ def run_global_command(key: str | None, action: str) -> None:
                     console.print(str(path), markup=False)
                 raise typer.Exit(1)
         else:
-            installed = install_global_commands(upgrade=action == "upgrade")
-            console.print(f"Global OMP commands ready: {len(installed)} in {command_directory()}", markup=False)
+            skipped = install_global_commands(upgrade=action == "upgrade")
+            console.print(f"Global OMP commands ready in {command_directory()}", markup=False)
+            if skipped:
+                console.print("Skipped modified or unowned global OMP commands:", style="yellow")
+                for path in skipped:
+                    console.print(str(path), markup=False)
     except (OSError, ValueError) as exc:
         console.print(f"Global OMP {action} failed: {exc}", style="red", markup=False)
         raise typer.Exit(1) from None

@@ -187,6 +187,28 @@ def resolve_integration_options_or_exit(
     )
 
 
+def refuse_tracked_install_or_exit(project_root: Path, integration: Any, **install_options: Any) -> None:
+    """Private mode: stop before any write when installing *integration* would change a Git-tracked file.
+
+    The dry run stages a copy of the real workspace, so saved settings,
+    extension events, and the command scope shape the planned file list.
+    """
+    from ..private_checkout import install_integration, plan_checkout_files, refuse_tracked
+    from .manifest import IntegrationManifest
+
+    probe = IntegrationManifest(integration.key, project_root)
+    if not probe.private:
+        return
+    try:
+        refuse_tracked(project_root, plan_checkout_files(
+            lambda staged: install_integration(staged, integration, version=_get_speckit_version(), **install_options),
+            workspace=probe.metadata_root,
+        ))
+    except (ValueError, OSError) as exc:
+        console.print(f"[red]Error:[/red] {_cli_error_detail(exc)}")
+        raise typer.Exit(1)
+
+
 def update_init_options_for_integration(
     project_root: Path,
     integration: Any,
@@ -207,8 +229,6 @@ def update_init_options_for_integration(
     opts["integration"] = integration.key
     opts["ai"] = integration.key
     opts["speckit_version"] = _get_speckit_version()
-    if integration.key != "omp":
-        opts["command_scope"] = "project"
     if script_type:
         opts["script"] = script_type
     # Whether skills mode is active is owned by each integration via the

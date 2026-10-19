@@ -18,7 +18,7 @@ from ..integration_state import (
     integration_settings as _integration_settings,
 )
 from ._commands import integration_app
-from .helpers import _cli_error_detail, _cli_phase_label, _get_speckit_version, read_integration_json, _refresh_init_options_speckit_version, _remove_integration_json, resolve_integration_options_or_exit, _resolve_script_type, update_init_options_for_integration, save_integration_json
+from .helpers import _cli_error_detail, _cli_phase_label, _get_speckit_version, read_integration_json, _refresh_init_options_speckit_version, refuse_tracked_install_or_exit, _remove_integration_json, resolve_integration_options_or_exit, _resolve_script_type, update_init_options_for_integration, save_integration_json
 
 
 @integration_app.command("install")
@@ -32,6 +32,7 @@ def integration_install(
     """Install an integration into an existing project."""
     from . import INTEGRATION_REGISTRY, get_integration
     from .manifest import IntegrationManifest
+    from ..workspace import read_json
     from .. import require_specify_project, install_shared_infra_or_exit
 
     if global_install:
@@ -52,8 +53,13 @@ def integration_install(
     installed_keys = _installed_integration_keys(current)
 
     probe = IntegrationManifest(key, project_root)
-    if key in installed_keys and probe.private and not probe.checkout_manifest_path.exists():
-        # Private mode: the project lists the integration, but this checkout lacks its files.
+    checkout_manifest = probe.checkout_manifest_path
+    # Private mode: a checkout manifest without a files map (kept only for its exclusions)
+    # means the project lists the integration, but this checkout lacks its files.
+    # Global OMP commands and Hermes save an empty map, which still counts as installed.
+    if key in installed_keys and probe.private and not (
+        checkout_manifest.is_file() and "files" in read_json(checkout_manifest)
+    ):
         from ..private_checkout import attach_integrations, plan_checkout_files, refuse_tracked
         version = _get_speckit_version()
         try:
@@ -117,16 +123,10 @@ def integration_install(
     raw_options, parsed_options = resolve_integration_options_or_exit(
         integration, current, key, integration_options
     )
-    if probe.private:
-        from ..private_checkout import install_integration, plan_checkout_files, refuse_tracked
-        try:
-            refuse_tracked(project_root, plan_checkout_files(lambda staged: install_integration(
-                staged, integration, version=_get_speckit_version(), script_type=selected_script,
-                raw_options=raw_options, parsed_options=parsed_options,
-            )))
-        except (ValueError, OSError) as exc:
-            console.print(f"[red]Error:[/red] {_cli_error_detail(exc)}")
-            raise typer.Exit(1)
+    refuse_tracked_install_or_exit(
+        project_root, integration, script_type=selected_script,
+        raw_options=raw_options, parsed_options=parsed_options,
+    )
 
     # Ensure shared infrastructure is present (safe to run unconditionally;
     # install_shared_infra_for_project merges missing files without overwriting).

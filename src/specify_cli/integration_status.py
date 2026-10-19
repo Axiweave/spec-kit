@@ -351,6 +351,38 @@ def _manifest_suggestion(key: str, default_key: str | None) -> str:
     return f"Run `specify integration upgrade {key}` or reinstall the integration."
 
 
+def _global_omp_findings(project_root: Path) -> list[dict[str, str]]:
+    """Check the shared OMP launchers of a project that uses global commands."""
+    from .integrations.omp.global_commands import check_global_commands, global_commands_enabled
+
+    reinstall = "Run `specify integration install omp --global` to reinstall them."
+    try:
+        if not global_commands_enabled(project_root):
+            return []
+        missing, modified = check_global_commands()
+    except (ValueError, OSError) as exc:
+        return [_finding(
+            "error", "global-commands-unreadable", f"Global OMP commands cannot be checked: {exc}",
+            integration="omp", suggestion=reinstall,
+        )]
+    findings = []
+    if missing:
+        findings.append(_finding(
+            "error", "global-commands-missing",
+            f"{len(missing)} global OMP command(s) are missing: " + ", ".join(path.name for path in missing),
+            integration="omp", path=str(missing[0].parent), suggestion=reinstall,
+        ))
+    if modified:
+        findings.append(_finding(
+            "warning", "global-commands-modified",
+            f"{len(modified)} global OMP command(s) were modified or are not owned by Spec Kit: "
+            + ", ".join(path.name for path in modified),
+            integration="omp", path=str(modified[0].parent),
+            suggestion="Move or delete these files, then run `specify integration install omp --global` to reinstall them.",
+        ))
+    return findings
+
+
 def build_integration_status_report(project_root: Path) -> dict[str, Any]:
     """Return a machine-readable integration status report for *project_root*."""
     findings: list[dict[str, str]] = []
@@ -608,6 +640,9 @@ def build_integration_status_report(project_root: Path) -> dict[str, Any]:
                     suggestion="Review the manifests before uninstalling or upgrading these integrations.",
                 )
             )
+
+    if "omp" in installed_keys:
+        findings.extend(_global_omp_findings(project_root_resolved))
 
     if not raw_installed_is_list or not raw_installed_keys:
         multi_install_safe = None

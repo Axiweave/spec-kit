@@ -23,16 +23,7 @@ CORE_COMMANDS = {
 
 
 @pytest.fixture(autouse=True)
-def isolated_omp_environment(tmp_path, monkeypatch, _isolate_integration_home):
-    home = Path(os.environ["HOME"])
-    monkeypatch.setenv("APPDATA", str(home / "roaming"))
-    monkeypatch.setenv("LOCALAPPDATA", str(home / "local"))
-    monkeypatch.setenv("XDG_STATE_HOME", str(home / ".local/state"))
-    for role in ("AUTHOR", "COMMITTER"):
-        monkeypatch.setenv(f"GIT_{role}_NAME", "External Setup Test")
-        monkeypatch.setenv(f"GIT_{role}_EMAIL", "setup@example.test")
-    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
-    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+def isolated_omp_environment(tmp_path, monkeypatch):
     for name in (
         "PI_CODING_AGENT_DIR", "PI_CONFIG_DIR", "OMP_PROFILE", "PI_PROFILE",
         "SPECKIT_INTEGRATION_DEFAULT",
@@ -102,20 +93,59 @@ def test_global_lifecycle_preserves_modified_managed_files(action, force):
     modified.write_text("My edited plan command.\n", encoding="utf-8")
     unrelated = commands / "speckit.personal.md"
     unrelated.write_text("My unrelated command.\n", encoding="utf-8")
+    (commands / "speckit.specify.md").unlink()
 
     result = invoke("integration", action, "omp", "--global", *(["--force"] if force else []))
 
     assert modified.read_text(encoding="utf-8") == "My edited plan command.\n"
     assert unrelated.read_text(encoding="utf-8") == "My unrelated command.\n"
-    assert modified.name in re.sub(r"[\s\u2500-\u257f]", "", result.output)
     if action == "uninstall":
-        assert not (commands / "speckit.specify.md").exists()
+        assert result.exit_code != 0
+        assert modified.name in re.sub(r"[\s\u2500-\u257f]", "", result.output)
+        assert not (commands / "speckit.tasks.md").exists()
     else:
+        # One edited launcher never blocks the other launchers.
+        assert result.exit_code == 0, result.output
         assert (commands / "speckit.specify.md").is_file()
+        if action == "upgrade":
+            assert modified.name in re.sub(r"[\s\u2500-\u257f]", "", result.output)
         invoke("integration", "uninstall", "omp", "--global")
         assert modified.read_text(encoding="utf-8") == "My edited plan command.\n"
         assert unrelated.read_text(encoding="utf-8") == "My unrelated command.\n"
         assert not (commands / "speckit.specify.md").exists()
+
+
+def test_global_upgrade_skips_unowned_name_and_installs_the_rest():
+    commands = default_commands()
+    commands.mkdir(parents=True)
+    user_command = commands / "speckit.plan.md"
+    user_command.write_text("This name already belongs to me.\n", encoding="utf-8")
+
+    result = succeed("integration", "upgrade", "omp", "--global")
+
+    assert user_command.name in re.sub(r"[\s\u2500-\u257f]", "", result.output)
+    assert user_command.read_text(encoding="utf-8") == "This name already belongs to me.\n"
+    assert CORE_COMMANDS - {user_command.name} <= command_files(commands).keys()
+    succeed("integration", "uninstall", "omp", "--global")
+    assert command_files(commands) == {user_command.name: b"This name already belongs to me.\n"}
+
+
+def test_project_init_refreshes_unedited_launcher_from_an_older_release(tmp_path, monkeypatch):
+    from specify_cli.integrations.omp import global_commands
+
+    current = global_commands._launcher
+    monkeypatch.setattr(global_commands, "_launcher", lambda name: b"old release\n")
+    succeed("integration", "install", "omp", "--global")
+    monkeypatch.setattr(global_commands, "_launcher", current)
+    edited = default_commands() / "speckit.plan.md"
+    edited.write_bytes(b"old release\nMy edit.\n")
+
+    init_project(tmp_path / "project")
+
+    files = command_files(default_commands())
+    assert files.pop("speckit.plan.md") == b"old release\nMy edit.\n"
+    assert files == {name: current(name[:-3]) for name in files}
+
 
 
 def test_conflicting_user_command_is_never_claimed_or_removed():
@@ -179,6 +209,8 @@ def test_global_install_matches_native_omp_profile_selection(environment, relati
 
 
 def test_profile_uninstall_preserves_another_profiles_ownership(monkeypatch):
+    from specify_cli.workspace import user_data_dir
+
     home = Path(os.environ["HOME"])
     monkeypatch.setenv("OMP_PROFILE", "work")
     succeed("integration", "install", "omp", "--global")
@@ -188,6 +220,10 @@ def test_profile_uninstall_preserves_another_profiles_ownership(monkeypatch):
     succeed("integration", "install", "omp", "--global")
     personal = home / ".omp/profiles/personal/agent/commands"
     assert CORE_COMMANDS <= command_files(personal).keys()
+    # One plain ownership record maps each command directory to its files.
+    record = user_data_dir() / "integrations/omp/global-commands.json"
+    assert [path.name for path in record.parent.iterdir()] == [record.name]
+    assert set(json.loads(record.read_text(encoding="utf-8"))) == {str(work.resolve()), str(personal.resolve())}
 
     succeed("integration", "uninstall", "omp", "--global")
 
@@ -372,8 +408,8 @@ def test_public_extension_update_preserves_shared_ownership_and_other_project(tm
     (commands / "speckit.plan.md").write_text("Keep my edited global plan.\n", encoding="utf-8")
     (commands / "personal.md").write_text("Keep my unrelated command.\n", encoding="utf-8")
     shared_before = command_files(commands)
-    ownership_path = next((user_data_dir() / "integrations/omp").glob("*.json"))
-    ownership_before = json.loads(ownership_path.read_text(encoding="utf-8"))["files"]
+    ownership_path = user_data_dir() / "integrations/omp/global-commands.json"
+    ownership_before = json.loads(ownership_path.read_text(encoding="utf-8"))[str(commands.resolve())]
     user_config = first_workspace / ".specify/extensions/test-ext/linear-config.yml"
     user_config.write_text("custom: true\nvalue: user-edited\n", encoding="utf-8")
     config_before = user_config.read_bytes()
@@ -403,7 +439,7 @@ def test_public_extension_update_preserves_shared_ownership_and_other_project(tm
     assert invoke("project", "command", "speckit.test-ext.legacy", "--json").exit_code == 1
     assert (commands / "speckit.test-ext.current.md").is_file()
     assert {name: (commands / name).read_bytes() for name in shared_before} == shared_before
-    ownership_after = json.loads(ownership_path.read_text(encoding="utf-8"))["files"]
+    ownership_after = json.loads(ownership_path.read_text(encoding="utf-8"))[str(commands.resolve())]
     assert {name: ownership_after[name] for name in ownership_before} == ownership_before
     assert ownership_after.keys() - ownership_before.keys() == {"speckit.test-ext.current.md"}
     assert "personal.md" not in ownership_after
@@ -419,3 +455,54 @@ def test_public_extension_update_preserves_shared_ownership_and_other_project(tm
     assert {path: path.read_bytes() for path in other_before} == other_before
     assert not (first / ".omp/commands").exists()
     assert not (first_workspace / ".omp/commands").exists()
+
+
+def test_other_default_integration_keeps_global_omp_scope(tmp_path, monkeypatch):
+    repository = tmp_path / "project"
+    init_project(repository)
+    monkeypatch.chdir(repository)
+    succeed("integration", "install", "claude", "--force")
+    succeed("integration", "use", "claude")
+
+    succeed("integration", "upgrade", "omp")
+
+    assert not (repository / ".omp/commands").exists()
+    assert CORE_COMMANDS <= command_files(default_commands()).keys()
+
+
+def test_switch_to_global_scope_removes_unchanged_local_commands(tmp_path):
+    repository = tmp_path / "project"
+    options = ("--integration", "omp", "--script", "sh", "--non-interactive", "--ignore-agent-tools", "--storage", "local")
+    succeed("init", str(repository), *options)
+    local = repository / ".omp/commands"
+    assert CORE_COMMANDS <= command_files(local).keys()
+    (local / "speckit.plan.md").write_text("My local plan.\n", encoding="utf-8")
+
+    succeed("init", str(repository), "--force", "--global-commands", *options)
+
+    assert command_files(local) == {"speckit.plan.md": b"My local plan.\n"}
+    assert CORE_COMMANDS <= command_files(default_commands()).keys()
+
+
+def test_status_reports_missing_and_modified_global_commands(tmp_path, monkeypatch):
+    repository = tmp_path / "project"
+    init_project(repository)
+    monkeypatch.chdir(repository)
+
+    def findings() -> dict[str, dict]:
+        report = json.loads(invoke("integration", "status", "--json").stdout)
+        return {finding["code"]: finding for finding in report["findings"]}
+
+    assert not {"global-commands-missing", "global-commands-modified"} & findings().keys()
+    commands = default_commands()
+    (commands / "speckit.specify.md").unlink()
+    (commands / "speckit.plan.md").write_text("My edited plan.\n", encoding="utf-8")
+
+    reported = findings()
+    assert "speckit.specify.md" in reported["global-commands-missing"]["message"]
+    assert "integration install omp --global" in reported["global-commands-missing"]["suggestion"]
+    assert "speckit.plan.md" in reported["global-commands-modified"]["message"]
+    assert "speckit.specify.md" not in reported["global-commands-modified"]["message"]
+
+    succeed("integration", "install", "omp", "--global")
+    assert "global-commands-missing" not in findings()

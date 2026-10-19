@@ -139,7 +139,10 @@ class HermesIntegration(SkillsIntegration):
         # Validate every destination before the first write.
         for relative in skill_paths:
             global_manifest.file_path(relative)
-        marker = manifest.file_path(".hermes/skills")
+        # Create project-local marker directory so extension commands
+        # (e.g. git) can detect Hermes as an active integration.
+        # Hermes itself ignores this directory — skills live globally.
+        manifest.file_path(".hermes/skills").mkdir(parents=True, exist_ok=True)
         modified = set(global_manifest.check_modified())
         owned = global_manifest.files
 
@@ -250,11 +253,6 @@ class HermesIntegration(SkillsIntegration):
         if global_manifest.files != owned:
             global_manifest.save()
 
-        # Create project-local marker directory so extension commands
-        # (e.g. git) can detect Hermes as an active integration.
-        # Hermes itself ignores this directory — skills live globally.
-        marker.mkdir(parents=True, exist_ok=True)
-
         return created
 
     # -- Uninstall ---------------------------------------------------------
@@ -268,8 +266,9 @@ class HermesIntegration(SkillsIntegration):
     ) -> tuple[list[Path], list[Path]]:
         """Remove unchanged owned skills and the empty project marker.
 
-        Force permits removal of edited owned files and final symlinks.
-        It never permits cleanup through a symlinked parent.
+        Force permits removal of edited project files and final symlinks.
+        It never permits cleanup through a symlinked parent. The shared
+        global skills keep their edits: force never applies to them.
         """
         global_manifest = self._global_manifest()
         for relative in global_manifest.files:
@@ -279,7 +278,7 @@ class HermesIntegration(SkillsIntegration):
         removed, skipped = manifest.uninstall(project_root, force=force)
         if not manifest.checkout_only:
             # Other checkouts on this machine share the home skills.
-            global_removed, global_skipped = global_manifest.uninstall(force=force)
+            global_removed, global_skipped = global_manifest.uninstall()
             removed.extend(global_removed)
             skipped.extend(global_skipped)
 

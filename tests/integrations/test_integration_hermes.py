@@ -175,14 +175,14 @@ class TestHermesIntegration(SkillsIntegrationTests):
         assert skill in skipped
         assert skill not in removed
 
-    def test_force_removes_only_owned_skills(self, tmp_path, monkeypatch):
-        """Force removes edited owned files but preserves other skill content."""
+    def test_force_never_removes_edited_global_skills(self, tmp_path, monkeypatch):
+        """Force (the failure rollback path) keeps edited shared skills and other skill content."""
         home = _fake_home(tmp_path)
         monkeypatch.setattr(Path, "home", lambda: home)
         integration = get_integration(self.KEY)
         manifest = IntegrationManifest(self.KEY, tmp_path)
         created = integration.setup(tmp_path, manifest)
-        skill = created[0]
+        skill, unchanged = created[0], created[1]
         skill.write_bytes(b"User edit.\n")
         companion = skill.parent / "notes.txt"
         companion.write_bytes(b"Private notes.\n")
@@ -192,11 +192,24 @@ class TestHermesIntegration(SkillsIntegrationTests):
 
         removed, skipped = integration.teardown(tmp_path, manifest, force=True)
 
-        assert skill in removed
-        assert not skill.exists()
-        assert skipped == []
+        assert skill.read_bytes() == b"User edit.\n"
+        assert skill in skipped
+        assert unchanged in removed
+        assert not unchanged.exists()
         assert companion.read_bytes() == b"Private notes.\n"
         assert foreign.read_bytes() == b"Private skill.\n"
+
+    def test_marker_failure_writes_no_global_skills(self, tmp_path, monkeypatch):
+        """The project marker comes first, so a marker failure leaves the shared skills untouched."""
+        home = _fake_home(tmp_path)
+        monkeypatch.setattr(Path, "home", lambda: home)
+        integration = get_integration(self.KEY)
+        (tmp_path / ".hermes").write_bytes(b"Not a directory.\n")
+
+        with pytest.raises((OSError, ValueError)):
+            integration.setup(tmp_path, IntegrationManifest(self.KEY, tmp_path))
+
+        assert not integration.global_skills_dir().exists()
 
     @pytest.mark.parametrize("name", ["speckit-plan", "speckit-private", "other-tool"])
     @pytest.mark.parametrize("force", [False, True])
@@ -357,7 +370,7 @@ class TestHermesIntegration(SkillsIntegrationTests):
 
     @pytest.mark.parametrize("force", [False, True])
     def test_teardown_never_follows_owned_file_symlink(self, tmp_path, monkeypatch, force):
-        """Force can unlink an owned file symlink, but cannot change its target."""
+        """Teardown keeps a shared skill replaced by a symlink and never changes its target."""
         home = _fake_home(tmp_path)
         monkeypatch.setattr(Path, "home", lambda: home)
         integration = get_integration(self.KEY)
@@ -372,12 +385,8 @@ class TestHermesIntegration(SkillsIntegrationTests):
         removed, skipped = integration.teardown(tmp_path, manifest, force=force)
 
         assert target.read_bytes() == b"External workflow.\n"
-        if force:
-            assert skill in removed
-            assert not skill.is_symlink()
-        else:
-            assert skill in skipped
-            assert skill.is_symlink()
+        assert skill in skipped
+        assert skill.is_symlink()
 
     def test_teardown_preserves_unowned_project_marker_content(self, tmp_path, monkeypatch):
         """The project marker directory is shared with user content."""
@@ -589,3 +598,30 @@ class TestHermesBuildExecArgs:
         )
         i = get_integration("hermes")
         assert i.build_exec_args("/speckit-plan hi")[0] == "/custom/hermes"
+
+
+@pytest.mark.parametrize("command", [["uninstall", "hermes"], ["switch", "claude"]])
+def test_symlinked_hermes_home_fails_without_traceback(tmp_path, monkeypatch, command):
+    """A symlinked ~/.hermes stops uninstall and switch with an error, and changes nothing behind it."""
+    from typer.testing import CliRunner
+    from specify_cli import app
+
+    home = _fake_home(tmp_path)
+    monkeypatch.setattr(Path, "home", lambda: home)
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.chdir(project)
+    runner = CliRunner()
+    init = runner.invoke(app, ["init", "--here", "--integration", "hermes", "--script", "sh", "--ignore-agent-tools"])
+    assert init.exit_code == 0, init.output
+    real = tmp_path / "real-hermes"
+    (home / ".hermes").rename(real)
+    _symlink(home / ".hermes", real)
+    before = {path: path.read_bytes() for path in real.rglob("*") if path.is_file()}
+
+    result = runner.invoke(app, ["integration", *command])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit), result.exception
+    assert "symlink" in result.output
+    assert {path: path.read_bytes() for path in real.rglob("*") if path.is_file()} == before
