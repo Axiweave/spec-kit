@@ -95,7 +95,9 @@ specify extension add memory
 
 See [Third-Party Notices](../THIRD_PARTY_NOTICES.md) for the authors and licenses. Each folder has an `UPSTREAM.md` note with the upstream commit.
 
-An add by name always installs the vendored copy. The community catalog allows discovery only, so `specify extension update` does not replace the vendored copy with a newer community release. To replace an earlier community install with the vendored copy, run `specify extension add <id> --force`. To use a community release instead, install it with `--from <url>`.
+The vendored prompts assume that feature specs are in the repository `specs/` folder. With external spec storage, `speckit.archive.run` rejects features outside `REPO_ROOT/specs`. `speckit.brownfield.migrate` and `speckit.memory.list-related-specs` also look for specs in the code repository, so they do not find externally stored specs.
+
+An add by name installs the vendored copy. `--version <vendored version>` also installs the vendored copy. Any other `--version` fails, because that version is not shipped with this release. The community catalog allows discovery only, so `specify extension update` does not replace the vendored copy with a newer community release. To replace an earlier community install with the vendored copy, run `specify extension add <id> --force`. To use a community release instead, install it with `--from <url>`.
 
 To refresh a vendored extension:
 
@@ -104,7 +106,12 @@ To refresh a vendored extension:
 3. Update `UPSTREAM.md` and the version in `catalog.json` together.
 4. Compare the folder with upstream. Only `UPSTREAM.md` may differ.
 
-Any fork edit to a vendored extension must bump the version in `extension.yml` and `catalog.json` together, for example `0.3.0+axiweave.1`.
+To make a fork edit to a vendored extension:
+
+1. Bump the version in `extension.yml` and `catalog.json` together with a `+axiweave.N` local label, for example `0.3.0+axiweave.1`.
+2. Keep the upstream version in `UPSTREAM.md` unchanged.
+3. Record the change on a "Fork changes" line in `UPSTREAM.md`.
+4. Compare the folder with upstream. Only `UPSTREAM.md` and the listed fork changes may differ.
 
 ## Adding Your Extension
 
