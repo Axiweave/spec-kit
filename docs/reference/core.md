@@ -166,6 +166,7 @@ specify config set feature_numbering timestamp
 specify config set integration omp
 specify config set script py
 specify config set feature_selection context
+specify config set specs_link false
 specify config get storage_root
 specify config clear script
 ```
@@ -188,6 +189,15 @@ For a new project, `SPECKIT_INTEGRATION_DEFAULT` outranks the personal `integrat
 The variable supplies the integration without a prompt.
 Without the variable, a personal `integration` value applies with no prompt.
 Changed personal defaults do not change an existing project's workspace or saved choices, including during forced reinitialization.
+
+#### The `specs` link
+
+With external storage, `init`, `project link`, and `project move` create `specs` in the checkout as a symlink to the workspace `specs/`.
+Tools and editors that expect `specs/` in the repository then find the features.
+The managed block in the local Git exclude file hides the link, also in a shared project, so Git never sees or commits it.
+Set `specs_link` to `false` to skip the link. The default is `true`.
+An existing `specs` file, folder, or other symlink stays unchanged, and the command names it.
+`project unlink` removes the link. `project move --to-local` replaces it with a real `specs/` folder.
 
 ### Feature selection
 

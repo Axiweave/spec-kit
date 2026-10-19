@@ -6,6 +6,7 @@ from pathlib import Path
 
 import typer
 
+from ..specs_link import link_specs
 from ..workspace import find_repository
 from .move import commit_local, commit_move, prepare_local, prepare_move
 
@@ -83,6 +84,8 @@ def register(app: typer.Typer) -> None:
             )
             raise typer.Exit(1) from exc
         typer.echo(f"Workspace: {project.workspace_root}")
+        if note := link_specs(repository, project.workspace_root):
+            typer.echo(note)
         typer.echo(
             "Spec Kit removed the local work products. "
             "The code repository's Git history remains unchanged."

@@ -148,7 +148,7 @@ def assert_moved(
             assert (workspace / relative).read_bytes() == content
         elif not relative.startswith((".specify/", "specs/")):
             assert (repository / relative).read_bytes() == content
-    assert not (repository / "specs").exists()
+    assert (repository / "specs").resolve() == (workspace / "specs").resolve()  # Only the workspace link stays.
     assert set(snapshot(repository / ".specify")) == {"checkout.json", "project.json"}
     git(repository, "check-ignore", "-q", ".specify/checkout.json")
     assert not (workspace / ".specify/project.json").exists()
@@ -299,7 +299,7 @@ def test_cleanup_flag_moves_project_and_native_commands_continue(local_project, 
     assert plan.returncode == 0, plan.stderr
     assert Path(json.loads(plan.stdout)["IMPL_PLAN"]) == workspace / ACTIVE_FEATURE / "plan.md"
     assert (workspace / ACTIVE_FEATURE / "plan.md").read_bytes() == b"# Project plan template\n"
-    assert not (repository / "specs").exists()
+    assert (repository / "specs").is_symlink()
     assert git_state(repository) == history
     assert snapshot(shared) == shared_before
     assert snapshot(ownership) == ownership_before

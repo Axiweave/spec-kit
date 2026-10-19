@@ -14,12 +14,13 @@ from uuid import uuid4
 
 from rich.console import Console
 
-from .workspace import atomic_json, checkout_record_path, confined, read_json
+from .workspace import atomic_json, checkout_record_path, confined, is_private, read_json
 from .workspace_git import _escape_ignore, run_git
 
 BEGIN = "# BEGIN Spec Kit private mode (managed; do not edit)"
 END = "# END Spec Kit private mode"
 LOCATOR_RULE = "/.specify/"
+SPECS_RULE = "/specs"  # The `specs` link to the workspace (specs_link.py). Git sees a symlink as a file.
 
 
 class PrivateModeError(ValueError):
@@ -53,6 +54,14 @@ def checkout_manifest_keys(checkout: Path) -> set[str]:
     return {key for key in keys if not key.startswith(".specify/")}
 
 
+def _private_checkout(root: Path) -> bool:
+    """Read private mode from the workspace that the checkout record names. An unreadable record counts as private."""
+    try:
+        return is_private(Path(read_json(checkout_record_path(root))["workspace"]))
+    except (OSError, ValueError, KeyError, TypeError):
+        return True
+
+
 def regenerate_exclude_block(checkout: Path, *, create: bool = True) -> None:
     """Rewrite the managed block from the locators and checkout manifests of every worktree.
 
@@ -80,9 +89,13 @@ def regenerate_exclude_block(checkout: Path, *, create: bool = True) -> None:
         return
     rules: set[str] = set()
     for root in _worktrees(checkout):
-        if (root / ".specify/project.json").is_file():
+        if not (root / ".specify/project.json").is_file():
+            continue
+        if _private_checkout(root):
             rules.add(LOCATOR_RULE)
             rules.update(_escape_ignore(key) for key in checkout_manifest_keys(root))
+        if (root / "specs").is_symlink():
+            rules.add(SPECS_RULE)
     block = "".join(f"{line}{newline}" for line in (BEGIN, *sorted(rules), END)) if rules else ""
     if block and before and not before[-1].endswith("\n"):
         before[-1] += newline

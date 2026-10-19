@@ -1152,6 +1152,11 @@ def register(app: typer.Typer) -> None:
         if _transient:
             console.print(tracker.render())
         console.print("\n[bold green]Project ready.[/bold green]")
+        if project.workspace_root != project.repository_root:
+            from .specs_link import link_specs
+
+            if note := link_specs(project.repository_root, project.workspace_root):
+                console.print(note, markup=False)
 
         if run_workspace_git:
             console.print(

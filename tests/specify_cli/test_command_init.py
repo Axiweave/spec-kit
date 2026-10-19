@@ -311,8 +311,8 @@ def test_external_init_uses_exact_workspace_offline(
     assert identity["project_id"] == project.project_id
     assert not (workspace / ".specify/project.json").exists()
     assert {path.name for path in (repository / ".specify").iterdir()} == {"checkout.json", "project.json"}
-    assert {path.name for path in repository.iterdir()} <= {".specify", ".agent", ".gitignore"}
-    assert not (repository / "specs").exists()
+    assert {path.name for path in repository.iterdir()} <= {".specify", ".agent", ".gitignore", "specs"}
+    assert (repository / "specs").resolve() == (workspace / "specs").resolve()
     for command in ("specify", "plan", "tasks"):
         assert (repository / ".agent/commands" / f"speckit.{command}.md").is_file()
     for relative in (

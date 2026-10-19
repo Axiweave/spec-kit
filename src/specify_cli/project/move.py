@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import stat
 import tempfile
@@ -12,6 +13,7 @@ from uuid import uuid4
 
 from specify_cli.integrations.manifest import append_gitignore
 from specify_cli.private_checkout import checkout_manifest_keys, regenerate_exclude_block
+from specify_cli.specs_link import is_specs_link, unlink_specs
 from specify_cli.workspace import (
     Project, atomic_json, checkout_record_path, confined, is_private, read_json, workspace_root_for,
 )
@@ -432,6 +434,7 @@ def unlink_checkout(repository: Path) -> tuple[tuple[str, ...], bool]:
         tracked = bool(run_git(repository, "ls-files", "--", ".specify/project.json", allowed_codes=(0, 128)))
     except OSError:
         tracked = False
+    unlink_specs(repository)
     removed = []
     for path in (checkout_record_path(repository), locator):
         if path.exists() or path.is_symlink():
@@ -494,6 +497,8 @@ def prepare_local(repository: Path) -> PreparedLocal:
             roots.append(active)
     for name in roots[1:]:
         target = repository / name
+        if name == "specs" and is_specs_link(repository, workspace):
+            continue
         if target.exists() or target.is_symlink():
             raise ValueError(f"The repository already has {target}. Move it out of the repository, then retry.")
         if confined(repository, name) != target:
@@ -549,11 +554,14 @@ def commit_local(prepared: PreparedLocal) -> tuple[int, tuple[Path, ...]]:
     native: dict[Path, bytes] = {}
     placed: list[str] = []
     created: list[Path] = []
+    link = is_specs_link(repository, workspace)
     try:
         native = {
             path: path.read_bytes() for path in _command_move_managed.native_paths(repository)
             if path.is_relative_to(repository) and path.is_file()
         }
+        if link:
+            (repository / "specs").unlink()
         (repository / ".specify").rename(saved)
         for name in prepared._roots:
             if not (stage / name).exists():
@@ -595,6 +603,11 @@ def commit_local(prepared: PreparedLocal) -> tuple[int, tuple[Path, ...]]:
                     saved.rename(repository / ".specify")
             except OSError as rollback_error:
                 failures.append(str(rollback_error))
+            if link and not os.path.lexists(repository / "specs"):
+                try:
+                    (repository / "specs").symlink_to(workspace / "specs", target_is_directory=True)
+                except OSError as rollback_error:
+                    failures.append(str(rollback_error))
             for parent in created:
                 try:
                     if parent.is_dir() and not any(parent.iterdir()):

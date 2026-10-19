@@ -6,6 +6,7 @@ from pathlib import Path
 
 import typer
 
+from ..specs_link import link_specs
 from ..workspace import (
     ProjectNotFoundError, atomic_json, checkout_record_path, confined, feature_selection_mode, find_repository,
     is_private, read_json, verify_workspace,
@@ -125,6 +126,7 @@ def register(app: typer.Typer) -> None:
             unattached = None if os.environ.get("SPECIFY_INIT_DIR") else _unattached_checkout()
             workspace, result, active = _attach(unattached, workspace) if unattached is not None else _relink(workspace)
             select_next = active is None and feature_selection_mode(workspace) == "automatic"
+            specs_note = link_specs(unattached or find_repository(), workspace)
         except KeyboardInterrupt:
             typer.echo("Error: Interrupted.", err=True)
             raise typer.Exit(130) from None
@@ -132,6 +134,8 @@ def register(app: typer.Typer) -> None:
             typer.echo(f"Error: {exc}", err=True)
             raise typer.Exit(1) from exc
         typer.echo(f"Workspace: {workspace}")
+        if specs_note:
+            typer.echo(specs_note)
         if result.restored:
             typer.echo(f"Restored: {result.restored} files")
         for key, files in result.modified.items():

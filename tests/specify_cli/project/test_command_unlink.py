@@ -11,6 +11,7 @@ import pytest
 from typer.testing import CliRunner
 
 from specify_cli import app
+from specify_cli.private_checkout import BEGIN, END
 from specify_cli.workspace import atomic_json, checkout_record_path, resolve_project
 
 FEATURES = ("specs/001-alpha", "specs/002-beta")
@@ -153,7 +154,12 @@ def test_unlink_in_one_worktree_keeps_the_other_worktree_attached(tmp_path, monk
     other = second_worktree(repository, workspace, FEATURES[1])
     state, before = checkout_state(other), snapshot(workspace)
     exclude = repository / ".git/info/exclude"
-    hidden = exclude.read_bytes() if exclude.exists() else None
+
+    def hidden_rules() -> list[str]:  # Checkout A's own `specs` link rule leaves with A.
+        lines = exclude.read_text(encoding="utf-8").splitlines() if exclude.exists() else []
+        return [line for line in lines if line not in (BEGIN, END, "/specs")]
+
+    hidden = hidden_rules()
     assert state[1:] == (workspace, workspace / FEATURES[1])
 
     result = CliRunner().invoke(app, ["project", "unlink"])
@@ -162,7 +168,8 @@ def test_unlink_in_one_worktree_keeps_the_other_worktree_attached(tmp_path, monk
     assert not checkout_record_path(repository).exists()
     assert checkout_state(other) == state
     assert snapshot(workspace) == before
-    assert (exclude.read_bytes() if exclude.exists() else None) == hidden
+    assert hidden_rules() == hidden
+    assert not (repository / "specs").is_symlink()
 
 
 def test_unlink_of_a_private_checkout_stops_hiding_its_spec_kit_files(tmp_path, monkeypatch):

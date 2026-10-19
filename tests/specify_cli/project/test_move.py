@@ -669,6 +669,7 @@ def test_to_local_refuses_existing_local_content_before_any_write(tmp_path, monk
 
     repository, workspace = selected_external(tmp_path, monkeypatch)
     name = "specs/notes.md" if conflict == "specs" else ".specify/notes.md"
+    (repository / "specs").unlink(missing_ok=True)  # Replace the workspace link with a real folder.
     put(repository, name, b"Local notes.\n")
     before, workspace_before = snapshot(repository), snapshot(workspace)
 

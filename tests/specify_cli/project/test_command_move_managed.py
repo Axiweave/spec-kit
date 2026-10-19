@@ -115,7 +115,7 @@ def test_move_upgrades_installed_helpers_and_preserves_user_work(local_project, 
     del after[".specify/checkout.json"], repository_after_move[".specify/checkout.json"]
     assert after == repository_after_move
     assert git_state(repository) == history
-    assert not (repository / "specs").exists()
+    assert (repository / "specs").is_symlink()
     assert set(snapshot(repository / ".specify")) == {"checkout.json", "project.json"}
     for relative, content in before.items():
         if relative.startswith(("specs/", ".specify/templates/", ".specify/memory/")):
