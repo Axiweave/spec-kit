@@ -222,7 +222,9 @@ Changed personal defaults do not change an existing project's workspace or saved
 With external storage, `init`, `project link`, and `project move` create `specs` in the checkout as a symlink to the workspace `specs/`.
 Tools and editors that expect `specs/` in the repository then find the features.
 The managed block in the local Git exclude file hides the link, also in a shared project, so Git never sees or commits it.
-Linked worktrees share that file. While one worktree has a real `specs` folder, the block does not hide links, so Git shows them as untracked.
+Linked worktrees share that file. Spec Kit rewrites the block when `init`, `project link`, `project move`, or an integration change runs.
+If a worktree has a real `specs` folder at that time, the block does not hide links. Git then shows each link as untracked, and `git add -A` would commit it.
+A `specs` folder that you create later stays hidden until one of these commands runs again.
 Set `specs_link` to `false` to skip the link. The default is `true`.
 An existing `specs` file, folder, or other symlink stays unchanged, and the command names it.
 `project unlink` removes the link. `project move --to-local` replaces it with a real `specs/` folder.
@@ -651,6 +653,7 @@ Each invocation resolves the current project's command, configuration, presets, 
 The JSON response contains `content`, `repository_root`, `workspace_root`, `feature_dir`, and `feature_selection`.
 The shared set also contains `/speckit.init`. It holds the `specify-init` skill text, so it works before a project exists.
 It interviews you about setup choices, runs `specify init`, and verifies the result.
+The command is a copy of the skill. After a skill change, run `specify integration upgrade omp --global` to refresh it.
 
 Use `specify integration upgrade omp --global` or `specify integration uninstall omp --global` to manage the shared set.
 Install and upgrade reuse the launchers that Spec Kit manages. They skip edited and unowned launchers, and report each one.
