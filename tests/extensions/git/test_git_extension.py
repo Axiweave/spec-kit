@@ -698,22 +698,6 @@ class TestCreateFeaturePowerShell:
         assert rt.returncode == 0, rt.stderr
         assert "HAS_GIT" not in rt.stdout
 
-    def test_label_hint_matches_core_helper(self, tmp_path: Path):
-        """The non-JSON SPECIFY_FEATURE hint uses the core helper's label line
-        ('# Optional label:         $env:SPECIFY_FEATURE = '<name>''), not the
-        old 'environment variable set to:' wording (the env var is only set in
-        this child process, so the actionable output is the hint)."""
-        project = _setup_project(tmp_path)
-        result = _run_pwsh(
-            "create-new-feature-branch.ps1", project,
-            "-ShortName", "persist", "Persist hint feature",
-        )
-        assert result.returncode == 0, result.stderr
-        assert result.stdout.splitlines()[-1] == (
-            "# Optional label:         $env:SPECIFY_FEATURE = '001-persist'"
-        )
-        assert "environment variable set to:" not in result.stdout
-
     def test_help_documents_branch_prefix(self, tmp_path: Path):
         """-Help documents both template config knobs."""
         project = _setup_project(tmp_path)

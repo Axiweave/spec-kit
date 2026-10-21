@@ -275,18 +275,19 @@ function Test-PersistFeatureSelection {
 }
 
 function Get-CurrentBranch {
-    # Return feature name from explicit state only.
-    # Feature state is set by SPECIFY_FEATURE (from create-new-feature or
-    # the git extension) or, in automatic projects, via .specify/feature.json.
-    if ($env:SPECIFY_FEATURE) {
-        return $env:SPECIFY_FEATURE
+    # Return the code repository's current Git branch. Return "" when HEAD is
+    # detached or Git is unavailable. The feature directory name is not a branch.
+    param([string]$RepoRoot)
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) { return "" }
+    try {
+        # Not --short: it prints heads/<name> when a tag shares the branch name.
+        $ref = & git -C $RepoRoot symbolic-ref -q HEAD 2>$null
+        if ($LASTEXITCODE -eq 0 -and $ref) { return ([string]$ref) -replace '^refs/heads/', '' }
+    } catch {
+        # Windows PowerShell 5.1 can raise on native stderr. Treat it as no branch.
     }
-
-    # No explicit feature set - return empty to signal "unknown".
     return ""
 }
-
-
 
 # Persist the active feature in the machine record or the local feature.json file.
 # Skip writes when the saved selection is unchanged.
@@ -375,7 +376,7 @@ function Get-FeaturePathsEnv {
     # Automatic projects save an explicit feature. -NoPersist and the
     # SPECIFY_FEATURE_NO_PERSIST flag always prevent that write.
     $persist = Test-PersistFeatureSelection -Mode $selectionMode -NoPersist:$NoPersist
-    $currentBranch = Get-CurrentBranch
+    $currentBranch = Get-CurrentBranch -RepoRoot $repoRoot
 
     # Resolve feature directory.  Priority:
     #   1. SPECIFY_FEATURE_DIRECTORY env var (explicit override)
@@ -446,17 +447,6 @@ function Get-FeaturePathsEnv {
         [Console]::Error.WriteLine("ERROR: Feature directory not found. Set SPECIFY_FEATURE_DIRECTORY or run the specify command to create .specify/feature.json.")
         if ($ReturnNullOnError) { return $null }
         exit 1
-    }
-
-    # When no branch context exists (no SPECIFY_FEATURE, feature resolved via
-    # SPECIFY_FEATURE_DIRECTORY or feature.json), fall back to the feature
-    # directory basename so CURRENT_BRANCH is a usable identifier rather than
-    # an empty, misleading value (issue #3026).
-    if (-not $currentBranch) {
-        # TrimEnd (not [Path]::TrimEndingDirectorySeparator, which is .NET Core
-        # only) keeps this working on Windows PowerShell 5.1 / .NET Framework.
-        $featureDirTrimmed = $featureDir.TrimEnd('/', '\')
-        $currentBranch = Split-Path -Leaf $featureDirTrimmed
     }
 
     [PSCustomObject]@{

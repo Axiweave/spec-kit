@@ -150,6 +150,7 @@ Given that feature description, do this:
     8. Return: SUCCESS (spec ready for planning)
 
 7. Write the specification to SPEC_FILE using the template structure, replacing placeholders with concrete details derived from the feature description (arguments) while preserving section order and headings.
+   Fill **Feature Branch** with the output of `git branch --show-current` run in the code repository. If it prints nothing, write `none`. Never use the feature directory name or `FEATURE_NAME` as the branch.
 
 8. **Specification Quality Validation**: After writing the initial spec, validate it against quality criteria:
 

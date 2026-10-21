@@ -13,13 +13,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-def _trim_trailing_separators(value: Path) -> str:
-    text = str(value)
-    while len(text) > 1 and text.endswith((os.sep, "/")):
-        text = text[:-1]
-    return text
-
-
 def find_specify_root(start_dir: Path | None = None) -> Path | None:
     current = (start_dir or Path.cwd()).resolve()
     home = Path.home().resolve()
@@ -203,8 +196,17 @@ def may_persist_feature_selection(mode: str, *, no_persist: bool = False) -> boo
     return mode == "automatic" and not no_persist
 
 
-def get_current_branch() -> str:
-    return os.environ.get("SPECIFY_FEATURE", "")
+def get_current_branch(repo_root: Path) -> str:
+    """Return the code repository's Git branch, or "" when HEAD is detached or Git is unavailable."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_root), "symbolic-ref", "-q", "HEAD"],
+            capture_output=True, text=True, check=False,
+        )
+    except OSError:
+        return ""
+    # Not --short: it prints heads/<name> when a tag shares the branch name.
+    return result.stdout.strip().removeprefix("refs/heads/") if result.returncode == 0 else ""
 
 
 def read_feature_json_feature_directory(repo_root: Path) -> str:
@@ -292,7 +294,7 @@ def get_feature_paths(
     if external:
         print(f"[specify] Workspace: {workspace_root}", file=sys.stderr)
     selection_mode = feature_selection_mode(workspace_root)
-    current_branch = get_current_branch()
+    current_branch = get_current_branch(repo_root)
 
     feature_dir_raw = os.environ.get("SPECIFY_FEATURE_DIRECTORY", "")
     if feature_dir_raw:
@@ -354,9 +356,6 @@ def get_feature_paths(
             confined_workspace_path(workspace_root, feature_dir / name)
     if feature_dir_raw and may_persist_feature_selection(selection_mode, no_persist=no_persist):
         persist_feature_json(repo_root, feature_dir_raw)
-
-    if not current_branch:
-        current_branch = Path(_trim_trailing_separators(feature_dir)).name
 
     return FeaturePaths(
         repo_root=repo_root,

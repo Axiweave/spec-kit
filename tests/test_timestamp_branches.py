@@ -194,7 +194,7 @@ class TestTimestampBranch:
         assert result.returncode == 0, result.stderr
         branch = None
         for line in result.stdout.splitlines():
-            if line.startswith("BRANCH_NAME:"):
+            if line.startswith("FEATURE_NAME:"):
                 branch = line.split(":", 1)[1].strip()
         assert branch is not None
         assert re.match(r"^\d{8}-\d{6}-user-auth$", branch), f"unexpected branch: {branch}"
@@ -211,7 +211,7 @@ class TestTimestampBranch:
         result = run_script(git_repo, "--json", "--timestamp", "--short-name", "api", "API feature")
         assert result.returncode == 0, result.stderr
         data = json.loads(result.stdout)
-        for key in ("BRANCH_NAME", "SPEC_FILE", "FEATURE_NUM"):
+        for key in ("FEATURE_NAME", "SPEC_FILE", "FEATURE_NUM"):
             assert key in data, f"missing {key} in JSON: {data}"
         assert re.match(r"^\d{8}-\d{6}$", data["FEATURE_NUM"])
 
@@ -222,7 +222,7 @@ class TestTimestampBranch:
         assert result.returncode == 0, result.stderr
         branch = None
         for line in result.stdout.splitlines():
-            if line.startswith("BRANCH_NAME:"):
+            if line.startswith("FEATURE_NAME:"):
                 branch = line.split(":", 1)[1].strip()
         assert branch is not None
         assert len(branch) <= 244
@@ -269,7 +269,7 @@ class TestSequentialBranch:
         assert result.returncode == 0, result.stderr
         branch = None
         for line in result.stdout.splitlines():
-            if line.startswith("BRANCH_NAME:"):
+            if line.startswith("FEATURE_NAME:"):
                 branch = line.split(":", 1)[1].strip()
         assert branch is not None
         assert re.match(r"^\d{3,}-new-feat$", branch), f"unexpected branch: {branch}"
@@ -280,10 +280,10 @@ class TestSequentialBranch:
         case-sensitive -cmatch to produce the same result."""
         r1 = run_script(git_repo, "--json", "--dry-run", "Add go support")
         assert r1.returncode == 0, r1.stderr
-        assert json.loads(r1.stdout)["BRANCH_NAME"] == "001-support"
+        assert json.loads(r1.stdout)["FEATURE_NAME"] == "001-support"
         r2 = run_script(git_repo, "--json", "--dry-run", "Use GO now")
         assert r2.returncode == 0, r2.stderr
-        assert json.loads(r2.stdout)["BRANCH_NAME"] == "001-use-go-now"
+        assert json.loads(r2.stdout)["FEATURE_NAME"] == "001-use-go-now"
 
     def test_sequential_ignores_timestamp_dirs(self, git_repo: Path):
         """Sequential numbering skips timestamp dirs when computing next number."""
@@ -293,7 +293,7 @@ class TestSequentialBranch:
         assert result.returncode == 0, result.stderr
         branch = None
         for line in result.stdout.splitlines():
-            if line.startswith("BRANCH_NAME:"):
+            if line.startswith("FEATURE_NAME:"):
                 branch = line.split(":", 1)[1].strip()
         assert branch == "003-next-feat", f"expected 003-next-feat, got: {branch}"
 
@@ -305,7 +305,7 @@ class TestSequentialBranch:
         assert result.returncode == 0, result.stderr
         branch = None
         for line in result.stdout.splitlines():
-            if line.startswith("BRANCH_NAME:"):
+            if line.startswith("FEATURE_NAME:"):
                 branch = line.split(":", 1)[1].strip()
         assert branch == "1001-next-feat", f"expected 1001-next-feat, got: {branch}"
 
@@ -320,7 +320,7 @@ class TestSequentialBranch:
         assert r.returncode == 0, r.stderr
         data = json.loads(r.stdout)
         assert data["FEATURE_NUM"] == "000"
-        assert data["BRANCH_NAME"] == "000-zero"
+        assert data["FEATURE_NAME"] == "000-zero"
 
     def test_explicit_conflicting_number_uses_next_spec_prefix(self, git_repo: Path):
         """An explicit number is advanced when its spec prefix already exists."""
@@ -341,7 +341,7 @@ class TestSequentialBranch:
         assert result.returncode == 0, result.stderr
         data = json.loads(result.stdout)
         assert data["FEATURE_NUM"] == "1001"
-        assert data["BRANCH_NAME"] == "1001-test"
+        assert data["FEATURE_NAME"] == "1001-test"
         assert "--number 001 conflicts with an existing spec directory" in result.stderr
         assert "using 1001 instead" in result.stderr
 
@@ -388,10 +388,10 @@ class TestSequentialBranchPowerShell:
 
         r1 = _run("Add go support")
         assert r1.returncode == 0, r1.stderr
-        assert json.loads(r1.stdout)["BRANCH_NAME"] == "001-support"
+        assert json.loads(r1.stdout)["FEATURE_NAME"] == "001-support"
         r2 = _run("Use GO now")
         assert r2.returncode == 0, r2.stderr
-        assert json.loads(r2.stdout)["BRANCH_NAME"] == "001-use-go-now"
+        assert json.loads(r2.stdout)["FEATURE_NAME"] == "001-use-go-now"
 
     @pytest.mark.skipif(not _has_pwsh(), reason="pwsh not installed")
     def test_explicit_number_zero_is_honored_matching_bash(self, ps_git_repo: Path):
@@ -408,7 +408,7 @@ class TestSequentialBranchPowerShell:
         assert result.returncode == 0, result.stderr
         data = json.loads(result.stdout)
         assert data["FEATURE_NUM"] == "000"
-        assert data["BRANCH_NAME"] == "000-zero"
+        assert data["FEATURE_NAME"] == "000-zero"
 
     @pytest.mark.skipif(not _has_pwsh(), reason="pwsh not installed")
     def test_explicit_conflicting_number_uses_next_spec_prefix(
@@ -430,7 +430,7 @@ class TestSequentialBranchPowerShell:
         assert result.returncode == 0, result.stderr
         data = json.loads(result.stdout)
         assert data["FEATURE_NUM"] == "1001"
-        assert data["BRANCH_NAME"] == "1001-test"
+        assert data["FEATURE_NAME"] == "1001-test"
         assert "-Number 001 conflicts with an existing spec directory" in result.stderr
         assert "using 1001 instead" in result.stderr
 
@@ -544,17 +544,6 @@ class TestGetFeaturePathsSinglePrefix:
         assert "Feature directory not found" in (result.stderr + result.stdout)
 
 
-# ── get_current_branch Tests ─────────────────────────────────────────────────
-
-
-@requires_bash
-class TestGetCurrentBranch:
-    def test_env_var(self):
-        """Test 12: get_current_branch returns SPECIFY_FEATURE env var."""
-        result = source_and_call("get_current_branch", env={"SPECIFY_FEATURE": "my-custom-branch"})
-        assert result.stdout.strip() == "my-custom-branch"
-
-
 # ── No-git Tests ─────────────────────────────────────────────────────────────
 
 
@@ -587,7 +576,7 @@ class TestE2EFlow:
 
         branch_name = None
         for line in result.stdout.splitlines():
-            if line.startswith("BRANCH_NAME:"):
+            if line.startswith("FEATURE_NAME:"):
                 branch_name = line.split(":", 1)[1].strip()
                 break
 
@@ -618,7 +607,7 @@ class TestE2EFlow:
 
         branch_name = None
         for line in result.stdout.splitlines():
-            if line.startswith("BRANCH_NAME:"):
+            if line.startswith("FEATURE_NAME:"):
                 branch_name = line.split(":", 1)[1].strip()
                 break
 
@@ -697,7 +686,7 @@ class TestAllowExistingBranch:
         )
         assert result.returncode == 0, result.stderr
         data = json.loads(result.stdout)
-        assert data["BRANCH_NAME"] == "009-json-test"
+        assert data["FEATURE_NAME"] == "009-json-test"
 
     def test_allow_existing_no_git(self, no_git_dir: Path):
         """T013: Verify flag also works in non-git repos."""
@@ -742,7 +731,7 @@ class TestAllowExistingBranch:
         )
 
         assert result.returncode == 0, result.stderr
-        assert json.loads(result.stdout)["BRANCH_NAME"] == expected
+        assert json.loads(result.stdout)["FEATURE_NAME"] == expected
         assert (specs / expected).is_dir()
 
 
@@ -761,9 +750,9 @@ def test_saved_numbering_reads_through_python_path_with_space(
     git_repo: Path, tmp_path: Path, variant: str
 ):
     """Without jq, the saved numbering is read by a Python path that contains a space."""
-    script = "scripts/bash/create-new-feature.sh"
+    script, key = "scripts/bash/create-new-feature.sh", "FEATURE_NAME"
     if variant == "git-extension":
-        script = ".specify/extensions/git/scripts/bash/create-new-feature-branch.sh"
+        script, key = ".specify/extensions/git/scripts/bash/create-new-feature-branch.sh", "BRANCH_NAME"
         (git_repo / script).parent.mkdir(parents=True)
         shutil.copy(EXT_CREATE_FEATURE, git_repo / script)
     (git_repo / ".specify" / "init-options.json").write_text(
@@ -781,7 +770,7 @@ def test_saved_numbering_reads_through_python_path_with_space(
     )
 
     assert result.returncode == 0, result.stderr
-    assert re.search(r"^BRANCH_NAME: \d{8}-\d{6}-spaced$", result.stdout, re.M), result.stdout
+    assert re.search(rf"^{key}: \d{{8}}-\d{{6}}-spaced$", result.stdout, re.M), result.stdout
 
 
 class TestAllowExistingBranchPowerShell:
@@ -814,7 +803,7 @@ class TestAllowExistingBranchPowerShell:
         )
 
         assert result.returncode == 0, result.stderr
-        assert json.loads(result.stdout)["BRANCH_NAME"] == "004-pre-exist"
+        assert json.loads(result.stdout)["FEATURE_NAME"] == "004-pre-exist"
         assert (feature_dir / "spec.md").is_file()
 
     @pytest.mark.skipif(not _has_pwsh(), reason="pwsh not installed")
@@ -886,7 +875,7 @@ class TestDryRun:
         assert result.returncode == 0, result.stderr
         branch = None
         for line in result.stdout.splitlines():
-            if line.startswith("BRANCH_NAME:"):
+            if line.startswith("FEATURE_NAME:"):
                 branch = line.split(":", 1)[1].strip()
         assert branch == "003-new-feat", f"expected 003-new-feat, got: {branch}"
 
@@ -933,7 +922,7 @@ class TestDryRun:
         assert result.returncode == 0, result.stderr
         branch = None
         for line in result.stdout.splitlines():
-            if line.startswith("BRANCH_NAME:"):
+            if line.startswith("FEATURE_NAME:"):
                 branch = line.split(":", 1)[1].strip()
         assert branch == "001-first", f"expected 001-first, got: {branch}"
 
@@ -948,7 +937,7 @@ class TestDryRun:
         assert result.returncode == 0, result.stderr
         branch = None
         for line in result.stdout.splitlines():
-            if line.startswith("BRANCH_NAME:"):
+            if line.startswith("FEATURE_NAME:"):
                 branch = line.split(":", 1)[1].strip()
         assert branch == "004-user-auth", f"expected 004-user-auth, got: {branch}"
 
@@ -962,7 +951,7 @@ class TestDryRun:
         assert dry_result.returncode == 0, dry_result.stderr
         dry_branch = None
         for line in dry_result.stdout.splitlines():
-            if line.startswith("BRANCH_NAME:"):
+            if line.startswith("FEATURE_NAME:"):
                 dry_branch = line.split(":", 1)[1].strip()
         # Real run
         real_result = run_script(
@@ -971,7 +960,7 @@ class TestDryRun:
         assert real_result.returncode == 0, real_result.stderr
         real_branch = None
         for line in real_result.stdout.splitlines():
-            if line.startswith("BRANCH_NAME:"):
+            if line.startswith("FEATURE_NAME:"):
                 real_branch = line.split(":", 1)[1].strip()
         assert dry_branch == real_branch, f"dry={dry_branch} != real={real_branch}"
 
@@ -997,7 +986,7 @@ class TestDryRun:
         assert dry_result.returncode == 0, dry_result.stderr
         dry_branch = None
         for line in dry_result.stdout.splitlines():
-            if line.startswith("BRANCH_NAME:"):
+            if line.startswith("FEATURE_NAME:"):
                 dry_branch = line.split(":", 1)[1].strip()
         assert dry_branch == "002-remote-test", f"expected 002-remote-test, got: {dry_branch}"
 
@@ -1039,9 +1028,9 @@ class TestDryRun:
         assert result.returncode == 0, result.stderr
         branch = None
         for line in result.stdout.splitlines():
-            if line.startswith("BRANCH_NAME:"):
+            if line.startswith("FEATURE_NAME:"):
                 branch = line.split(":", 1)[1].strip()
-        assert branch is not None, "no BRANCH_NAME in output"
+        assert branch is not None, "no FEATURE_NAME in output"
         assert re.match(r"^\d{8}-\d{6}-ts-feat$", branch), f"unexpected: {branch}"
         after = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
@@ -1060,7 +1049,7 @@ class TestDryRun:
         assert result.returncode == 0, result.stderr
         branch = None
         for line in result.stdout.splitlines():
-            if line.startswith("BRANCH_NAME:"):
+            if line.startswith("FEATURE_NAME:"):
                 branch = line.split(":", 1)[1].strip()
         assert branch == "042-num-feat", f"expected 042-num-feat, got: {branch}"
 
@@ -1073,7 +1062,7 @@ class TestDryRun:
         assert result.returncode == 0, result.stderr
         branch = None
         for line in result.stdout.splitlines():
-            if line.startswith("BRANCH_NAME:"):
+            if line.startswith("FEATURE_NAME:"):
                 branch = line.split(":", 1)[1].strip()
         assert branch == "002-no-git-dry", f"expected 002-no-git-dry, got: {branch}"
         # Verify no spec dir created
@@ -1106,7 +1095,7 @@ class TestPowerShellDryRun:
         assert result.returncode == 0, result.stderr
         branch = None
         for line in result.stdout.splitlines():
-            if line.startswith("BRANCH_NAME:"):
+            if line.startswith("FEATURE_NAME:"):
                 branch = line.split(":", 1)[1].strip()
         assert branch == "002-ps-feat", f"expected 002-ps-feat, got: {branch}"
 
@@ -1174,7 +1163,7 @@ class TestPowerShellDryRun:
 
 def _branch_from_output(stdout: str) -> str | None:
     for line in stdout.splitlines():
-        if line.startswith("BRANCH_NAME:"):
+        if line.startswith("FEATURE_NAME:"):
             return line.split(":", 1)[1].strip()
     return None
 

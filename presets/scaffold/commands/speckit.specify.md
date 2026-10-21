@@ -13,9 +13,9 @@ $ARGUMENTS
 
 Given the feature description above:
 
-1. **Create the feature branch** by running the script:
+1. **Create the feature directory** by running the script:
    - Bash: `{SCRIPT} --json --short-name "<short-name>" "<description>"`
-   - The JSON output contains BRANCH_NAME and SPEC_FILE paths.
+   - The JSON output contains FEATURE_NAME and SPEC_FILE paths. The script creates no Git branch.
 
 2. **Read the spec-template** to see the sections you need to fill.
 

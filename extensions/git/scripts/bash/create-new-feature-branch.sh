@@ -637,8 +637,6 @@ if [ "$DRY_RUN" != true ]; then
     else
         >&2 echo "[specify] Warning: Git repository not detected; skipped branch creation for $BRANCH_NAME"
     fi
-
-    printf '# Optional label:         export SPECIFY_FEATURE=%q\n' "$BRANCH_NAME" >&2
 fi
 
 if $JSON_MODE; then
@@ -671,7 +669,4 @@ if $JSON_MODE; then
 else
     echo "BRANCH_NAME: $BRANCH_NAME"
     echo "FEATURE_NUM: $FEATURE_NUM"
-    if [ "$DRY_RUN" != true ]; then
-        printf '# Optional label:         export SPECIFY_FEATURE=%q\n' "$BRANCH_NAME"
-    fi
 fi

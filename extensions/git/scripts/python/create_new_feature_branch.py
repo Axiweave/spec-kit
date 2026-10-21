@@ -67,15 +67,6 @@ def _err(message: str) -> None:
     print(message, file=sys.stderr)
 
 
-def _persist_hint(var_name: str, value: str) -> str:
-    """Shell-appropriate guidance for persisting an env var in the caller's shell."""
-    if os.name == "nt":
-        escaped_value = value.replace("'", "''")
-        return f"$env:{var_name} = '{escaped_value}'"
-    escaped_value = re.sub(r"([^\w@%+=:,./-])", r"\\\1", value)
-    return f"export {var_name}={escaped_value}"
-
-
 @dataclass
 class Args:
     json_mode: bool = False
@@ -649,8 +640,6 @@ def main(argv: list[str]) -> int:
                 f"creation for {branch_name}"
             )
 
-        _err(f"# Optional label:         {_persist_hint('SPECIFY_FEATURE', branch_name)}")
-
     if args.json_mode:
         payload: dict[str, object] = {
             "BRANCH_NAME": branch_name,
@@ -662,11 +651,6 @@ def main(argv: list[str]) -> int:
     else:
         print(f"BRANCH_NAME: {branch_name}")
         print(f"FEATURE_NUM: {feature_num}")
-        if not args.dry_run:
-            print(
-                "# Optional label:         "
-                f"{_persist_hint('SPECIFY_FEATURE', branch_name)}"
-            )
 
     return 0
 

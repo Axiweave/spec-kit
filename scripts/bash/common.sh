@@ -315,19 +315,13 @@ may_persist_feature_selection() {
         "${SPECIFY_FEATURE_NO_PERSIST:-}" != "1" && "${SPECIFY_FEATURE_NO_PERSIST:-}" != "true" ]]
 }
 
-# Get current feature name from explicit state only.
-# Returns the feature identifier or empty string if none is set.
-# Feature state is set by SPECIFY_FEATURE (from create-new-feature or
-# the git extension) or, in automatic projects, via .specify/feature.json.
+# Print the code repository's current Git branch, or nothing when HEAD is
+# detached or Git is unavailable. The feature directory name is not a branch.
 get_current_branch() {
-    if [[ -n "${SPECIFY_FEATURE:-}" ]]; then
-        echo "$SPECIFY_FEATURE"
-        return
-    fi
-
-    # No explicit feature set — caller must handle this via feature.json
-    # in get_feature_paths(). Return empty to signal "unknown".
-    echo ""
+    # Not --short: it prints heads/<name> when a tag shares the branch name.
+    local ref
+    ref=$(git -C "$1" symbolic-ref -q HEAD 2>/dev/null) || return 0
+    printf '%s\n' "${ref#refs/heads/}"
 }
 
 # Safely read .specify/feature.json's "feature_directory" value.
@@ -444,7 +438,7 @@ get_feature_paths() {
     local selection_mode
     selection_mode=$(get_feature_selection_mode "$workspace_root") || return 1
     local current_branch
-    current_branch=$(get_current_branch)
+    current_branch=$(get_current_branch "$repo_root")
 
     # Resolve feature directory.  Priority:
     #   1. SPECIFY_FEATURE_DIRECTORY env var (explicit override)
@@ -504,15 +498,6 @@ get_feature_paths() {
     fi
     if [[ -n "${SPECIFY_FEATURE_DIRECTORY:-}" ]] && may_persist_feature_selection "$selection_mode" "$no_persist"; then
         _persist_feature_json "$repo_root" "$SPECIFY_FEATURE_DIRECTORY" || return 1
-    fi
-
-    # When no branch context exists (no SPECIFY_FEATURE, feature resolved via
-    # SPECIFY_FEATURE_DIRECTORY or feature.json), fall back to the feature
-    # directory basename so CURRENT_BRANCH is a usable identifier rather than
-    # an empty, misleading value (issue #3026).
-    if [[ -z "$current_branch" ]]; then
-        local feature_dir_trimmed="${feature_dir%/}"
-        current_branch="${feature_dir_trimmed##*/}"
     fi
 
     # Use printf '%q' to safely quote values, preventing shell injection

@@ -102,20 +102,7 @@ def _assert_parity(
     if stdout:
         assert py_result.stdout == bash_result.stdout
     if stderr:
-        py_stderr = py_result.stderr
-        bash_stderr = bash_result.stderr
-        if os.name == "nt":
-            py_stderr = _without_persist_hint(py_stderr)
-            bash_stderr = _without_persist_hint(bash_stderr)
-        assert py_stderr == bash_stderr
-
-
-def _without_persist_hint(stderr: str) -> str:
-    return "".join(
-        line
-        for line in stderr.splitlines(keepends=True)
-        if not line.startswith("# Optional label: ")
-    )
+        assert py_result.stderr == bash_result.stderr
 
 
 @requires_bash
@@ -379,27 +366,6 @@ class TestCreateFeatureBranchParity:
         _assert_parity(b, p)
         assert json.loads(p.stdout) == {"BRANCH_NAME": "team/042-exact-name", "FEATURE_NUM": "042"}
 
-    def test_git_branch_name_override_persist_hint_matches_bash(
-        self, tmp_path: Path
-    ):
-        bash_proj, py_proj = _twin_projects(tmp_path)
-        env = {"GIT_BRANCH_NAME": "feature/$value's-\"quoted\""}
-        b = _run_bash(
-            "create-new-feature-branch.sh",
-            bash_proj,
-            "--json",
-            "desc word",
-            env_extra=env,
-        )
-        p = _run_py(
-            "create-new-feature-branch",
-            py_proj,
-            "--json",
-            "desc word",
-            env_extra=env,
-        )
-        _assert_parity(b, p)
-
     def test_long_branch_name_truncated_to_244_bytes(self, tmp_path: Path):
         bash_proj, py_proj = _twin_projects(tmp_path)
         long_name = "-".join(["word"] * 60)
@@ -455,54 +421,6 @@ class TestCreateFeatureBranchParity:
         monkeypatch.setenv("PATH", "")
 
         assert module["_git_lines"](tmp_path, "status") == []
-
-    def test_windows_persist_hint_quotes_branch_name(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
-        module = runpy.run_path(str(EXT_PY / "create_new_feature_branch.py"))
-        monkeypatch.setattr(module["os"], "name", "nt")
-
-        result = module["_persist_hint"](
-            "GIT_BRANCH_NAME", "feature/$value's-\"quoted\""
-        )
-
-        assert (
-            result
-            == "$env:GIT_BRANCH_NAME = 'feature/$value''s-\"quoted\"'"
-        )
-
-    def test_shell_specific_persist_hint_can_be_ignored_for_parity(self):
-        bash_stderr = (
-            "[specify] Warning\n"
-            "# Optional label:         export SPECIFY_FEATURE=feature/name\n"
-        )
-        windows_stderr = (
-            "[specify] Warning\n"
-            "# Optional label:         $env:SPECIFY_FEATURE = 'feature/name'\n"
-        )
-
-        assert _without_persist_hint(bash_stderr) == _without_persist_hint(
-            windows_stderr
-        )
-
-    def test_assert_parity_ignores_windows_persist_hint(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
-        monkeypatch.setattr(os, "name", "nt")
-        bash_result = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="", stderr=(
-                "[specify] Warning\n"
-                "# Optional label:         export SPECIFY_FEATURE=feature/name\n"
-            )
-        )
-        py_result = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="", stderr=(
-                "[specify] Warning\n"
-                "# Optional label:         $env:SPECIFY_FEATURE = 'feature/name'\n"
-            )
-        )
-
-        _assert_parity(bash_result, py_result)
 
     def test_empty_description_errors(self, tmp_path: Path):
         bash_proj, py_proj = _twin_projects(tmp_path)

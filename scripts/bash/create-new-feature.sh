@@ -420,12 +420,12 @@ else
 
 fi
 
-# GitHub enforces a 244-byte limit on branch names
-# Validate and truncate if necessary
+# Keep the feature directory name within 244 bytes (the historical branch limit).
+# This script creates no Git branch.
 ORIGINAL_BRANCH_NAME="${FEATURE_NUM}-${BRANCH_SUFFIX}"
 BRANCH_NAME=$(fit_branch_name "$FEATURE_NUM" "$BRANCH_SUFFIX")
 if [ "$BRANCH_NAME" != "$ORIGINAL_BRANCH_NAME" ]; then
-    >&2 echo "[specify] Warning: Branch name exceeded GitHub's 244-byte limit"
+    >&2 echo "[specify] Warning: Feature name exceeded the 244-byte limit"
     >&2 echo "[specify] Original: $ORIGINAL_BRANCH_NAME ($(branch_byte_count "$ORIGINAL_BRANCH_NAME") bytes)"
     >&2 echo "[specify] Truncated to: $BRANCH_NAME ($(branch_byte_count "$BRANCH_NAME") bytes)"
 fi
@@ -524,37 +524,35 @@ if [ "$DRY_RUN" != true ]; then
 
     # Inform the user how to set feature state in their own shell
     printf '# To select this feature: export SPECIFY_FEATURE_DIRECTORY=%s\n' "$(shell_quote "$FEATURE_DIR")" >&2
-    printf '# Optional label:         export SPECIFY_FEATURE=%s\n' "$(shell_quote "$BRANCH_NAME")" >&2
 fi
 
 if $JSON_MODE; then
     if command -v jq >/dev/null 2>&1; then
         if [ "$DRY_RUN" = true ]; then
             jq -cn \
-                --arg branch_name "$BRANCH_NAME" \
+                --arg feature_name "$BRANCH_NAME" \
                 --arg spec_file "$SPEC_FILE" \
                 --arg feature_num "$FEATURE_NUM" \
-                '{BRANCH_NAME:$branch_name,SPEC_FILE:$spec_file,FEATURE_NUM:$feature_num,DRY_RUN:true}'
+                '{FEATURE_NAME:$feature_name,SPEC_FILE:$spec_file,FEATURE_NUM:$feature_num,DRY_RUN:true}'
         else
             jq -cn \
-                --arg branch_name "$BRANCH_NAME" \
+                --arg feature_name "$BRANCH_NAME" \
                 --arg spec_file "$SPEC_FILE" \
                 --arg feature_num "$FEATURE_NUM" \
-                '{BRANCH_NAME:$branch_name,SPEC_FILE:$spec_file,FEATURE_NUM:$feature_num}'
+                '{FEATURE_NAME:$feature_name,SPEC_FILE:$spec_file,FEATURE_NUM:$feature_num}'
         fi
     else
         if [ "$DRY_RUN" = true ]; then
-            printf '{"BRANCH_NAME":"%s","SPEC_FILE":"%s","FEATURE_NUM":"%s","DRY_RUN":true}\n' "$(json_escape "$BRANCH_NAME")" "$(json_escape "$SPEC_FILE")" "$(json_escape "$FEATURE_NUM")"
+            printf '{"FEATURE_NAME":"%s","SPEC_FILE":"%s","FEATURE_NUM":"%s","DRY_RUN":true}\n' "$(json_escape "$BRANCH_NAME")" "$(json_escape "$SPEC_FILE")" "$(json_escape "$FEATURE_NUM")"
         else
-            printf '{"BRANCH_NAME":"%s","SPEC_FILE":"%s","FEATURE_NUM":"%s"}\n' "$(json_escape "$BRANCH_NAME")" "$(json_escape "$SPEC_FILE")" "$(json_escape "$FEATURE_NUM")"
+            printf '{"FEATURE_NAME":"%s","SPEC_FILE":"%s","FEATURE_NUM":"%s"}\n' "$(json_escape "$BRANCH_NAME")" "$(json_escape "$SPEC_FILE")" "$(json_escape "$FEATURE_NUM")"
         fi
     fi
 else
-    echo "BRANCH_NAME: $BRANCH_NAME"
+    echo "FEATURE_NAME: $BRANCH_NAME"
     echo "SPEC_FILE: $SPEC_FILE"
     echo "FEATURE_NUM: $FEATURE_NUM"
     if [ "$DRY_RUN" != true ]; then
         printf '# To select this feature: export SPECIFY_FEATURE_DIRECTORY=%s\n' "$(shell_quote "$FEATURE_DIR")"
-        printf '# Optional label:         export SPECIFY_FEATURE=%s\n' "$(shell_quote "$BRANCH_NAME")"
     fi
 fi

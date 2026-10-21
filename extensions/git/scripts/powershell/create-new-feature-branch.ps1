@@ -594,15 +594,7 @@ if (-not $DryRun) {
             Write-Warning "[specify] Warning: Git repository not detected; skipped branch creation for $branchName"
         }
     }
-
-    $env:SPECIFY_FEATURE = $branchName
 }
-
-# Build the PowerShell-idiomatic label hint. It matches the label line of the
-# core create-new-feature.ps1 hint. This script creates no feature directory,
-# so it prints no "# To select this feature:" line.
-$quotedBranchName = "'" + $branchName.Replace("'", "''") + "'"
-$featureAssignment = '$env:SPECIFY_FEATURE = ' + $quotedBranchName
 
 if ($Json) {
     $obj = [PSCustomObject]@{
@@ -619,7 +611,4 @@ if ($Json) {
 } else {
     Write-Output "BRANCH_NAME: $branchName"
     Write-Output "FEATURE_NUM: $featureNum"
-    if (-not $DryRun) {
-        Write-Output "# Optional label:         $featureAssignment"
-    }
 }

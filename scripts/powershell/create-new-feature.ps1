@@ -284,12 +284,12 @@ if ($Timestamp) {
 
 }
 
-# GitHub enforces a 244-byte limit on branch names
-# Validate and truncate if necessary
+# Keep the feature directory name within 244 bytes (the historical branch limit).
+# This script creates no Git branch.
 $originalBranchName = "$featureNum-$branchSuffix"
 $branchName = Get-FittedBranchName -FeatureNum $featureNum -BranchSuffix $branchSuffix
 if ($branchName -ne $originalBranchName) {
-    [Console]::Error.WriteLine("[specify] Warning: Branch name exceeded GitHub's 244-byte limit")
+    [Console]::Error.WriteLine("[specify] Warning: Feature name exceeded the 244-byte limit")
     [Console]::Error.WriteLine("[specify] Original: $originalBranchName ($([System.Text.Encoding]::UTF8.GetByteCount($originalBranchName)) bytes)")
     [Console]::Error.WriteLine("[specify] Truncated to: $branchName ($([System.Text.Encoding]::UTF8.GetByteCount($branchName)) bytes)")
 }
@@ -375,21 +375,17 @@ if (-not $DryRun) {
         Save-FeatureJson -RepoRoot $repoRoot -FeatureDirectory $featureDir
     }
 
-    # Set environment variables for the current session
-    $env:SPECIFY_FEATURE = $branchName
+    # Set the feature directory for the current session
     $env:SPECIFY_FEATURE_DIRECTORY = $featureDir
 
-    $quotedBranchName = "'" + $branchName.Replace("'", "''") + "'"
     $quotedFeatureDir = "'" + $featureDir.Replace("'", "''") + "'"
-    $featureAssignment = '$env:SPECIFY_FEATURE = ' + $quotedBranchName
     $directoryAssignment = '$env:SPECIFY_FEATURE_DIRECTORY = ' + $quotedFeatureDir
     [Console]::Error.WriteLine("# To select this feature: $directoryAssignment")
-    [Console]::Error.WriteLine("# Optional label:         $featureAssignment")
 }
 
 if ($Json) {
     $obj = [PSCustomObject]@{
-        BRANCH_NAME = $branchName
+        FEATURE_NAME = $branchName
         SPEC_FILE = $specFile
         FEATURE_NUM = $featureNum
     }
@@ -398,11 +394,10 @@ if ($Json) {
     }
     $obj | ConvertTo-Json -Compress
 } else {
-    Write-Output "BRANCH_NAME: $branchName"
+    Write-Output "FEATURE_NAME: $branchName"
     Write-Output "SPEC_FILE: $specFile"
     Write-Output "FEATURE_NUM: $featureNum"
     if (-not $DryRun) {
         Write-Output "# To select this feature: $directoryAssignment"
-        Write-Output "# Optional label:         $featureAssignment"
     }
 }

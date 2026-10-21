@@ -117,7 +117,7 @@ def test_empty_feature_name_warning(
 
     assert result.returncode == 0, result.stderr
     output = json_stdout(result)
-    assert output["BRANCH_NAME"] == f"001-{suffix}"
+    assert output["FEATURE_NAME"] == f"001-{suffix}"
     warning = "Feature name is empty after removing unsupported characters"
     assert result.stderr.count(warning) == int(warns)
     if warns:
@@ -147,9 +147,9 @@ def test_python_outputs_unicode_when_default_encoding_is_cp1252(
     if not dry_run:
         assert "001-添加用户" in result.stderr
     if json_mode:
-        assert json_stdout(result)["BRANCH_NAME"] == "001-添加用户"
+        assert json_stdout(result)["FEATURE_NAME"] == "001-添加用户"
     else:
-        assert "BRANCH_NAME: 001-添加用户" in result.stdout
+        assert "FEATURE_NAME: 001-添加用户" in result.stdout
 
 
 @pytest.mark.parametrize(
@@ -187,7 +187,7 @@ def test_unicode_number_categories_match(
     result = run(command(repo, SCRIPT, *args), repo)
 
     assert result.returncode == 0, result.stderr
-    assert json_stdout(result)["BRANCH_NAME"] == expected
+    assert json_stdout(result)["FEATURE_NAME"] == expected
 
 
 @requires_bash
@@ -215,7 +215,7 @@ def test_bash_reports_missing_utf8_locale_for_unicode_only(
         env,
     )
     assert ascii_result.returncode == 0, ascii_result.stderr
-    assert json_stdout(ascii_result)["BRANCH_NAME"] == "001-user-authentication"
+    assert json_stdout(ascii_result)["FEATURE_NAME"] == "001-user-authentication"
 
     for args in (("添加用户",), ("--short-name", "用户", "Add users")):
         result = run(bash_cmd(repo, SCRIPT, "--json", "--dry-run", *args), repo, env)
@@ -238,7 +238,7 @@ def test_bash_respects_explicit_non_utf8_lc_all(repo: Path, locale_name: str) ->
         env,
     )
     assert ascii_result.returncode == 0, ascii_result.stderr
-    assert json_stdout(ascii_result)["BRANCH_NAME"] == "001-user-authentication"
+    assert json_stdout(ascii_result)["FEATURE_NAME"] == "001-user-authentication"
 
     for args in (("添加用户",), ("--short-name", "用户", "Add users")):
         unicode_result = run(
@@ -284,7 +284,7 @@ def test_bash_ascii_controls_need_no_utf8_locale_or_python(
         )
         assert bash.returncode == py.returncode == 0, bash.stderr
         assert json_stdout(bash) == json_stdout(py)
-        assert json_stdout(bash)["BRANCH_NAME"] == "001-foo-bar"
+        assert json_stdout(bash)["FEATURE_NAME"] == "001-foo-bar"
 
 
 @requires_bash
@@ -306,7 +306,7 @@ def test_bash_requires_python_only_for_unicode_names(
         env,
     )
     assert ascii_result.returncode == 0, ascii_result.stderr
-    assert json_stdout(ascii_result)["BRANCH_NAME"] == "001-user-authentication"
+    assert json_stdout(ascii_result)["FEATURE_NAME"] == "001-user-authentication"
 
     unicode_result = run(
         bash_cmd(repo, SCRIPT, "--json", "--dry-run", "添加用户"), repo, env
@@ -334,7 +334,7 @@ def test_bash_unicode_uses_configured_python_without_pyyaml_in_spaced_path(
     result = run(bash_cmd(repo, SCRIPT, "--json", "--dry-run", "添加用户"), repo, env)
 
     assert result.returncode == 0, result.stderr
-    assert json_stdout(result)["BRANCH_NAME"] == "001-添加用户"
+    assert json_stdout(result)["FEATURE_NAME"] == "001-添加用户"
 
 
 @requires_bash
@@ -363,7 +363,7 @@ def test_bash_unicode_uses_py_launcher_with_separate_version_arg(
     result = run(bash_cmd(repo, SCRIPT, "--json", "--dry-run", "添加用户"), repo, env)
 
     assert result.returncode == 0, result.stderr
-    assert json_stdout(result)["BRANCH_NAME"] == "001-添加用户"
+    assert json_stdout(result)["FEATURE_NAME"] == "001-添加用户"
 
 
 def _run_all_variants_allow_existing(
@@ -464,7 +464,7 @@ def test_bash_stop_words_match_only_ascii_words(
 
     assert bash.returncode == py.returncode == 0
     assert json_stdout(bash) == json_stdout(py)
-    assert json_stdout(bash)["BRANCH_NAME"] == expected
+    assert json_stdout(bash)["FEATURE_NAME"] == expected
     if HAS_POWERSHELL:
         ps = run(ps_cmd(repo, SCRIPT, "-Json", "-DryRun", description), repo)
         assert ps.returncode == 0, ps.stderr
@@ -500,7 +500,7 @@ def test_bash_stop_words_ignore_locale_case_folding(repo: Path, tmp_path: Path) 
 
     assert bash.returncode == py.returncode == 0
     assert json_stdout(bash) == json_stdout(py)
-    assert json_stdout(bash)["BRANCH_NAME"] == "001-ſet-account"
+    assert json_stdout(bash)["FEATURE_NAME"] == "001-ſet-account"
 
 
 @requires_bash
@@ -523,7 +523,7 @@ def test_all_variants_keep_acronym_next_to_non_ascii(
 
     assert bash.returncode == py.returncode == ps.returncode == 0
     assert json_stdout(py) == json_stdout(bash) == json_stdout(ps)
-    assert json_stdout(ps)["BRANCH_NAME"] == expected
+    assert json_stdout(ps)["FEATURE_NAME"] == expected
 
 
 @requires_bash
@@ -583,8 +583,8 @@ def test_all_variants_timestamp_mode_match_shape(repo: Path) -> None:
     # Timestamps may straddle a second boundary, so compare shape and suffix.
     for result in results:
         data = json_stdout(result)
-        assert re.fullmatch(r"\d{8}-\d{6}-user-auth", data["BRANCH_NAME"])
-        assert data["BRANCH_NAME"].startswith(data["FEATURE_NUM"])
+        assert re.fullmatch(r"\d{8}-\d{6}-user-auth", data["FEATURE_NAME"])
+        assert data["FEATURE_NAME"].startswith(data["FEATURE_NUM"])
 
 
 @requires_bash
@@ -757,7 +757,7 @@ def test_all_variants_branch_truncation_match(repo: Path) -> None:
     assert bash.returncode == ps.returncode == py.returncode == 0
     assert bash.stderr == ps.stderr == py.stderr
     assert json_stdout(bash) == json_stdout(ps) == json_stdout(py)
-    assert len(json_stdout(py)["BRANCH_NAME"]) == 244
+    assert len(json_stdout(py)["FEATURE_NAME"]) == 244
 
 
 @requires_bash
@@ -778,7 +778,7 @@ def test_python_full_run_matches_bash(repo_pair: tuple[Path, Path]) -> None:
         bash.stderr, repo_a
     )
 
-    branch = json_stdout(py)["BRANCH_NAME"]
+    branch = json_stdout(py)["FEATURE_NAME"]
     for repo in repo_pair:
         spec = repo / "specs" / branch / "spec.md"
         assert spec.read_bytes() == TEMPLATE_BODY.encode("utf-8")
@@ -898,7 +898,7 @@ def test_python_missing_template_warning_matches_bash(
     assert normalize_repo_paths(py.stderr, repo_b) == normalize_repo_paths(
         bash.stderr, repo_a
     )
-    branch = json_stdout(py)["BRANCH_NAME"]
+    branch = json_stdout(py)["FEATURE_NAME"]
     for repo in repo_pair:
         assert (repo / "specs" / branch / "spec.md").read_text(encoding="utf-8") == ""
 
@@ -1002,7 +1002,7 @@ def test_python_persists_relative_feature_json(repo: Path) -> None:
     py = run(py_cmd(repo, SCRIPT, "--json", "add rate limiting"), repo)
 
     assert py.returncode == 0, py.stderr
-    branch = json_stdout(py)["BRANCH_NAME"]
+    branch = json_stdout(py)["FEATURE_NAME"]
     feature_json = (repo / ".specify" / "feature.json").read_text(encoding="utf-8")
     assert feature_json == f'{{"feature_directory":"specs/{branch}"}}\n'
 
@@ -1014,7 +1014,7 @@ def test_bash_reads_unicode_feature_state_without_jq_under_legacy_encoding(
     set_feature_selection(repo)
     created = run(bash_cmd(repo, SCRIPT, "--json", "添加用户"), repo)
     assert created.returncode == 0, created.stderr
-    assert json_stdout(created)["BRANCH_NAME"] == "001-添加用户"
+    assert json_stdout(created)["FEATURE_NAME"] == "001-添加用户"
     assert (repo / "specs/001-添加用户/spec.md").is_file()
 
     shim_dir = make_python3_path_shim(tmp_path / "bin")
@@ -1293,11 +1293,11 @@ def test_all_variants_non_dry_text_mode_match(tmp_path: Path) -> None:
     )
     ps_stdout = normalize_repo_paths(ps.stdout, ps_repo)
     ps_stderr = normalize_repo_paths(ps.stderr, ps_repo)
-    assert "$env:SPECIFY_FEATURE = '007-x'" in ps_stdout
+    assert "SPECIFY_FEATURE =" not in ps_stdout
     assert (
         "$env:SPECIFY_FEATURE_DIRECTORY = '<REPO>/specs/007-x'" in ps_stdout
     )
-    assert "$env:SPECIFY_FEATURE = '007-x'" in ps_stderr
+    assert "SPECIFY_FEATURE =" not in ps_stderr
     assert (
         "$env:SPECIFY_FEATURE_DIRECTORY = '<REPO>/specs/007-x'" in ps_stderr
     )
@@ -1327,13 +1327,10 @@ def test_python_persist_hints_match_bash_for_spaced_repo_path(
     )
 
 
-def test_python_powershell_persistence_assignments_escape_quotes() -> None:
-    assert create_new_feature._persistence_assignments(
-        "007-x", r"C:\repo\O'Brien", powershell=True
-    ) == (
-        "$env:SPECIFY_FEATURE = '007-x'",
-        "$env:SPECIFY_FEATURE_DIRECTORY = 'C:\\repo\\O''Brien'",
-    )
+def test_python_powershell_directory_assignment_escapes_quotes() -> None:
+    assert create_new_feature._directory_assignment(
+        r"C:\repo\O'Brien", powershell=True
+    ) == "$env:SPECIFY_FEATURE_DIRECTORY = 'C:\\repo\\O''Brien'"
 
 
 @requires_bash
@@ -1443,7 +1440,7 @@ def test_all_variants_allow_existing_prefers_exact_dir_over_sibling(
 
     assert bash.returncode == ps.returncode == py.returncode == 0
     assert json_stdout(bash) == json_stdout(ps) == json_stdout(py)
-    assert json_stdout(py)["BRANCH_NAME"] == "004-pre-exist"
+    assert json_stdout(py)["FEATURE_NAME"] == "004-pre-exist"
     for result in (bash, ps, py):
         assert "conflicts with an existing spec directory" not in result.stderr
 
@@ -1462,7 +1459,7 @@ def test_all_variants_allow_existing_reuses_truncated_exact_dir(repo: Path) -> N
 
     assert bash.returncode == ps.returncode == py.returncode == 0
     assert json_stdout(bash) == json_stdout(ps) == json_stdout(py)
-    assert json_stdout(py)["BRANCH_NAME"] == expected_branch
+    assert json_stdout(py)["FEATURE_NAME"] == expected_branch
     for result in (bash, ps, py):
         assert "conflicts with an existing spec directory" not in result.stderr
 
@@ -1548,7 +1545,7 @@ def test_bash_branch_name_ignores_locale_collation(
 
     assert py.returncode == bash.returncode == 0
     assert json_stdout(py) == json_stdout(bash)
-    branch = json_stdout(bash)["BRANCH_NAME"]
+    branch = json_stdout(bash)["FEATURE_NAME"]
     assert isinstance(branch, str) and branch == {
         "Añadir autenticación de usuario": "001-añadir-autenticación-usuario",
         "Prüfung für Benutzer anlegen": "001-prüfung-für-benutzer-anlegen",
@@ -1562,7 +1559,7 @@ def test_bash_branch_name_ignores_locale_collation(
 
     assert py_short.returncode == bash_short.returncode == 0
     assert json_stdout(py_short) == json_stdout(bash_short)
-    short_branch = json_stdout(bash_short)["BRANCH_NAME"]
+    short_branch = json_stdout(bash_short)["FEATURE_NAME"]
     assert isinstance(short_branch, str) and short_branch == {
         "Añadir autenticación de usuario": "001-añadir-autenticación-de-usuario",
         "Prüfung für Benutzer anlegen": "001-prüfung-für-benutzer-anlegen",
@@ -1599,7 +1596,7 @@ def test_bash_collapses_repeated_separators(
 
     assert bash.returncode == py.returncode == 0
     assert json_stdout(bash) == json_stdout(py)
-    assert json_stdout(bash)["BRANCH_NAME"] == expected
+    assert json_stdout(bash)["FEATURE_NAME"] == expected
 
 
 @requires_bash
@@ -1620,7 +1617,7 @@ def test_python_dash_prefixed_short_name_matches_bash(
     assert py.returncode == bash.returncode == 0
     assert json_stdout(py) == json_stdout(bash)
     expected = f"001-{short_name.lstrip('-').lower()}"
-    assert json_stdout(bash)["BRANCH_NAME"] == expected
+    assert json_stdout(bash)["FEATURE_NAME"] == expected
 
 
 @pytest.mark.skipif(not HAS_POWERSHELL, reason="no PowerShell available")
@@ -1644,7 +1641,7 @@ def test_powershell_preserves_unicode_description(
     assert ps.returncode == 0, ps.stderr
     assert "ArgumentNullException" not in ps.stderr
     assert "Join" not in ps.stderr
-    assert json_stdout(ps)["BRANCH_NAME"] == expected
+    assert json_stdout(ps)["FEATURE_NAME"] == expected
 
 
 @requires_bash
@@ -1682,9 +1679,9 @@ def test_no_ascii_word_description_matches_across_twins(
         bash.stderr, py.stderr, ps.stderr,
     )
     names = {
-        json_stdout(bash)["BRANCH_NAME"],
-        json_stdout(py)["BRANCH_NAME"],
-        json_stdout(ps)["BRANCH_NAME"],
+        json_stdout(bash)["FEATURE_NAME"],
+        json_stdout(py)["FEATURE_NAME"],
+        json_stdout(ps)["FEATURE_NAME"],
     }
     assert names == {expected}, names
 
@@ -1711,7 +1708,7 @@ def test_windows_powershell_51_preserves_unicode_and_utf8_limit(repo: Path) -> N
             repo,
         )
         assert result.returncode == 0, result.stderr
-        assert json_stdout(result)["BRANCH_NAME"] == expected
+        assert json_stdout(result)["FEATURE_NAME"] == expected
         assert len(expected.encode("utf-8")) <= 244
 
     for description, expected in (
@@ -1731,7 +1728,7 @@ def test_windows_powershell_51_preserves_unicode_and_utf8_limit(repo: Path) -> N
             repo,
         )
         assert result.returncode == 0, result.stderr
-        assert json_stdout(result)["BRANCH_NAME"] == expected
+        assert json_stdout(result)["FEATURE_NAME"] == expected
 
 
 @requires_bash
@@ -1761,7 +1758,7 @@ def test_unicode_branch_name_fits_244_bytes(
     result = run(command(repo, SCRIPT, *args), repo)
 
     assert result.returncode == 0, result.stderr
-    branch = json_stdout(result)["BRANCH_NAME"]
+    branch = json_stdout(result)["FEATURE_NAME"]
     assert branch == f"001-{expected_suffix}"
     assert len(branch.encode("utf-8")) <= 244
     assert "244-byte limit" in result.stderr
@@ -1796,7 +1793,7 @@ def test_bash_truncation_uses_bounded_byte_checks(repo: Path, tmp_path: Path) ->
     )
 
     assert result.returncode == 0, result.stderr
-    assert json_stdout(result)["BRANCH_NAME"] == "001-" + "𠀀" * 60
+    assert json_stdout(result)["FEATURE_NAME"] == "001-" + "𠀀" * 60
     assert count_file.read_text(encoding="utf-8").count(".") <= 16
 
 
@@ -1870,7 +1867,7 @@ def test_concurrent_runs_reserve_distinct_prefixes(
     assert len({entry["FEATURE_NUM"] for entry in created}) == 30
     feature_dirs = sorted((repo / "specs").iterdir())
     assert [path.name for path in feature_dirs] == sorted(
-        entry["BRANCH_NAME"] for entry in created
+        entry["FEATURE_NAME"] for entry in created
     )
     assert all((path / "spec.md").is_file() for path in feature_dirs)
 
@@ -2057,20 +2054,15 @@ def test_dry_run_creates_nothing(repo: Path, variant: str, scheme: tuple[str, ..
 
 @pytest.mark.parametrize("variant", ALL_VARIANTS)
 def test_create_prints_selection_hint(repo: Path, variant: str) -> None:
-    """The hint names the directory selector first and the label as optional."""
+    """The only hint selects the feature directory; no SPECIFY_FEATURE label."""
     result = run(_variant_cmd(variant, repo, "--number", "7", "x"), repo)
 
     assert result.returncode == 0, result.stderr
     if variant == "powershell" or (variant == "python" and sys.platform == "win32"):
-        hint = [
-            "# To select this feature: $env:SPECIFY_FEATURE_DIRECTORY = '<REPO>/specs/007-x'",
-            "# Optional label:         $env:SPECIFY_FEATURE = '007-x'",
-        ]
+        hint = "# To select this feature: $env:SPECIFY_FEATURE_DIRECTORY = '<REPO>/specs/007-x'"
     else:
-        hint = [
-            "# To select this feature: export SPECIFY_FEATURE_DIRECTORY=<REPO>/specs/007-x",
-            "# Optional label:         export SPECIFY_FEATURE=007-x",
-        ]
+        hint = "# To select this feature: export SPECIFY_FEATURE_DIRECTORY=<REPO>/specs/007-x"
     for stream in (result.stdout, result.stderr):
         lines = normalize_repo_paths(stream, repo).splitlines()
-        assert lines[-2:] == hint
+        assert lines[-1] == hint
+        assert "Optional label" not in stream

@@ -569,9 +569,9 @@ def test_numbering_defaults_and_explicit_choices(project, variant, script_env, o
         "--json", *arguments, "--short-name", "choice", "Numbering choice",
     ))
     if expected == "timestamp":
-        assert re.fullmatch(r"\d{8}-\d{6}-choice", data["BRANCH_NAME"])
+        assert re.fullmatch(r"\d{8}-\d{6}-choice", data["FEATURE_NAME"])
     else:
-        assert data["BRANCH_NAME"] == f"{expected}-choice"
+        assert data["FEATURE_NAME"] == f"{expected}-choice"
     assert Path(data["SPEC_FILE"]).is_file()
     assert json.loads((workspace / ".specify/init-options.json").read_text(encoding="utf-8")) == options
 

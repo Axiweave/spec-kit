@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -100,66 +101,47 @@ def test_paths_only_succeeds_on_non_spec_branch(prereq_repo: Path) -> None:
     assert "FEATURE_DIR" in data
 
 
-@requires_bash
-def test_paths_only_succeeds_on_spec_branch(prereq_repo: Path) -> None:
-    """--paths-only must also work when feature.json and SPECIFY_FEATURE agree."""
-    feat = prereq_repo / "specs" / "001-my-feature"
-    feat.mkdir(parents=True, exist_ok=True)
-    _write_feature_json(prereq_repo)
-    script = prereq_repo / ".specify" / "scripts" / "bash" / "check-prerequisites.sh"
-    env = _clean_env()
-    env["SPECIFY_FEATURE"] = "001-my-feature"
-    result = subprocess.run(
-        ["bash", str(script), "--json", "--paths-only"],
-        cwd=prereq_repo,
-        capture_output=True,
-        text=True,
-        check=False,
-        env=env,
-    )
-    assert result.returncode == 0, result.stderr
-    data = json.loads(result.stdout)
-    assert "FEATURE_DIR" in data
-    assert "001-my-feature" in data.get("BRANCH", "")
-
-
-@requires_bash
-@pytest.mark.parametrize(
-    ("use_env_var", "specify_feature", "expected_branch"),
-    [
-        (False, None, "001-my-feature"),
-        (True, None, "001-my-feature"),
-        (False, "my-explicit-branch", "my-explicit-branch"),
-    ],
-    ids=["feature_json", "env_var", "explicit_feature"],
-)
-def test_current_branch_falls_back_to_feature_dir_basename(
-    prereq_repo: Path, use_env_var: bool, specify_feature: str | None, expected_branch: str
-) -> None:
-    """With no SPECIFY_FEATURE, BRANCH falls back to the feature directory
-    basename (from feature.json or SPECIFY_FEATURE_DIRECTORY) instead of being
-    emitted empty. If SPECIFY_FEATURE is set, it remains authoritative (#3026)."""
-    feat = prereq_repo / "specs" / "001-my-feature"
-    feat.mkdir(parents=True, exist_ok=True)
-    env = _clean_env()
-    if specify_feature:
-        env["SPECIFY_FEATURE"] = specify_feature
-    if use_env_var:
-        env["SPECIFY_FEATURE_DIRECTORY"] = "specs/001-my-feature"
+def _paths_only(repo: Path, lang: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    scripts = repo / ".specify" / "scripts"
+    if lang == "bash":
+        cmd = ["bash", str(scripts / "bash" / "check-prerequisites.sh"), "--json", "--paths-only"]
+    elif lang == "python":
+        py = scripts / "python"
+        py.mkdir(parents=True, exist_ok=True)
+        for name in ("common.py", "check_prerequisites.py"):
+            shutil.copy(PROJECT_ROOT / "scripts" / "python" / name, py / name)
+        cmd = [sys.executable, str(py / "check_prerequisites.py"), "--json", "--paths-only"]
     else:
-        _write_feature_json(prereq_repo)
-    script = prereq_repo / ".specify" / "scripts" / "bash" / "check-prerequisites.sh"
-    result = subprocess.run(
-        ["bash", str(script), "--json", "--paths-only"],
-        cwd=prereq_repo,
-        capture_output=True,
-        text=True,
-        check=False,
-        env=env,
-    )
+        exe = "pwsh" if HAS_PWSH else _WINDOWS_POWERSHELL
+        cmd = [exe, "-NoProfile", "-File", str(scripts / "powershell" / "check-prerequisites.ps1"), "-Json", "-PathsOnly"]
+    return subprocess.run(cmd, cwd=repo, capture_output=True, text=True, check=False, env=env)
+
+
+_LANGS = [
+    pytest.param("bash", marks=requires_bash),
+    "python",
+    pytest.param("powershell", marks=pytest.mark.skipif(not (HAS_PWSH or _WINDOWS_POWERSHELL), reason="no PowerShell available")),
+]
+
+
+@pytest.mark.parametrize("lang", _LANGS)
+@pytest.mark.parametrize("git_branch", ["main", "feat/llm-gateway", "001-my-feature", None], ids=["main", "slash", "same-as-dir", "detached"])
+def test_branch_is_the_code_repository_git_branch(prereq_repo: Path, lang: str, git_branch: str | None) -> None:
+    """BRANCH is the checkout's Git branch, never the feature directory name or
+    SPECIFY_FEATURE. A detached HEAD reports an empty branch."""
+    if git_branch is None:
+        subprocess.run(["git", "checkout", "-q", "--detach"], cwd=prereq_repo, check=True)
+    else:
+        subprocess.run(["git", "checkout", "-q", "-B", git_branch], cwd=prereq_repo, check=True)
+        # A same-named tag makes `symbolic-ref --short` print heads/<name>.
+        subprocess.run(["git", "tag", git_branch], cwd=prereq_repo, check=True)
+    (prereq_repo / "specs" / "20261021-085618-other-name").mkdir(parents=True)
+    env = _clean_env()
+    env["SPECIFY_FEATURE_DIRECTORY"] = "specs/20261021-085618-other-name"
+    env["SPECIFY_FEATURE"] = "stale-label"
+    result = _paths_only(prereq_repo, lang, env)
     assert result.returncode == 0, result.stderr
-    data = json.loads(result.stdout)
-    assert data["BRANCH"] == expected_branch
+    assert json.loads(result.stdout)["BRANCH"] == (git_branch or "")
 
 
 @requires_bash
@@ -325,48 +307,8 @@ def test_windows_powershell_reads_bomless_utf8_feature_json(
 
 
 @pytest.mark.skipif(not (HAS_PWSH or _WINDOWS_POWERSHELL), reason="no PowerShell available")
-@pytest.mark.parametrize(
-    ("use_env_var", "specify_feature", "expected_branch"),
-    [
-        (False, None, "001-my-feature"),
-        (True, None, "001-my-feature"),
-        (False, "my-explicit-branch", "my-explicit-branch"),
-    ],
-    ids=["feature_json", "env_var", "explicit_feature"],
-)
-def test_ps_current_branch_falls_back_to_feature_dir_basename(
-    prereq_repo: Path, use_env_var: bool, specify_feature: str | None, expected_branch: str
-) -> None:
-    """With no SPECIFY_FEATURE, BRANCH falls back to the feature directory
-    basename (from feature.json or SPECIFY_FEATURE_DIRECTORY) instead of being
-    emitted empty. If SPECIFY_FEATURE is set, it remains authoritative (#3026)."""
-    feat = prereq_repo / "specs" / "001-my-feature"
-    feat.mkdir(parents=True, exist_ok=True)
-    env = _clean_env()
-    if specify_feature:
-        env["SPECIFY_FEATURE"] = specify_feature
-    if use_env_var:
-        env["SPECIFY_FEATURE_DIRECTORY"] = "specs/001-my-feature"
-    else:
-        _write_feature_json(prereq_repo)
-    script = prereq_repo / ".specify" / "scripts" / "powershell" / "check-prerequisites.ps1"
-    exe = "pwsh" if HAS_PWSH else _WINDOWS_POWERSHELL
-    result = subprocess.run(
-        [exe, "-NoProfile", "-File", str(script), "-Json", "-PathsOnly"],
-        cwd=prereq_repo,
-        capture_output=True,
-        text=True,
-        check=False,
-        env=env,
-    )
-    assert result.returncode == 0, result.stderr
-    data = json.loads(result.stdout)
-    assert data["BRANCH"] == expected_branch
-
-
-@pytest.mark.skipif(not (HAS_PWSH or _WINDOWS_POWERSHELL), reason="no PowerShell available")
 def test_ps_paths_only_succeeds_on_spec_branch(prereq_repo: Path) -> None:
-    """-PathsOnly must also work when feature.json and SPECIFY_FEATURE agree."""
+    """-PathsOnly must also work on a branch named like the feature."""
     subprocess.run(
         ["git", "checkout", "-q", "-b", "001-my-feature"],
         cwd=prereq_repo,
@@ -377,15 +319,13 @@ def test_ps_paths_only_succeeds_on_spec_branch(prereq_repo: Path) -> None:
     _write_feature_json(prereq_repo)
     script = prereq_repo / ".specify" / "scripts" / "powershell" / "check-prerequisites.ps1"
     exe = "pwsh" if HAS_PWSH else _WINDOWS_POWERSHELL
-    env = _clean_env()
-    env["SPECIFY_FEATURE"] = "001-my-feature"
     result = subprocess.run(
         [exe, "-NoProfile", "-File", str(script), "-Json", "-PathsOnly"],
         cwd=prereq_repo,
         capture_output=True,
         text=True,
         check=False,
-        env=env,
+        env=_clean_env(),
     )
     assert result.returncode == 0, result.stderr
     data = json.loads(result.stdout)
