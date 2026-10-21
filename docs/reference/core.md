@@ -222,6 +222,7 @@ Changed personal defaults do not change an existing project's workspace or saved
 With external storage, `init`, `project link`, and `project move` create `specs` in the checkout as a symlink to the workspace `specs/`.
 Tools and editors that expect `specs/` in the repository then find the features.
 The managed block in the local Git exclude file hides the link, also in a shared project, so Git never sees or commits it.
+Linked worktrees share that file. While one worktree has a real `specs` folder, the block does not hide links, so Git shows them as untracked.
 Set `specs_link` to `false` to skip the link. The default is `true`.
 An existing `specs` file, folder, or other symlink stays unchanged, and the command names it.
 `project unlink` removes the link. `project move --to-local` replaces it with a real `specs/` folder.

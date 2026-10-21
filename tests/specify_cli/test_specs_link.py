@@ -70,6 +70,8 @@ def test_link_keeps_an_existing_specs_folder(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     assert f"Kept {other / 'specs'}" in " ".join(result.output.split())
     assert not (other / "specs").is_symlink()
+    # The exclude file is shared. The link rule in A must not hide B's real folder.
+    assert "?? specs/notes.md" in _status(other)
     assert (other / "specs/notes.md").read_text(encoding="utf-8") == "mine\n"
 
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from contextlib import suppress
 from pathlib import Path
 
 
@@ -24,6 +25,8 @@ def link_specs(repository: Path, workspace: Path) -> str | None:
     if is_specs_link(repository, workspace):
         return None
     if link.is_symlink() or link.exists():
+        with suppress(OSError, ValueError):  # A real folder here drops the shared link rule.
+            regenerate_exclude_block(repository)
         return f"Kept {link}. Remove it to get the link to {target}."
     try:
         target.mkdir(parents=True, exist_ok=True)

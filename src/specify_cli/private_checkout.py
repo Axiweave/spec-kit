@@ -88,14 +88,19 @@ def regenerate_exclude_block(checkout: Path, *, create: bool = True) -> None:
     if not found and not create:
         return
     rules: set[str] = set()
-    for root in _worktrees(checkout):
+    roots = _worktrees(checkout)
+    for root in roots:
         if not (root / ".specify/project.json").is_file():
             continue
         if _private_checkout(root):
             rules.add(LOCATOR_RULE)
             rules.update(_escape_ignore(key) for key in checkout_manifest_keys(root))
-        if (root / "specs").is_symlink():
-            rules.add(SPECS_RULE)
+    # Worktrees share this file. Never hide a real `specs` in one worktree to hide a link in another.
+    specs = [root / "specs" for root in roots]
+    if any(path.is_symlink() for path in specs) and not any(
+        path.exists() and not path.is_symlink() for path in specs
+    ):
+        rules.add(SPECS_RULE)
     block = "".join(f"{line}{newline}" for line in (BEGIN, *sorted(rules), END)) if rules else ""
     if block and before and not before[-1].endswith("\n"):
         before[-1] += newline
