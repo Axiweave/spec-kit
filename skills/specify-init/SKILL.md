@@ -6,7 +6,7 @@ description: Initialize a Spec Kit project or repeat its setup. Interview the us
 # Specify Init
 
 Interview first. Use the answers to run `specify init`, not to produce a command for the user to execute.
-Keep product specifications, implementation, commits, and publishing outside this skill.
+Keep product specifications, implementation, commits, and publishing outside this workflow.
 
 ## 1. Inspect
 
@@ -18,7 +18,7 @@ Keep product specifications, implementation, commits, and publishing outside thi
 
 Use the installed CLI as the source of truth for supported options and integrations.
 Keep the selected executable's absolute path for commands that change their working directory.
-For a missing CLI, read [the installation command](../../README.md#get-started) and get installation approval.
+For a missing CLI, read [the installation command](https://github.com/Axiweave/spec-kit#get-started) and get installation approval.
 After approval, install the CLI, resolve its executable, and read its help before setup.
 If a repository checkout is available, follow its environment setup rules instead.
 

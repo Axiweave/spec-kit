@@ -61,6 +61,8 @@ packages = ["src/specify_cli"]
 # Bundle catalog snapshots (used for offline discovery)
 "bundles/catalog.json" = "specify_cli/core_pack/bundles/catalog.json"
 "bundles/catalog.community.json" = "specify_cli/core_pack/bundles/catalog.community.json"
+# The specify-init skill, installed as the global OMP speckit.init command
+"skills/specify-init/SKILL.md" = "specify_cli/core_pack/skills/specify-init/SKILL.md"
 
 [project.optional-dependencies]
 test = [

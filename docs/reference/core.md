@@ -648,6 +648,8 @@ Global installation works outside a project and targets the active OMP profile's
 The launchers contain no project content.
 Each invocation resolves the current project's command, configuration, presets, extensions, and feature selection.
 The JSON response contains `content`, `repository_root`, `workspace_root`, `feature_dir`, and `feature_selection`.
+The shared set also contains `/speckit.init`. It holds the `specify-init` skill text, so it works before a project exists.
+It interviews you about setup choices, runs `specify init`, and verifies the result.
 
 Use `specify integration upgrade omp --global` or `specify integration uninstall omp --global` to manage the shared set.
 Install and upgrade reuse the launchers that Spec Kit manages. They skip edited and unowned launchers, and report each one.

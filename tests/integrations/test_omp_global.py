@@ -84,6 +84,20 @@ def test_global_install_outside_project_is_idempotent_and_explicitly_removable()
     assert unrelated.read_text(encoding="utf-8") == "My own command.\n"
 
 
+def test_global_setup_command_carries_the_skill_and_needs_no_project():
+    succeed("integration", "install", "omp", "--global")
+
+    command = (default_commands() / "speckit.init.md").read_text(encoding="utf-8")
+    skill = (Path(__file__).resolve().parents[2] / "skills/specify-init/SKILL.md").read_text(encoding="utf-8")
+    _, skill_front, skill_body = skill.split("---\n", 2)
+    front, body = yaml.safe_load(command.split("---\n")[1]), command.split("---\n", 2)[2]
+    assert front == {"description": yaml.safe_load(skill_front)["description"]}
+    assert body.startswith("\n## User arguments\n\n$ARGUMENTS\n")
+    assert body.endswith(skill_body)
+    # Every other shared command looks up a project. This one runs before a project exists.
+    assert "specify project command" not in command
+
+
 @pytest.mark.parametrize("action", ["install", "upgrade", "uninstall"])
 @pytest.mark.parametrize("force", [False, True], ids=["safe", "force"])
 def test_global_lifecycle_preserves_modified_managed_files(action, force):

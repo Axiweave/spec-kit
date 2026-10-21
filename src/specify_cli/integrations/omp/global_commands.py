@@ -13,6 +13,7 @@ from ...workspace import atomic_json, confined, read_json, user_data_dir, worksp
 _COMMAND_NAME = re.compile(r"speckit\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*")
 _PROFILE_NAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
 _RESERVED_PROFILE = re.compile(r"(?:CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(?:\..*)?", re.I)
+SETUP_COMMAND = "speckit.init"  # The specify-init skill as a command. It works outside a project.
 
 
 def _profile(value: str) -> str:
@@ -88,7 +89,32 @@ def _save_manifest(data: dict, directory: Path, files: dict[str, str]) -> None:
         path.unlink(missing_ok=True)
 
 
+def _setup_skill() -> Path:
+    """Return the specify-init skill: bundled in a wheel, or `skills/` in a source checkout."""
+    package = Path(__file__).resolve().parents[2]
+    for candidate in (package / "core_pack/skills", package.parents[1] / "skills"):
+        if (path := candidate / "specify-init/SKILL.md").is_file():
+            return path
+    raise ValueError("The specify-init skill is missing from this Specify CLI installation.")
+
+
+def _setup_command() -> bytes:
+    """Turn the specify-init skill into a command. It runs before a project exists, so it needs no project lookup."""
+    text = _setup_skill().read_text(encoding="utf-8")
+    _, front, body = text.split("---\n", 2)
+    description = next(line for line in front.splitlines() if line.startswith("description:"))
+    return f"---\n{description}\n---\n\n## User arguments\n\n$ARGUMENTS\n{body}".encode("utf-8")
+
+
+def _default_names() -> list[str]:
+    from . import OmpIntegration
+
+    return [SETUP_COMMAND, *(f"speckit.{path.stem}" for path in OmpIntegration().list_command_templates())]
+
+
 def _launcher(name: str) -> bytes:
+    if name == SETUP_COMMAND:
+        return _setup_command()
     return (
         f"---\ndescription: Run {name} for the current Spec Kit project\n---\n\n"
         "## User arguments\n\n$ARGUMENTS\n\n"
@@ -109,13 +135,9 @@ def install_global_commands(names: Iterable[str] | None = None, *, upgrade: bool
     Install and upgrade refresh unchanged managed files and keep edited ones.
     Install refuses unmanaged names. Upgrade skips them.
     """
-    from . import OmpIntegration
-
     directory = command_directory()
     data, files = _manifest(directory)
-    selected = list(names) if names is not None else [
-        f"speckit.{path.stem}" for path in OmpIntegration().list_command_templates()
-    ]
+    selected = list(names) if names is not None else _default_names()
     if upgrade:
         selected.extend(name[:-3] for name in files)
     for name in selected:
@@ -189,11 +211,9 @@ def uninstall_global_commands() -> tuple[list[Path], list[Path]]:
 
 def check_global_commands() -> tuple[list[Path], list[Path]]:
     """Return the missing launchers and the edited or unowned launchers in the active command directory."""
-    from . import OmpIntegration
-
     directory = command_directory()
     _, files = _manifest(directory)
-    names = {f"speckit.{path.stem}.md" for path in OmpIntegration().list_command_templates()} | files.keys()
+    names = {f"{name}.md" for name in _default_names()} | files.keys()
     missing, modified = [], []
     for name in sorted(names):
         path = directory / name
