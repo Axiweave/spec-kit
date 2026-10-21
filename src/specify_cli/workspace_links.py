@@ -38,7 +38,10 @@ def link_workspace(repository: Path, workspace: Path) -> list[str]:
         link, target = repository / name, workspace / name
         if is_workspace_link(repository, workspace, name):
             continue
-        stale = link.is_symlink() and Path(os.readlink(link)).parts[-len(Path(name).parts):] == Path(name).parts
+        # Replace only a dangling link to the same path, such as one left by a workspace move.
+        stale = link.is_symlink() and not link.exists() and (
+            Path(os.readlink(link)).parts[-len(Path(name).parts):] == Path(name).parts
+        )
         if os.path.lexists(link) and not stale:
             notes.append(f"Kept {link}. Remove it to get the link to {target}.")
             continue

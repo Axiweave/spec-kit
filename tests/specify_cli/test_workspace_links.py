@@ -88,6 +88,22 @@ def test_link_keeps_an_existing_specs_folder(tmp_path, monkeypatch):
     assert (other / "specs/notes.md").read_text(encoding="utf-8") == "mine\n"
 
 
+def test_link_keeps_a_live_foreign_symlink_with_the_same_name(tmp_path, monkeypatch):
+    repository, workspace = external_project(tmp_path, monkeypatch)
+    other = tmp_path / "B"
+    git(repository, "worktree", "add", "-q", str(other))
+    docs = tmp_path / "docs/specs"
+    docs.mkdir(parents=True)
+    (other / "specs").symlink_to(docs, target_is_directory=True)
+    monkeypatch.chdir(other)
+
+    result = CliRunner().invoke(app, ["project", "link", str(workspace)])
+
+    assert result.exit_code == 0, result.output
+    assert (other / "specs").resolve() == docs.resolve()
+    assert f"Kept {other / 'specs'}" in " ".join(result.output.split())
+
+
 def test_relink_to_a_moved_workspace_replaces_the_old_links(tmp_path, monkeypatch):
     repository, workspace = external_project(tmp_path, monkeypatch, "--private")
     moved = workspace.rename(tmp_path / "moved")

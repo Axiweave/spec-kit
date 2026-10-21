@@ -228,7 +228,7 @@ If a worktree has a real folder at a link path at that time, the block does not 
 A real folder that you create later stays hidden until one of these commands runs again.
 Set `workspace_links` to `false` to skip the links. The default is `true`.
 An existing file, folder, or foreign symlink at a link path stays unchanged, and the command names it.
-`project link` to a moved workspace replaces the links to the old path.
+`project link` to a moved workspace replaces links that point to the same path in the old, now missing, workspace.
 `project unlink` removes the links. `project move --to-local` replaces them with real folders.
 
 ### Feature selection
