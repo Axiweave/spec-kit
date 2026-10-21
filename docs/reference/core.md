@@ -193,7 +193,7 @@ specify config set feature_numbering timestamp
 specify config set integration omp
 specify config set script py
 specify config set feature_selection context
-specify config set specs_link false
+specify config set workspace_links false
 specify config get storage_root
 specify config clear script
 ```
@@ -217,17 +217,19 @@ The variable supplies the integration without a prompt.
 Without the variable, a personal `integration` value applies with no prompt.
 Changed personal defaults do not change an existing project's workspace or saved choices, including during forced reinitialization.
 
-#### The `specs` link
+#### Workspace links
 
-With external storage, `init`, `project link`, and `project move` create `specs` in the checkout as a symlink to the workspace `specs/`.
-Tools and editors that expect `specs/` in the repository then find the features.
-The managed block in the local Git exclude file hides the link, also in a shared project, so Git never sees or commits it.
+With external storage, `init`, `project link`, and `project move` create two symlinks in the checkout:
+`specs` to the workspace `specs/`, and `.specify/memory` to the workspace `.specify/memory/`.
+Tools and editors that expect these folders in the repository then find the features and the constitution.
+The managed block in the local Git exclude file hides the links, also in a shared project, so Git never sees or commits them.
 Linked worktrees share that file. Spec Kit rewrites the block when `init`, `project link`, `project move`, or an integration change runs.
-If a worktree has a real `specs` folder at that time, the block does not hide links. Git then shows each link as untracked, and `git add -A` would commit it.
-A `specs` folder that you create later stays hidden until one of these commands runs again.
-Set `specs_link` to `false` to skip the link. The default is `true`.
-An existing `specs` file, folder, or other symlink stays unchanged, and the command names it.
-`project unlink` removes the link. `project move --to-local` replaces it with a real `specs/` folder.
+If a worktree has a real folder at a link path at that time, the block does not hide that link. Git then shows the link as untracked, and `git add -A` would commit it.
+A real folder that you create later stays hidden until one of these commands runs again.
+Set `workspace_links` to `false` to skip the links. The default is `true`.
+An existing file, folder, or foreign symlink at a link path stays unchanged, and the command names it.
+`project link` to a moved workspace replaces the links to the old path.
+`project unlink` removes the links. `project move --to-local` replaces them with real folders.
 
 ### Feature selection
 

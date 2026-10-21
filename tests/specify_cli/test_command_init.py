@@ -311,7 +311,8 @@ def test_external_init_uses_exact_workspace_offline(
     identity = json.loads((workspace / ".specify/workspace.json").read_text(encoding="utf-8"))
     assert identity["project_id"] == project.project_id
     assert not (workspace / ".specify/project.json").exists()
-    assert {path.name for path in (repository / ".specify").iterdir()} == {"checkout.json", "project.json"}
+    assert {path.name for path in (repository / ".specify").iterdir()} == {"checkout.json", "project.json", "memory"}
+    assert (repository / ".specify/memory").resolve() == (workspace / ".specify/memory").resolve()
     assert {path.name for path in repository.iterdir()} <= {".specify", ".agent", ".gitignore", "specs"}
     assert (repository / "specs").resolve() == (workspace / "specs").resolve()
     for command in ("specify", "plan", "tasks"):
@@ -599,7 +600,7 @@ def test_external_init_canonicalizes_explicit_workspace_ancestor(tmp_path: Path)
     project = resolve_project(tmp_path / "project")
     assert project.workspace_root == real / "workspace"
     assert (real / "workspace/.specify/workspace.json").is_file()
-    assert {p.name for p in (tmp_path / "project/.specify").iterdir()} == {"checkout.json", "project.json"}
+    assert {p.name for p in (tmp_path / "project/.specify").iterdir()} == {"checkout.json", "project.json", "memory"}
 
 
 @pytest.fixture
@@ -656,7 +657,9 @@ def test_saved_defaults_create_isolated_same_name_projects(
         locator = json.loads((project.repository_root / ".specify/project.json").read_text(encoding="utf-8"))
         identity = json.loads((project.workspace_root / ".specify/workspace.json").read_text(encoding="utf-8"))
         assert locator["project_id"] == identity["project_id"] == project.project_id
-        assert {path.name for path in (project.repository_root / ".specify").iterdir()} == {"checkout.json", "project.json"}
+        assert {path.name for path in (project.repository_root / ".specify").iterdir()} == {
+            "checkout.json", "project.json", "memory",
+        }
         assert not (project.workspace_root / ".specify/project.json").exists()
         (project.workspace_root / ".specify/memory/constitution.md").write_text(
             f"{name} project constitution\n", encoding="utf-8"
@@ -1217,7 +1220,7 @@ def test_init_addons_keep_native_commands_in_repository(
     assert (project.workspace_root / ".specify" / f"{kind}s" / identifier).is_dir()
     if storage == "external":
         assert not (project.workspace_root / ".omp").exists()
-        assert {path.name for path in (repository / ".specify").iterdir()} == {"checkout.json", "project.json"}
+        assert {path.name for path in (repository / ".specify").iterdir()} == {"checkout.json", "project.json", "memory"}
 
 
 def test_reinit_explicit_target_does_not_use_other_project_override(tmp_path, monkeypatch):

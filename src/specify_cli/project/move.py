@@ -13,11 +13,11 @@ from uuid import uuid4
 
 from specify_cli.integrations.manifest import append_gitignore
 from specify_cli.private_checkout import checkout_manifest_keys, regenerate_exclude_block
-from specify_cli.specs_link import is_specs_link, unlink_specs
 from specify_cli.workspace import (
     Project, atomic_json, checkout_record_path, confined, is_private, read_json, workspace_root_for,
 )
 from specify_cli.workspace_git import WorkspaceGitError, initialize_workspace_git, preflight_workspace_git, run_git
+from specify_cli.workspace_links import is_workspace_link, owned_links, unlink_workspace
 
 
 @dataclass(frozen=True)
@@ -434,7 +434,7 @@ def unlink_checkout(repository: Path) -> tuple[tuple[str, ...], bool]:
         tracked = bool(run_git(repository, "ls-files", "--", ".specify/project.json", allowed_codes=(0, 128)))
     except OSError:
         tracked = False
-    unlink_specs(repository)
+    unlink_workspace(repository)
     removed = []
     for path in (checkout_record_path(repository), locator):
         if path.exists() or path.is_symlink():
@@ -450,7 +450,9 @@ def local_content(repository: Path, *, private: bool) -> Path | None:
     allowed = {metadata / "project.json", checkout_record_path(repository)}
     if private:
         allowed |= {metadata / "integrations", *(metadata / "integrations").glob("*.manifest.json")}
-    extra = sorted(set(metadata.rglob("*")) - allowed)
+    links = owned_links(repository)
+    extra = sorted(path for path in set(metadata.rglob("*")) - allowed - set(links)
+                   if not any(path.is_relative_to(link) for link in links))
     return extra[0] if extra else None
 
 
@@ -497,7 +499,7 @@ def prepare_local(repository: Path) -> PreparedLocal:
             roots.append(active)
     for name in roots[1:]:
         target = repository / name
-        if name == "specs" and is_specs_link(repository, workspace):
+        if name == "specs" and is_workspace_link(repository, workspace, "specs"):
             continue
         if target.exists() or target.is_symlink():
             raise ValueError(f"The repository already has {target}. Move it out of the repository, then retry.")
@@ -554,7 +556,7 @@ def commit_local(prepared: PreparedLocal) -> tuple[int, tuple[Path, ...]]:
     native: dict[Path, bytes] = {}
     placed: list[str] = []
     created: list[Path] = []
-    link = is_specs_link(repository, workspace)
+    link = is_workspace_link(repository, workspace, "specs")
     try:
         native = {
             path: path.read_bytes() for path in _command_move_managed.native_paths(repository)

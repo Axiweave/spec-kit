@@ -1205,9 +1205,9 @@ def register(app: typer.Typer) -> None:
             console.print(tracker.render())
         lifecycle_success("\n[bold green]Project ready.[/bold green]")
         if project.workspace_root != project.repository_root:
-            from .specs_link import link_specs
+            from .workspace_links import link_workspace
 
-            if note := link_specs(project.repository_root, project.workspace_root):
+            for note in link_workspace(project.repository_root, project.workspace_root):
                 console.print(note, markup=False)
 
         if run_workspace_git:

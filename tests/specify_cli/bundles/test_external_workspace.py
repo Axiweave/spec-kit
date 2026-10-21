@@ -194,7 +194,8 @@ def test_automatic_setup_uses_all_personal_defaults(tmp_path, monkeypatch, opera
     assert (options["integration"], options["script"], options["feature_numbering"]) == (
         "omp", "py", "timestamp",
     )
-    assert sorted(path.name for path in (repository / ".specify").iterdir()) == ["checkout.json", "project.json"]
+    assert sorted(path.name for path in (repository / ".specify").iterdir()) == ["checkout.json", "memory", "project.json"]
+    assert (repository / ".specify/memory").is_symlink()
     assert (workspace / ".git").is_dir()
     assert config.read_bytes() == original
 

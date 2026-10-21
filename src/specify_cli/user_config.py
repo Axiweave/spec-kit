@@ -7,7 +7,7 @@ from typing import Any
 
 from .workspace import atomic_json, confined, read_json
 
-_KEYS = frozenset({"storage_root", "feature_numbering", "feature_selection", "integration", "script", "specs_link"})
+_KEYS = frozenset({"storage_root", "feature_numbering", "feature_selection", "integration", "script", "workspace_links"})
 
 
 def config_path() -> Path:
@@ -48,8 +48,8 @@ def _validate_value(key: str, value: str) -> None:
         raise ValueError("Default feature_selection must be context or automatic.")
     if key == "script" and value not in ("sh", "ps", "py"):
         raise ValueError("Default script must be sh, ps, or py.")
-    if key == "specs_link" and value not in ("true", "false"):
-        raise ValueError("Default specs_link must be true or false.")
+    if key == "workspace_links" and value not in ("true", "false"):
+        raise ValueError("Default workspace_links must be true or false.")
     if key == "integration":
         from .integrations import get_integration
 

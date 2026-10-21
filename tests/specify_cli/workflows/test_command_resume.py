@@ -933,7 +933,8 @@ steps:
     ]
     assert finished.inputs["note"] == note
     assert finished.step_results["remember"] == state["step_results"]["remember"]
-    assert {path.name for path in (repo / ".specify").iterdir()} == {"checkout.json", "project.json"}
+    real = {path.name for path in (repo / ".specify").iterdir() if not path.is_symlink()}
+    assert real == {"checkout.json", "project.json"}  # `memory` may be a workspace link.
     if moved:
         assert not source.exists()
     else:

@@ -155,9 +155,9 @@ def test_unlink_in_one_worktree_keeps_the_other_worktree_attached(tmp_path, monk
     state, before = checkout_state(other), snapshot(workspace)
     exclude = repository / ".git/info/exclude"
 
-    def hidden_rules() -> list[str]:  # Checkout A's own `specs` link rule leaves with A.
+    def hidden_rules() -> list[str]:  # Checkout A's own link rules leave with A.
         lines = exclude.read_text(encoding="utf-8").splitlines() if exclude.exists() else []
-        return [line for line in lines if line not in (BEGIN, END, "/specs")]
+        return [line for line in lines if line not in (BEGIN, END, "/specs", "/.specify/memory")]
 
     hidden = hidden_rules()
     assert state[1:] == (workspace, workspace / FEATURES[1])
@@ -169,7 +169,7 @@ def test_unlink_in_one_worktree_keeps_the_other_worktree_attached(tmp_path, monk
     assert checkout_state(other) == state
     assert snapshot(workspace) == before
     assert hidden_rules() == hidden
-    assert not (repository / "specs").is_symlink()
+    assert not (repository / "specs").is_symlink() and not (repository / ".specify/memory").is_symlink()
 
 
 def test_unlink_of_a_private_checkout_stops_hiding_its_spec_kit_files(tmp_path, monkeypatch):

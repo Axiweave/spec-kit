@@ -16,11 +16,11 @@ from rich.console import Console
 
 from .workspace import atomic_json, checkout_record_path, confined, is_private, read_json
 from .workspace_git import _escape_ignore, run_git
+from .workspace_links import LINKS
 
 BEGIN = "# BEGIN Spec Kit private mode (managed; do not edit)"
 END = "# END Spec Kit private mode"
 LOCATOR_RULE = "/.specify/"
-SPECS_RULE = "/specs"  # The `specs` link to the workspace (specs_link.py). Git sees a symlink as a file.
 
 
 class PrivateModeError(ValueError):
@@ -95,12 +95,14 @@ def regenerate_exclude_block(checkout: Path, *, create: bool = True) -> None:
         if _private_checkout(root):
             rules.add(LOCATOR_RULE)
             rules.update(_escape_ignore(key) for key in checkout_manifest_keys(root))
-    # Worktrees share this file. Never hide a real `specs` in one worktree to hide a link in another.
-    specs = [root / "specs" for root in roots]
-    if any(path.is_symlink() for path in specs) and not any(
-        path.exists() and not path.is_symlink() for path in specs
-    ):
-        rules.add(SPECS_RULE)
+    # Worktrees share this file. Never hide a real folder in one worktree to hide a link in another.
+    # A rule without a trailing slash, because Git sees a symlink as a file.
+    for name in LINKS:
+        paths = [root / name for root in roots]
+        if any(path.is_symlink() for path in paths) and not any(
+            path.exists() and not path.is_symlink() for path in paths
+        ):
+            rules.add(f"/{name}")
     block = "".join(f"{line}{newline}" for line in (BEGIN, *sorted(rules), END)) if rules else ""
     if block and before and not before[-1].endswith("\n"):
         before[-1] += newline

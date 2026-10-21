@@ -18,7 +18,7 @@
 - Hermes rollback after a failed install or switch no longer removes user-edited or other projects' shared skills. A symlinked `~/.hermes` gives an error instead of a traceback.
 - `integration uninstall` of the default integration moves registered extension and preset commands and skills to the new default.
 - Private mode: `project link` no longer copies sandbox home files into the real home, and it reinstalls global OMP and Hermes commands there when the saved scope is global. `project link` on a second machine restores missing workspace helpers. Private mode refuses a project in a Git subdirectory. A symlinked exclude file gets the managed block in its target, because Git reads that file. `extension add`, `preset add`, and `init --extension` refuse to overwrite a tracked file before any write. A `BEGIN` marker without `END` in the exclude file stops with an error instead of deleting user lines. Private `integration uninstall` keeps hiding extension files that stay on disk.
-- External storage links `specs` in each checkout to the workspace `specs/`. The local Git exclude file hides the link. Set the personal default `specs_link` to `false` to skip it.
+- External storage links `specs` and `.specify/memory` in each checkout to the same workspace folders. The local Git exclude file hides the links. Set the personal default `workspace_links` to `false` to skip them.
 - The shared OMP command set (`integration install omp --global`, `init --global-commands`) adds `/speckit.init`. It is the `specify-init` setup interview as a command, and it works outside a project.
 - Run `specify project link` from a subdirectory of the checkout. Refuse `link` for local projects.
 - Write correct `.gitignore` and exclude lines after `specify project move`.
