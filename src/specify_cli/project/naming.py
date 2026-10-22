@@ -21,7 +21,7 @@ import runpy
 import shutil
 import stat
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import MappingProxyType
@@ -343,24 +343,33 @@ def classify_feature_name(name: str) -> tuple[str, object, str]:
     return "custom", None, name
 
 
-def _feature_dirs(path: Path, rel: str = "specs"):
-    """Yield each feature directory under specs/. Read directories only and follow no symlink."""
-    children = list(os.scandir(path))
+def feature_dirs(path: Path, rel: str = "specs", on_error: Callable[[str], None] | None = None):
+    """Yield each feature directory under specs/. Read directories only and follow no symlink.
+
+    A folder that cannot be listed raises, or goes to on_error(rel) and is skipped when on_error is set.
+    """
+    try:
+        children = list(os.scandir(path))
+    except OSError:
+        if on_error is None:
+            raise
+        on_error(rel)
+        return
     if rel != "specs" and any(c.name == "spec.md" and c.is_file(follow_symlinks=False) for c in children):
         yield rel
         return
     for child in children:
         if child.is_dir(follow_symlinks=False) and not (rel == "specs" and child.name.startswith(".merge-specs")):
-            yield from _feature_dirs(Path(child.path), f"{rel}/{child.name}")
+            yield from feature_dirs(Path(child.path), f"{rel}/{child.name}", on_error)
 
 
-def duplicate_prefixes(workspace: Path) -> list[list[str]]:
+def duplicate_prefixes(workspace: Path, on_error: Callable[[str], None] | None = None) -> list[list[str]]:
     """Group the features that share a scheme and a prefix. Custom names and unusable prefixes form no group."""
     root = workspace / "specs"
     if root.is_symlink() or not root.is_dir():
         return []
     groups: dict = {}
-    for rel in _feature_dirs(root):
+    for rel in feature_dirs(root, on_error=on_error):
         try:
             scheme, key, _ = classify_feature_name(rel.rsplit("/", 1)[1])
         except ValueError:

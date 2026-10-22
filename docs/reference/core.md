@@ -683,6 +683,29 @@ Other integrations do not support `--global` or `--global-commands`.
 > cannot be symlinks. Unmigrated operations elsewhere in the project retain
 > their existing symlink behavior.
 
+## List Features
+
+```bash
+specify feature list
+specify feature list --json
+```
+
+The command resolves the project the same way as `specify project info`. It reads the effective workspace `specs/` root and writes nothing. It refuses symlinked artifact files and folders and reports them as findings. It does not read `allow_symlinks`. The human output is for the terminal and is not a stable contract. Agents use `--json`, which writes one JSON document to stdout and diagnostics to stderr.
+
+| Code | When |
+| --- | --- |
+| 0 | The report was produced, also with findings or with no features |
+| 1 | No project, or the specs root cannot be read. stderr gets `Error: <message>` |
+
+The JSON document has these keys:
+
+- `workspace_root`: the absolute workspace path.
+- `recommendation`: `feature`, `next_step`, and `rule`.
+- `features`: every feature, finished ones included, unfinished first. Each has `path`, `stage`, `blocked`, `next_step`, `markers`, `requirements`, `custom_checklists`, `tasks`, and `findings`.
+- `duplicate_prefixes`: the same value as in `specify project info --json`.
+
+The same files give byte-identical JSON. For the stages, blockers, and recommendation rules, see [`/speckit.todo`](agentic-sdd.md#speckittodo).
+
 ## Naming Features with the Helper Scripts
 
 When calling the bundled `create-new-feature` helper scripts directly, generated

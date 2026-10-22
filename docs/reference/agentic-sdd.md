@@ -34,6 +34,7 @@ skills by default.
 | `/speckit.clarify` | `speckit-clarify` | Resolve ambiguity before planning (optional quality gate; formerly `/quizme`) |
 | `/speckit.analyze` | `speckit-analyze` | Check artifact consistency after tasks and before implementation (optional quality gate) |
 | `/speckit.checklist` | `speckit-checklist` | Generate requirements-quality checklists (optional quality gate) |
+| `/speckit.todo` | `speckit-todo` | List unfinished features with their stage, blockers, and next step |
 
 ## `/speckit.constitution`
 
@@ -157,6 +158,48 @@ It first prints a severity-graded findings summary, then resolves to one of two 
 
 - **Converged** — no gaps found. `tasks.md` is left byte-for-byte unchanged and you'll see a clean result like `✅ Converged — the implementation satisfies the spec, plan, and tasks.` You're done; proceed to review or open a PR.
 - **Tasks appended** — gaps found. Converge appends them as new tasks under a Convergence section in `tasks.md` and tells you how many. Run `/speckit.implement` again to complete them, then `/speckit.converge` once more. Each pass finds fewer items; repeat until it reports converged.
+
+## `/speckit.todo`
+
+Lists the unfinished features with one stage, their blockers, and the next command for each. It also recommends one feature. The command is read-only. It takes facts only from the feature files, never from the conversation. It covers only the specs root of the current checkout. With external storage, that root is the shared workspace.
+
+```text
+/speckit.todo
+```
+
+The command runs [`specify feature list --json`](core.md#list-features) and renders the report from that output. Each feature gets exactly one stage:
+
+| Stage | Rule | Next step |
+| --- | --- | --- |
+| Unreadable | `spec.md`, `plan.md`, `tasks.md`, or a checklist file cannot be read or is a symlink, or the folder or its `checklists/` folder cannot be listed | Fix the file or folder (no command) |
+| No spec | A prefixed folder has no `spec.md` and no feature below it | Add `spec.md` or delete the folder (no command) |
+| Needs clarification | `spec.md` or `plan.md` has a clarification marker | `/speckit.clarify` |
+| Done | `tasks.md` has tasks, and all are checked | — |
+| In progress | Some tasks are checked, and some are open | `/speckit.implement` |
+| Tasks ready | `tasks.md` exists, and no task is checked | `/speckit.implement` |
+| Planned | `plan.md` exists | `/speckit.tasks` |
+| Spec ready | Only `spec.md` exists | `/speckit.plan` |
+
+The first matching rule wins, in this order: Unreadable, No spec, Needs clarification, Done, In progress, Tasks ready, Planned, Spec ready.
+
+A feature is blocked when its stage is Unreadable, No spec, or Needs clarification. Two more blockers change the next step:
+
+- Open items in `checklists/requirements.md` make the next step `/speckit.clarify`.
+- A `tasks.md` with no task makes the next step `/speckit.tasks`.
+
+When both apply, `/speckit.clarify` wins. Items in other checklist files are reviewer items. The report lists them, but they never block a feature or change its next step.
+
+A clarification marker is the text `[NEEDS CLARIFICATION` in `spec.md` or `plan.md`. In `plan.md`, a line `**<field>**: NEEDS CLARIFICATION` is also a marker. Text in code blocks and code spans is not a marker. A task is a line such as `- [ ] T001 …`. `- [x]` and `- [X]` mark a checked task.
+
+The recommendation is the first unfinished feature in this order:
+
+1. Unblocked features, by stage In progress, Tasks ready, Planned, Spec ready (rule `finish-before-start`).
+2. Blocked features with a next command (rule `resolve-blocker`).
+3. Blocked features with no command, No spec before Unreadable (rule `resolve-blocker`).
+
+Ties go to the workspace-relative path. When no feature is unfinished, the rule is `no-unfinished`, and the next step is `/speckit.specify`.
+
+An open task keeps a feature unfinished. If you drop a task, delete its line from `tasks.md`.
 
 ## `/speckit.taskstoissues` (deprecated core command)
 

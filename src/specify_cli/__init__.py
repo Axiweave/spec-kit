@@ -416,6 +416,9 @@ app.add_typer(_self_app, name="self")
 from .project import register as _register_project_cmds  # noqa: E402
 _register_project_cmds(app)
 
+from .features import register as _register_feature_cmds  # noqa: E402
+_register_feature_cmds(app)
+
 from .configs._commands import register as _register_config_cmds  # noqa: E402
 _register_config_cmds(app)
 
