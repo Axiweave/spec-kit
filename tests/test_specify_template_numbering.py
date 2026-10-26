@@ -38,7 +38,7 @@ def test_main_execution_list_is_sequential():
     ordinals = _main_execution_ordinals(SPECIFY_TEMPLATE.read_text(encoding="utf-8"))
 
     assert ordinals, "Could not find the main execution list in specify.md"
-    assert ordinals == list(range(1, 9))
+    assert ordinals == list(range(1, len(ordinals) + 1))
 
 
 def test_specify_creates_features_through_the_helper_script():

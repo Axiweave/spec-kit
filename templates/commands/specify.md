@@ -24,6 +24,8 @@ You **MUST** consider the user input before proceeding (if not empty).
 
 ## Pre-Execution Checks
 
+**Check the roadmap entry first**: When the input names a roadmap and an entry, run Outline step 3 now, before any hook. If a check stops the command, run no hook and change nothing. Otherwise, give each hook the step 3 feature description as its input, not the roadmap path and entry ID.
+
 **Check for extension hooks (before specification)**:
 - Check if `.specify/extensions.yml` exists in the project root.
 - If it exists, read it and look for entries under the `hooks.before_specify` key
@@ -81,7 +83,18 @@ Given that feature description, do this:
 
    If the user explicitly provided `GIT_BRANCH_NAME`, pass it through to the hook so the branch script uses the exact value as the branch name (bypassing all prefix/suffix generation).
 
-3. **Create the spec feature directory**:
+3. **Roadmap entry** (only when the input names a roadmap and an entry):
+
+   This step runs when the input names a roadmap file and an entry ID, for example `specs/billing-portal/roadmap.md R2` or `Parent roadmap: specs/billing-portal/roadmap.md → R2`. Otherwise, skip this step.
+   - The roadmap path must have the form `specs/<name>/roadmap.md` in the workspace, with no `..`. `<name>` must not start with `.` and must have no whitespace. The `<name>` folder must not be a symlink. The file must be a regular file and not a symlink. If any of these checks fails, stop and create no feature directory. When the roadmap file does not exist, also tell the user to create it at `specs/<name>/roadmap.md` from the template path that `specify preset resolve roadmap-template` prints.
+   - Find the table row with that `ID`. If the row is missing, stop, create no feature directory, and list the IDs that exist.
+   - Remove every `*` and backtick at both ends of the `Sub-spec` cell. If the cell is then not `—`, `–`, `-`, or empty, stop, create no feature directory, and name the existing sub-spec.
+   - If a `SPECIFY_FEATURE_DIRECTORY` override names a folder outside the workspace `specs/` folder, stop, create no feature directory, and name the override. The roadmap can link only a feature inside `specs/`.
+   - Use `<Intent>. Scope boundary: <Scope boundary>` from the row as the feature description, with one period after the intent. If the user also gave text, add it. The scope boundary limits the spec.
+   - Use this description as the feature description for the rest of this command. Make the step 1 short name again from this description, not from the roadmap path.
+   - Remember the roadmap path and the entry ID for step 8.
+
+4. **Create the spec feature directory**:
 
    Specs live under the workspace's `specs/` directory unless the user explicitly provides `SPECIFY_FEATURE_DIRECTORY`.
 
@@ -120,11 +133,11 @@ Given that feature description, do this:
    - The spec directory name and the git branch name are independent — they may be the same but that is the user's choice
    - The spec directory and file are always created by this command, never by the hook
 
-4. Load the resolved active `spec-template` file to understand required sections.
+5. Load the resolved active `spec-template` file to understand required sections.
 
-5. **IF EXISTS**: Load `/memory/constitution.md` for project principles and governance constraints.
+6. **IF EXISTS**: Load `/memory/constitution.md` for project principles and governance constraints.
 
-6. Follow this execution flow:
+7. Follow this execution flow:
     1. Parse user description from arguments
        If empty: ERROR "No feature description provided"
     2. Extract key concepts from description
@@ -149,10 +162,13 @@ Given that feature description, do this:
     7. Identify Key Entities (if data involved)
     8. Return: SUCCESS (spec ready for planning)
 
-7. Write the specification to SPEC_FILE using the template structure, replacing placeholders with concrete details derived from the feature description (arguments) while preserving section order and headings.
+8. Write the specification to SPEC_FILE using the template structure, replacing placeholders with concrete details derived from the feature description (arguments) while preserving section order and headings.
    Fill **Feature Branch** with the output of `git branch --show-current` run in the code repository. If it prints nothing, write `none`. Never use the feature directory name or `FEATURE_NAME` as the branch.
+   If step 3 ran:
+   - Write the **Input** line in the back-reference form: ``**Input**: Parent roadmap: `specs/<name>/roadmap.md` → entry **<ID>**. <feature description>``.
+   - After the spec is written, set two cells in the entry row of the roadmap: `Sub-spec` to the workspace-relative feature directory (for example `specs/012-billing-payment-methods`) and `Status` to `in-progress`. Do not realign, reorder, or rewrite any other cell or line of the roadmap.
 
-8. **Specification Quality Validation**: After writing the initial spec, validate it against quality criteria:
+9. **Specification Quality Validation**: After writing the initial spec, validate it against quality criteria:
 
    a. **Create Spec Quality Checklist**: Generate a checklist file at `SPECIFY_FEATURE_DIRECTORY/checklists/requirements.md` using the checklist template structure with these validation items:
 
@@ -284,6 +300,7 @@ Report completion to the user with:
 - `SPECIFY_FEATURE_DIRECTORY` — the feature directory path
 - `SPEC_FILE` — the spec file path
 - Checklist results summary
+- When step 3 ran: the roadmap path, the entry ID, and the two roadmap cells that step 8 wrote
 - Readiness for the next phase (`__SPECKIT_COMMAND_CLARIFY__` or `__SPECKIT_COMMAND_PLAN__`)
 
 **NOTE:** Branch creation is handled by the `before_specify` hook (git extension). Spec directory and file creation are always handled by this core command.

@@ -59,7 +59,11 @@ def test_json_is_one_document_on_stdout(project):
     assert result.exit_code == 0, result.output
     assert result.stderr == ""
     data = json.loads(result.stdout)
-    assert list(data) == ["workspace_root", "recommendation", "features", "duplicate_prefixes"]
+    assert list(data) == [
+        "workspace_root", "recommendation", "features", "duplicate_prefixes",
+        "roadmaps", "roadmap_findings", "roadmap_recommendation",
+    ]
+    assert (data["roadmaps"], data["roadmap_findings"], data["roadmap_recommendation"]) == ([], [], None)
     assert [m["line"] for m in data["features"][0]["markers"]] == [1, 2, 3, 4, 5]
 
 
@@ -100,6 +104,33 @@ def test_a_no_command_recommendation_names_the_finding(project):
     put(project, "specs/001-nospec/plan.md")
 
     assert invoke().stdout.splitlines()[0] == "Next: specs/001-nospec -> spec.md: no-spec (resolve-blocker)"
+
+
+_HEAD = "| ID | Sub-feature | Intent | Scope boundary | Depends on | Status | Sub-spec |\n|---|---|---|---|---|---|---|\n"
+
+
+def test_human_output_adds_the_roadmap_entry_line_and_finding_lines(project):
+    put(project, "specs/001-a/spec.md", "# A\n\n**Input**: Parent roadmap: `specs/epic/roadmap.md` → entry **R1**. A\n")
+    put(project, "specs/001-a/tasks.md", "- [x] T001 a\n")
+    put(project, "specs/epic/roadmap.md", _HEAD + "| R1 | a | i | b | — | in-progress | specs/001-a |\n| R2 | b | i | b | R1 | planned | — |\n")
+    put(project, "specs/other/roadmap.md", "# no table\n")
+
+    lines = invoke().stdout.splitlines()
+
+    assert lines == [
+        "Next: speckit.specify (no-unfinished)",
+        "Next roadmap entry: specs/epic/roadmap.md R2 -> speckit.specify",
+        "Done (1): specs/001-a",
+        "Roadmap specs/epic/roadmap.md:3  status-drift  R1  Stored status in-progress, expected done.",
+        "Roadmap specs/other/roadmap.md:-  unreadable-roadmap  -  The file has no roadmap table header.",
+    ]
+
+
+def test_human_output_without_roadmaps_has_no_roadmap_lines(project):
+    put(project, "specs/001-a/spec.md")
+    put(project, "specs/notes/roadmap-ideas.md")
+
+    assert not any("oadmap" in line for line in invoke().stdout.splitlines())
 
 
 def test_duplicate_prefixes_match_project_info(project):

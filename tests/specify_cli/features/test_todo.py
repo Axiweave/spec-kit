@@ -24,13 +24,13 @@ def _symlink_or_skip(link: Path, target: Path, *, target_is_directory: bool = Fa
 
 @pytest.fixture
 def unlistable():
-    """Remove all permissions from a folder and restore them after the test."""
+    """Remove permissions from a folder (all of them by default) and restore them after the test."""
     if os.name == "nt" or os.geteuid() == 0:
         pytest.skip("folder permissions do not deny listing on Windows or as root")
     locked: list[Path] = []
 
-    def lock(path: Path) -> None:
-        path.chmod(0)
+    def lock(path: Path, mode: int = 0) -> None:
+        path.chmod(mode)
         locked.append(path)
 
     yield lock
@@ -189,6 +189,7 @@ def test_unlistable_folders_are_findings_and_the_rest_is_reported(tmp_path, unli
         assert rows[path]["findings"] == [{"file": ".", "reason": "unreadable"}]
     assert rows["specs/001-a"]["stage"] == "spec-ready"
     assert data["duplicate_prefixes"] == [["specs/008-x", "specs/008-y"]]
+    assert (data["roadmaps"], data["roadmap_findings"]) == ([], [])
 
 
 def test_an_unlistable_specs_root_is_an_error(tmp_path, unlistable):
@@ -474,3 +475,166 @@ def test_generated_task_lists_name_open_ids_in_file_order():
         assert progress.total == len(marks), context
         assert progress.total - progress.checked == len(expected_open), context
         assert progress.open_ids == (expected_open if 1 <= len(expected_open) <= 3 else []), context
+
+
+# --- roadmaps --------------------------------------------------------------------------------
+
+_ROADMAP_HEAD = "| ID | Sub-feature | Intent | Scope boundary | Depends on | Status | Sub-spec |\n|---|---|---|---|---|---|---|\n"
+
+
+def test_roadmaps_are_found_in_direct_child_folders_only(tmp_path):
+    put(tmp_path, "specs/b-epic/roadmap.md", _ROADMAP_HEAD + "| R1 | a | i | b | — | planned | — |\n")
+    put(tmp_path, "specs/a-epic/roadmap.md", _ROADMAP_HEAD)
+    put(tmp_path, "specs/.merge-specs-x/roadmap.md", "# no table\n")
+    put(tmp_path, "specs/.drafts/roadmap.md", "# a dot folder is never a roadmap folder\n")
+    put(tmp_path, "specs/billing portal/roadmap.md", "# a back-reference cannot name a folder with whitespace\n")
+    put(tmp_path, "specs/b-epic/001-sub/roadmap.md", "# nested below the root is not a roadmap\n")
+    put(tmp_path, "outside/roadmap.md", "# no table\n")
+    put(tmp_path, "specs/linked/spec.md")
+    _symlink_or_skip(tmp_path / "specs/linked/roadmap.md", tmp_path / "outside/roadmap.md")
+    _symlink_or_skip(tmp_path / "specs/dirlink", tmp_path / "outside", target_is_directory=True)
+
+    data = report(tmp_path)
+
+    assert [item["path"] for item in data["roadmaps"]] == [
+        "specs/a-epic/roadmap.md", "specs/b-epic/roadmap.md", "specs/linked/roadmap.md",
+    ]
+    assert data["roadmap_findings"] == [{
+        "kind": "unreadable-roadmap", "file": "specs/linked/roadmap.md", "line": None,
+        "roadmap": "specs/linked/roadmap.md", "entry": None, "message": "The roadmap is not read (symlink).",
+    }]
+    assert data["roadmap_recommendation"] == {"roadmap": "specs/b-epic/roadmap.md", "entry": "R1", "next_step": "speckit.specify"}
+
+
+def test_a_roadmap_in_a_folder_that_cannot_be_searched_is_unreadable(tmp_path, unlistable):
+    put(tmp_path, "specs/epic/roadmap.md", _ROADMAP_HEAD)
+    put(tmp_path, "specs/locked/notes.md")
+    unlistable(tmp_path / "specs/epic", 0o444)  # listed, so roadmap.md is known, but not searchable
+    unlistable(tmp_path / "specs/locked", 0o444)  # listed, but holds no roadmap.md
+
+    data = report(tmp_path)
+
+    assert [(f["kind"], f["file"], f["line"]) for f in data["roadmap_findings"]] == [
+        ("unreadable-roadmap", "specs/epic/roadmap.md", None),
+    ]
+
+
+
+def test_a_folder_with_a_roadmap_is_an_epic_exactly_when_it_has_no_feature_file(tmp_path):
+    names = ("spec.md", "plan.md", "tasks.md", "checklists/ux.md")
+    subsets = [tuple(n for bit, n in enumerate(names) if mask >> bit & 1) for mask in range(16)]
+    for number, subset in enumerate(subsets, 10):
+        put(tmp_path, f"specs/0{number}-s/roadmap.md", _ROADMAP_HEAD)
+        put(tmp_path, f"specs/0{number}-s/README.md")
+        for name in subset:
+            put(tmp_path, f"specs/0{number}-s/{name}", "- [ ] T001 open\n")
+
+    rows = features(tmp_path)
+
+    for number, subset in enumerate(subsets, 10):
+        assert (f"specs/0{number}-s" in rows) == bool(subset), f"files={subset}"
+
+
+def test_other_prefixed_folders_with_a_roadmap_stay_feature_rows(tmp_path):
+    (tmp_path / "specs/011-empty").mkdir(parents=True)
+    put(tmp_path, "outside.md")
+    put(tmp_path, "specs/013-linked/README.md")
+    _symlink_or_skip(tmp_path / "specs/013-linked/roadmap.md", tmp_path / "outside.md")
+    put(tmp_path, "specs/web/014-deep/roadmap.md", _ROADMAP_HEAD)
+    put(tmp_path, "specs/010-epic/roadmap.md", _ROADMAP_HEAD)
+    put(tmp_path, "specs/010-epic/011-sub/plan.md")
+    put(tmp_path, "specs/010-epic/011-sub/tasks.md", "- [ ] T001 open\n")
+    put(tmp_path, "specs/001-my epic/roadmap.md", _ROADMAP_HEAD)  # not a roadmap folder, so not an epic folder
+
+    rows = features(tmp_path)
+
+    assert {path: row["stage"] for path, row in rows.items()} == {
+        "specs/011-empty": "no-spec", "specs/013-linked": "no-spec", "specs/001-my epic": "no-spec",
+        "specs/web/014-deep": "no-spec", "specs/010-epic/011-sub": "no-spec",
+    }
+
+
+def test_only_the_exact_name_roadmap_md_is_a_roadmap(tmp_path):
+    # A case-insensitive file system (macOS, Windows) opens ROADMAP.md as roadmap.md. Linux does not.
+    names = ("ROADMAP.md", "Roadmap.md", "roadmap.MD")
+    for number, name in enumerate(names, 10):
+        put(tmp_path, f"specs/0{number}-epic/{name}", _ROADMAP_HEAD + "| R1 | a | i | b | — | planned | — |\n")
+        put(tmp_path, f"specs/epic-{number}/{name}", _ROADMAP_HEAD + "| R1 | a | i | b | — | planned | — |\n")
+
+    data = report(tmp_path)
+
+    assert [row["path"] for row in data["features"]] == ["specs/010-epic", "specs/011-epic", "specs/012-epic"]
+    assert {row["stage"] for row in data["features"]} == {"no-spec"}
+    assert (data["roadmaps"], data["roadmap_findings"]) == ([], [])
+
+
+def test_only_exact_feature_file_names_keep_a_roadmap_folder_a_feature(tmp_path):
+    # A regular file named checklists is not the checklists/ folder, so it does not make a feature either.
+    for number, name in enumerate(("SPEC.md", "PLAN.md", "Tasks.md", "Checklists/ux.md", "checklists"), 10):
+        put(tmp_path, f"specs/0{number}-epic/roadmap.md", _ROADMAP_HEAD)
+        put(tmp_path, f"specs/0{number}-epic/{name}")
+
+    data = report(tmp_path)
+
+    assert data["features"] == []
+    assert [roadmap["path"] for roadmap in data["roadmaps"]] == [f"specs/0{n}-epic/roadmap.md" for n in range(10, 15)]
+
+
+def test_a_back_reference_to_a_missing_roadmap_is_a_finding_with_no_roadmap(tmp_path):
+    put(tmp_path, "specs/001-a/spec.md", "# a\n\n**Input**: Parent roadmap: `specs/epic/roadmap.md` → entry **R1**. x\n")
+
+    data = report(tmp_path)
+
+    assert data["roadmaps"] == []
+    assert [(f["kind"], f["file"], f["line"], f["entry"]) for f in data["roadmap_findings"]] == [
+        ("missing-entry", "specs/001-a/spec.md", 3, "R1"),
+    ]
+
+
+def test_no_roadmap_adds_empty_roadmap_keys_last(tmp_path):
+    _fixture(tmp_path)
+    (tmp_path / "specs/roadmap/roadmap.md").unlink()
+
+    data = report(tmp_path)
+
+    assert list(data)[-3:] == ["roadmaps", "roadmap_findings", "roadmap_recommendation"]
+    assert (data["roadmaps"], data["roadmap_findings"], data["roadmap_recommendation"]) == ([], [], None)
+
+
+def test_generated_roadmaps_never_change_features_or_the_recommendation(tmp_path):
+    rng = random.Random(SEED)
+    for case in range(30):
+        root = tmp_path / str(case)
+        made = [_random_feature(rng, root, f"{i:03}-f") for i in range(1, 5)]
+        before = report(root)
+        rows = []
+        for i in range(1, rng.randint(1, 6)):
+            sub = rng.choice(["—", f"specs/{rng.randint(1, 5):03}-f", "../x"])
+            deps = rng.choice(["—", f"R{rng.randint(1, 6)}"])
+            rows.append(f"| R{i} | n | i | b | {deps} | {rng.choice(['planned', 'done', 'x'])} | {sub} |\n")
+        put(root, "specs/epic/roadmap.md", _ROADMAP_HEAD + "".join(rows))
+        after = report(root)
+        context = f"seed={SEED} case={case} files={made} rows={rows}"
+        assert (after["features"], after["recommendation"]) == (before["features"], before["recommendation"]), context
+        assert after["roadmaps"][0]["path"] == "specs/epic/roadmap.md", context
+
+
+def test_a_report_with_roadmaps_is_stable_and_changes_nothing(tmp_path):
+    put(tmp_path, "specs/001-a/spec.md", "**Input**: Parent roadmap: `specs/epic/roadmap.md` → entry **R1**.\n")
+    put(tmp_path, "specs/001-a/tasks.md", tasks(1, 1))
+    put(tmp_path, "specs/002-b/spec.md", "Parent roadmap: specs/epic/roadmap.md -> entry R9\n")
+    put(tmp_path, "specs/epic/roadmap.md", _ROADMAP_HEAD + "| R1 | a | i | b | — | in-progress | specs/001-a/ |\n| R2 | b | i | b | R1 | planned | — |\n")
+    before = snapshot(tmp_path)
+
+    first, second = json.dumps(report(tmp_path)), json.dumps(report(tmp_path))
+    data = json.loads(first)
+
+    assert first == second
+    assert snapshot(tmp_path) == before
+    assert [(f["kind"], f["file"], f["line"]) for f in data["roadmap_findings"]] == [
+        ("missing-entry", "specs/002-b/spec.md", 1),
+        ("status-drift", "specs/epic/roadmap.md", 3),
+    ]
+    assert [(e["id"], e["expected_status"], e["ready"]) for e in data["roadmaps"][0]["entries"]] == [
+        ("R1", "done", False), ("R2", "planned", True),
+    ]

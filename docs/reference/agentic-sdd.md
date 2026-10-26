@@ -161,7 +161,7 @@ It first prints a severity-graded findings summary, then resolves to one of two 
 
 ## `/speckit.todo`
 
-Lists the unfinished features with one stage, their blockers, and the next command for each. It also recommends one feature. The command is read-only. It takes facts only from the feature files, never from the conversation. It covers only the specs root of the current checkout. With external storage, that root is the shared workspace.
+Lists the unfinished features with one stage, their blockers, and the next command for each. It also recommends one feature. The command is read-only. It takes facts only from the feature files and the roadmap files, never from the conversation. It covers only the specs root of the current checkout. With external storage, that root is the shared workspace.
 
 ```text
 /speckit.todo
@@ -172,7 +172,7 @@ The command runs [`specify feature list --json`](core.md#list-features) and rend
 | Stage | Rule | Next step |
 | --- | --- | --- |
 | Unreadable | `spec.md`, `plan.md`, `tasks.md`, or a checklist file cannot be read or is a symlink, or the folder or its `checklists/` folder cannot be listed | Fix the file or folder (no command) |
-| No spec | A prefixed folder has no `spec.md` and no feature below it | Add `spec.md` or delete the folder (no command) |
+| No spec | A prefixed folder has no `spec.md` and no feature below it, and is not an epic folder (see [Roadmaps](#roadmaps)) | Add `spec.md` to the folder. Before you delete the folder, make sure that it holds no `roadmap.md` (no command) |
 | Needs clarification | `spec.md` or `plan.md` has a clarification marker | `/speckit.clarify` |
 | Done | `tasks.md` has tasks, and all are checked | — |
 | In progress | Some tasks are checked, and some are open | `/speckit.implement` |
@@ -200,6 +200,58 @@ The recommendation is the first unfinished feature in this order:
 Ties go to the workspace-relative path. When no feature is unfinished, the rule is `no-unfinished`, and the next step is `/speckit.specify`.
 
 An open task keeps a feature unfinished. If you drop a task, delete its line from `tasks.md`.
+
+### Roadmaps
+
+A roadmap splits one epic into sub-features. It follows the [spec of specs](../concepts/spec-of-specs.md) convention. This part holds the rules that `/speckit.specify`, `/speckit.plan`, `/speckit.implement`, and `/speckit.todo` use.
+
+A roadmap is the file `specs/<name>/roadmap.md`, where `<name>` is a direct child folder of the specs root that does not start with `.` and has no whitespace. The report does not check other files, such as a top-level `ROADMAP.md`. To start one:
+
+1. Run `specify preset resolve roadmap-template` to get the template path.
+2. Copy the template to `specs/<epic>/roadmap.md`.
+3. Add one row for each sub-feature.
+
+A numbered roadmap folder `<name>` that has a regular `roadmap.md` and none of `spec.md`, `plan.md`, `tasks.md`, or `checklists/` is an epic folder. A numbered folder whose name has whitespace is never an epic folder. The feature report skips an epic folder as a feature and checks the folders below it. A numbered folder with a roadmap, any of those files, and no feature below it stays a feature row, so its open tasks still show. A folder with a feature below it is a container and is never a feature row. The report ignores its own `plan.md`, `tasks.md`, and checklists, but still checks its `roadmap.md`.
+
+The roadmap has a Markdown table with the columns ID, Sub-feature, Intent, Scope boundary, Depends on, Status, and Sub-spec. The column order is free, and extra columns are allowed. Readers trim each cell and remove every `*` and backtick at both ends. An ID starts with a letter or a digit, then uses letters, digits, `-`, `_`, or `.` between parts, for example `R2.1`. Status is `planned`, `in-progress`, or `done`. In Depends on and Sub-spec, `—`, `–`, `-`, or an empty cell means "none". Depends on is a comma-separated list of IDs from the same roadmap. Sub-spec is the feature directory, for example `specs/012-billing-payment-methods`. Trailing `/` characters on Sub-spec are allowed.
+
+To start a sub-feature, give `/speckit.specify` the roadmap path and the entry ID. The command writes this back-reference as the **Input** line of `spec.md`:
+
+```markdown
+**Input**: Parent roadmap: `specs/<epic>/roadmap.md` → entry **R3**. <description>
+```
+
+Readers also accept the back-reference without `**Input**:`, bold, or backticks, and with `->` in place of `→`. The first matching line outside fenced code blocks wins.
+
+Two commands write roadmap cells:
+
+| Command | Cells | When |
+| --- | --- | --- |
+| `/speckit.specify` | Sub-spec = the new feature directory, Status = `in-progress` | After it writes `spec.md` for the entry |
+| `/speckit.implement` | Status = `done` | When the row's Sub-spec names this feature and the feature meets the Done stage rule |
+
+Each command changes only these cells in the row of its own entry. It does not change other lines. `/speckit.plan` and `/speckit.implement` also read the parent entry as context.
+
+`specify feature list` reads every roadmap and computes these values for each entry:
+
+- **Expected status**: `planned` when Sub-spec is "none", `done` when the sub-spec feature has the stage Done, and `in-progress` otherwise.
+- **Ready**: the expected status is `planned`, no finding names the entry, and each dependency is in the same roadmap with the expected status `done`.
+- **Roadmap recommendation**: the first ready entry, by roadmap path and then by row order. The next step is `/speckit.specify`. When no entry is ready, there is no roadmap recommendation.
+
+An unknown dependency gives no finding, and the entry is never ready. A dependency cycle also gives no finding, and an entry in the cycle is never ready.
+
+The report gives these findings:
+
+| Kind | Cause |
+| --- | --- |
+| `unreadable-roadmap` | `roadmap.md` is a symlink, is not a regular file, cannot be read, is not UTF-8, or sits in a folder that the report can list but cannot search. The table has no header, no separator row, a row with a different cell count, an empty or invalid ID, or a duplicate ID. The report lists no entries for this roadmap. |
+| `broken-link` | A back-reference or Sub-spec path is not valid. A Sub-spec is not a known feature. The back-reference of the sub-spec does not name this roadmap and entry. A spec names an entry whose Sub-spec is a different feature or that has no sub-spec. |
+| `missing-entry` | A back-reference names a roadmap that does not exist or that the report cannot see (its folder cannot be listed or is a symlink), or an entry that the roadmap does not have. |
+| `status-drift` | The stored Status differs from the expected status. A value other than the three statuses always differs. The report skips this check only when the entry row itself has a `broken-link` finding. A `broken-link` finding on another spec that names the entry does not skip it. |
+
+A valid back-reference path has the form `specs/<name>/roadmap.md`. A valid Sub-spec starts with `specs/`, is relative, and has no `..` or empty segment. The report never reads a file at a path from a cell.
+
+With local storage, parallel worktrees can change neighboring rows of the same roadmap. The merge then can give a conflict. Resolve the conflict by hand, then run `/speckit.todo` to check the roadmap.
 
 ## `/speckit.taskstoissues` (deprecated core command)
 

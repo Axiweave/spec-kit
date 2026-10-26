@@ -703,8 +703,11 @@ The JSON document has these keys:
 - `recommendation`: `feature`, `next_step`, and `rule`.
 - `features`: every feature, finished ones included, unfinished first. Each has `path`, `stage`, `blocked`, `next_step`, `markers`, `requirements`, `custom_checklists`, `tasks`, and `findings`.
 - `duplicate_prefixes`: the same value as in `specify project info --json`.
+- `roadmaps`: every roadmap, sorted by `path`. Each has `path` and `entries`. Each entry has `id`, `name`, `line`, `depends_on`, `status`, `expected_status`, `sub_spec`, and `ready`, in row order.
+- `roadmap_findings`: each has `kind`, `file`, `line` (or `null`), `roadmap`, `entry` (or `null`), and `message`. `kind` is `unreadable-roadmap`, `broken-link`, `missing-entry`, or `status-drift`.
+- `roadmap_recommendation`: `roadmap`, `entry`, and `next_step` (`speckit.specify`), or `null` when no entry is ready.
 
-The same files give byte-identical JSON. For the stages, blockers, and recommendation rules, see [`/speckit.todo`](agentic-sdd.md#speckittodo).
+With no roadmap and no back-reference, the three roadmap keys are `[]`, `[]`, and `null`. A back-reference to a roadmap that does not exist gives a `missing-entry` finding, also with no roadmap. The same files give byte-identical JSON. For the stages, blockers, and recommendation rules, see [`/speckit.todo`](agentic-sdd.md#speckittodo). For the roadmap rules, see [Roadmaps](agentic-sdd.md#roadmaps).
 
 ## Naming Features with the Helper Scripts
 

@@ -1,7 +1,8 @@
 """Report the stage, blockers, and next step of each feature under the workspace specs/ root.
 
-report() reads the feature files and writes nothing. The same files give the same result.
-The stage model is documented in docs/reference/agentic-sdd.md.
+report() reads the feature files and the roadmaps (specs/<name>/roadmap.md) and writes nothing.
+The same files give the same result. The roadmap rules live in features.roadmap.
+The stage model and the roadmap rules are documented in docs/reference/agentic-sdd.md.
 """
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from ..project.naming import classify_feature_name, duplicate_prefixes, feature_dirs
+from .roadmap import BackRef, check, parent_ref
 
 # Stage -> (display name, canonical next step), in rule precedence order.
 STAGES: dict[str, tuple[str, str | None]] = {
@@ -118,6 +120,10 @@ def _discover(workspace: Path) -> list[tuple[str, Finding | None]]:
                 walk(child.path, child_rel)
             elif _prefixed(child.name):
                 spec = Path(child.path) / "spec.md"
+                names = _names(child.path) if rel == "specs" and _roadmap_folder(child.name) else set()
+                if "roadmap.md" in names and _is_regular(Path(child.path) / "roadmap.md") and not _has_feature_files(child.path, names):
+                    walk(child.path, child_rel)  # an epic folder is not a feature, but a numbered folder below it can be
+                    continue
                 reason = "symlink" if spec.is_symlink() else "unreadable" if spec.exists() else "no-spec"
                 found.append((child_rel, Finding("spec.md", reason)))
             else:
@@ -125,6 +131,54 @@ def _discover(workspace: Path) -> list[tuple[str, Finding | None]]:
 
     walk(str(root), "specs")
     return sorted(found, key=lambda entry: entry[0])
+
+
+def _roadmap_folder(name: str) -> bool:
+    """A back-reference path stops at whitespace and D6 rejects a leading `.`, so only these names can hold a roadmap."""
+    return not name.startswith(".") and not any(c.isspace() for c in name)
+
+
+def _has_feature_files(folder: str, names: set[str]) -> bool:
+    """Match what _feature reads: spec.md, plan.md, tasks.md, or a checklists/ folder or symlink, not a file."""
+    if names & {"spec.md", "plan.md", "tasks.md"}:
+        return True
+    checklists = os.path.join(folder, "checklists")
+    return "checklists" in names and (os.path.islink(checklists) or os.path.isdir(checklists))
+
+
+def _names(folder: str) -> set[str]:
+    """List exact names: lstat or open would also find ROADMAP.md on a case-insensitive file system."""
+    try:
+        return set(os.listdir(folder))
+    except OSError:
+        return set()  # a folder that cannot be listed is an Unreadable row of _discover
+
+
+def _is_regular(path: Path) -> bool:
+    try:
+        return stat.S_ISREG(path.lstat().st_mode)
+    except OSError:
+        return False
+
+
+def _roadmap_files(workspace: Path) -> tuple[dict[str, str], dict[str, str]]:
+    """Return (texts, unreadable reasons) for each specs/<name>/roadmap.md. Symlinked folders are not followed."""
+    root = workspace / "specs"
+    texts: dict[str, str] = {}
+    unreadable: dict[str, str] = {}
+    if root.is_symlink() or not root.is_dir():
+        return texts, unreadable
+    for child in os.scandir(root):
+        if not child.is_dir(follow_symlinks=False) or not _roadmap_folder(child.name) or "roadmap.md" not in _names(child.path):
+            continue
+        rel = f"specs/{child.name}/roadmap.md"
+        # _read gives "unreadable" when the folder can be listed but not searched
+        value = _read(Path(child.path), "roadmap.md")
+        if isinstance(value, Finding):
+            unreadable[rel] = value.reason
+        elif value is not None:
+            texts[rel] = value
+    return texts, unreadable
 
 
 def _read(folder: Path, name: str) -> str | Finding | None:
@@ -181,11 +235,11 @@ def _checklist(text: str, file: str) -> ChecklistCount:
     return ChecklistCount(file, marks.count(" "), len(marks))
 
 
-def _feature(workspace: Path, rel: str, finding: Finding | None) -> Feature:
+def _feature(workspace: Path, rel: str, finding: Finding | None) -> tuple[Feature, BackRef | None]:
     folder = workspace / rel
     findings = [finding] if finding else []
     if finding is not None and finding.file == ".":  # the folder cannot be listed, so nothing inside can be read
-        return Feature(rel, "unreadable", True, None, [], None, [], None, findings)
+        return Feature(rel, "unreadable", True, None, [], None, [], None, findings), None
     texts: dict[str, str] = {}
     for name in ("plan.md", "tasks.md") if finding else ("spec.md", "plan.md", "tasks.md"):
         value = _read(folder, name)
@@ -247,7 +301,8 @@ def _feature(workspace: Path, rel: str, finding: Finding | None) -> Feature:
             blocked, next_step = True, "speckit.tasks"
         if requirements is not None and requirements.open:
             blocked, next_step = True, "speckit.clarify"
-    return Feature(rel, stage, blocked, next_step, markers, requirements, custom, tasks, findings)
+    ref = parent_ref(texts["spec.md"]) if "spec.md" in texts else None
+    return Feature(rel, stage, blocked, next_step, markers, requirements, custom, tasks, findings), ref
 
 
 def _sort_key(feature: Feature) -> tuple[int, int, str]:
@@ -268,11 +323,16 @@ def _recommend(features: list[Feature]) -> Recommendation:
 
 
 def report(workspace: Path) -> dict[str, Any]:
-    """Return the report for the workspace: the recommendation, every feature in report order, and duplicate prefixes."""
-    features = sorted((_feature(workspace, rel, finding) for rel, finding in _discover(workspace)), key=_sort_key)
+    """Return the report: the recommendation, every feature in report order, duplicate prefixes, and roadmaps."""
+    pairs = [_feature(workspace, rel, finding) for rel, finding in _discover(workspace)]
+    features = sorted((feature for feature, _ in pairs), key=_sort_key)
+    roadmaps, findings, next_entry = check(*_roadmap_files(workspace), {f.path: (f.stage, ref) for f, ref in pairs})
     return {
         "workspace_root": str(workspace),
         "recommendation": asdict(_recommend(features)),
         "features": [asdict(feature) for feature in features],
         "duplicate_prefixes": duplicate_prefixes(workspace, on_error=lambda rel: None),
+        "roadmaps": [asdict(item) for item in roadmaps],
+        "roadmap_findings": [asdict(item) for item in findings],
+        "roadmap_recommendation": asdict(next_entry) if next_entry else None,
     }

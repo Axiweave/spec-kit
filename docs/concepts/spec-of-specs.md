@@ -169,3 +169,6 @@ the file by hand, the community-maintained
 [Spec Roadmap extension](https://github.com/srobroek/speckit-roadmap) explores that
 direction. It is a third-party extension and is not required — the manual convention
 above is enough on its own.
+This fork's `/speckit.specify`, `/speckit.plan`, `/speckit.implement`, and
+`/speckit.todo` use the roadmap table and the back-reference directly. See
+[Roadmaps](../reference/agentic-sdd.md#roadmaps) for the rules.

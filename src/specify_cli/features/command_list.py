@@ -60,6 +60,9 @@ def register(app: typer.Typer) -> None:
             typer.echo(json.dumps(data))
             return
         typer.echo(_next_line(data))
+        entry = data["roadmap_recommendation"]
+        if entry is not None:
+            typer.echo(f"Next roadmap entry: {entry['roadmap']} {entry['entry']} -> {entry['next_step']}")
         unfinished = [feature for feature in data["features"] if feature["stage"] != "done"]
         done = [feature["path"] for feature in data["features"] if feature["stage"] == "done"]
         for feature in unfinished:
@@ -72,3 +75,6 @@ def register(app: typer.Typer) -> None:
             typer.echo(f"Done ({len(done)}): {', '.join(done)}")
         for group in data["duplicate_prefixes"]:
             typer.echo(f"Duplicate feature prefix: {', '.join(group)}")
+        for item in data["roadmap_findings"]:
+            line = "-" if item["line"] is None else item["line"]
+            typer.echo(f"Roadmap {item['file']}:{line}  {item['kind']}  {item['entry'] or '-'}  {item['message']}")

@@ -95,6 +95,13 @@ You **MUST** consider the user input before proceeding (if not empty).
    - **IF EXISTS**: Read research.md for technical decisions and constraints
    - **IF EXISTS**: Read /memory/constitution.md for governance constraints
    - **IF EXISTS**: Read quickstart.md for integration scenarios
+   - **IF PRESENT**: When FEATURE_DIR/spec.md has a parent roadmap back-reference, read that roadmap row. Find, resolve, and check the back-reference with the same rules as `__SPECKIT_COMMAND_PLAN__` step 2:
+     - The back-reference is the first line outside fenced code blocks that matches `Parent roadmap: <path> → entry <ID>`. The `**Input**:` prefix, bold, and backticks are optional. `->` can replace `→`.
+     - Resolve `<path>` against the workspace root: the folder that contains the top `specs/` folder of FEATURE_DIR. Do not resolve it against the code repository.
+     - `<path>` must have the form `specs/<name>/roadmap.md`, with no `..`. `<name>` must not start with `.` and must have no whitespace. The `<name>` folder must not be a symlink. The file must be a regular file and not a symlink.
+     - Keep the implementation inside the row's `Scope boundary`. Do not implement items that the boundary defers to a sibling entry or to later work.
+     - If the path fails a check, or the roadmap file or the row is missing, warn and name the broken reference. Then continue without roadmap context, and never edit that file.
+     - Remove every `*` and backtick at both ends of the row's `Sub-spec` cell, and every trailing `/`. If the cell then does not name FEATURE_DIR relative to the workspace root, warn and name the entry and the cell value. Then continue without roadmap context, and never edit that file.
 
 4. **Project Setup Verification**:
    - **REQUIRED**: Create/verify ignore files based on actual project setup:
@@ -173,6 +180,7 @@ You **MUST** consider the user input before proceeding (if not empty).
    - Check that implemented features match the original specification
    - Validate that tests pass and coverage meets requirements
    - Confirm the implementation follows the technical plan
+   - **Roadmap entry**: When step 3 found a valid back-reference and the roadmap row, check the `Sub-spec` cell of the row first. Remove every `*` and backtick at both ends of the cell. It must then name this feature directory relative to the workspace root, for example `specs/012-billing-payment-methods`. Trailing `/` characters are allowed. If it does not, warn that the entry has no sub-spec or belongs to another sub-spec, and change nothing in the roadmap. Otherwise, run `specify feature list --json` from the code repository and find the item in `features` whose `path` is that feature directory. When its `stage` is `done`, set the `Status` cell of the entry row to `done`. Change only this cell. Do not realign, reorder, or rewrite any other cell or line of the roadmap. Otherwise, change nothing in the roadmap and warn the user: name the command error, the missing item, or the stage and the `findings` of the item.
 
 Note: This command assumes a complete task breakdown exists in tasks.md. If tasks are incomplete or missing, suggest running `__SPECKIT_COMMAND_TASKS__` first to regenerate the task list.
 

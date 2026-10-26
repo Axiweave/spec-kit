@@ -63,6 +63,15 @@ You **MUST** consider the user input before proceeding (if not empty).
    BRANCH is the code repository's current Git branch. It is empty when HEAD is detached or Git is unavailable. Write `none` in the plan's **Branch** field in that case.
 
 2. **Load context**: Read FEATURE_SPEC and `/memory/constitution.md`. Load IMPL_PLAN template (already copied).
+   If FEATURE_SPEC has a parent roadmap back-reference, read that roadmap row:
+   - The back-reference is the first line outside fenced code blocks that matches `Parent roadmap: <path> → entry <ID>`. The `**Input**:` prefix, bold, and backticks are optional. `->` can replace `→`.
+   - Resolve `<path>` against the workspace root: the folder that contains the top `specs/` folder of FEATURE_SPEC. Do not resolve it against the code repository.
+   - `<path>` must have the form `specs/<name>/roadmap.md`, with no `..`. `<name>` must not start with `.` and must have no whitespace. The `<name>` folder must not be a symlink. The file must be a regular file and not a symlink.
+   - Keep the plan inside the row's `Scope boundary`.
+   - In the plan **Summary**, name the entry and its scope boundary.
+   - List each plan item that the boundary defers to a sibling entry or to later work, and leave each such item out of the plan.
+   - If the path fails a check, or the roadmap file or the row is missing, warn and name the broken reference. Then continue without roadmap context.
+   - Remove every `*` and backtick at both ends of the row's `Sub-spec` cell, and every trailing `/`. If the cell then does not name the folder of FEATURE_SPEC relative to the workspace root, warn and name the entry and the cell value. Then continue without roadmap context.
 
 3. **Execute plan workflow**: Follow the structure in IMPL_PLAN template to:
    - Fill Technical Context (mark unknowns as "NEEDS CLARIFICATION")
