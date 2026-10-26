@@ -35,6 +35,7 @@ skills by default.
 | `/speckit.analyze` | `speckit-analyze` | Check artifact consistency after tasks and before implementation (optional quality gate) |
 | `/speckit.checklist` | `speckit-checklist` | Generate requirements-quality checklists (optional quality gate) |
 | `/speckit.todo` | `speckit-todo` | List unfinished features with their stage, blockers, and next step |
+| `/speckit.roadmap` | `speckit-roadmap` | Split a large piece of work into a roadmap of sub-features |
 
 ## `/speckit.constitution`
 
@@ -203,13 +204,17 @@ An open task keeps a feature unfinished. If you drop a task, delete its line fro
 
 ### Roadmaps
 
-A roadmap splits one epic into sub-features. It follows the [spec of specs](../concepts/spec-of-specs.md) convention. This part holds the rules that `/speckit.specify`, `/speckit.plan`, `/speckit.implement`, and `/speckit.todo` use.
+A roadmap splits one epic into sub-features. It follows the [spec of specs](../concepts/spec-of-specs.md) convention. This part holds the rules that `/speckit.roadmap`, `/speckit.specify`, `/speckit.plan`, `/speckit.implement`, and `/speckit.todo` use.
 
-A roadmap is the file `specs/<name>/roadmap.md`, where `<name>` is a direct child folder of the specs root that does not start with `.` and has no whitespace. The report does not check other files, such as a top-level `ROADMAP.md`. To start one:
+A roadmap is the file `specs/<name>/roadmap.md`, where `<name>` is a direct child folder of the specs root that does not start with `.` and has no whitespace. The report does not check other files, such as a top-level `ROADMAP.md`. To start one, give `/speckit.roadmap` a description of the work:
 
-1. Run `specify preset resolve roadmap-template` to get the template path.
-2. Copy the template to `specs/<epic>/roadmap.md`.
-3. Add one row for each sub-feature.
+```text
+/speckit.roadmap A billing portal: invoices, payment methods, and usage reports
+```
+
+The command makes a new folder name, splits the work into `planned` entries with their dependencies, and writes `specs/<name>/roadmap.md` from the `roadmap-template`. It stops when the folder exists or when the work is only one sub-feature. It then runs `specify feature list --json` to check the file, and names the next `/speckit.specify` command for each ready entry. It creates no feature and changes no other file.
+
+To write a roadmap by hand, copy the template path that `specify preset resolve roadmap-template` prints to `specs/<name>/roadmap.md`. Then add one row for each sub-feature.
 
 A numbered roadmap folder `<name>` that has a regular `roadmap.md` and none of `spec.md`, `plan.md`, `tasks.md`, or `checklists/` is an epic folder. A numbered folder whose name has whitespace is never an epic folder. The feature report skips an epic folder as a feature and checks the folders below it. A numbered folder with a roadmap, any of those files, and no feature below it stays a feature row, so its open tasks still show. A folder with a feature below it is a container and is never a feature row. The report ignores its own `plan.md`, `tasks.md`, and checklists, but still checks its `roadmap.md`.
 
