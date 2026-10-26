@@ -27,7 +27,7 @@ Write one new roadmap file. Each entry is one sub-feature that `__SPECKIT_COMMAN
    - Otherwise, make a 2-4 word name from the description, for example `billing-portal`.
    - Use only lowercase letters, digits, and `-`. Do not start the name with `.` or `-`.
    - If `<workspace_root>/specs/<name>` exists, stop and name it. When the folder has a `roadmap.md`, tell the user to edit that file. Otherwise, tell the user to give another name as `specs/<name>/roadmap.md`.
-4. Run `specify preset resolve roadmap-template`. The output has a `roadmap-template:` line, then the path of the active template, then a `(top layer from: …)` line. A long path can wrap over two or more lines, so join the path lines. Read the file at that path.
+4. Run `specify preset resolve roadmap-template`. Its first line is `roadmap-template: <path>` after leading spaces, with the path of the active template. Read the file at that path.
 5. Split the description into entries:
    - Each entry is one sub-feature.
    - Add only the work that the description asks for. Use as few entries as the work permits.

@@ -6,6 +6,7 @@
 
 ### Fixed
 
+- Print each template path from `specify preset resolve` on one line, also when the output is not a terminal. Agents read this path, and a wrapped path was not readable.
 - Resolve `specify artifact list`, `info`, and `lookup` provenance from the external workspace. Installed extensions no longer break artifact listing in external projects.
 - Check `specify integration status` entries against the workspace or repository that owns them. Keep integration catalog configuration and cache in the workspace.
 - Commit user-authored workspace files that resemble temporary or bytecode files. Exclude only documented transient producers, and apply the same rules to the initial commit and `.gitignore`. Refuse workspace history under a bare repository that Git refuses to inspect.

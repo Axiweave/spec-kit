@@ -214,3 +214,40 @@ class TestPresetResolve:
         assert "Composition chain" in output, output
         assert "[base]" in output, output
         assert "[append]" in output, output
+
+    def test_resolve_prints_each_path_whole_on_one_line(self, project_dir):
+        """Agents read the path from piped output, so a long path must not wrap.
+
+        Paths of 1 to 300 characters cover shorter than, equal to, and far
+        past the 80-column width that Rich uses when output is not a terminal.
+        """
+        from unittest.mock import patch
+
+        from specify_cli.presets import PresetResolver
+
+        for size in (1, 79, 80, 81, 300):
+            path = "/" + "d" * (size - 1) + "/spec-template.md"
+            layers = [
+                {"path": Path(path), "source": "top v1", "strategy": "append"},
+                {"path": Path(path), "source": "base v1", "strategy": "replace"},
+            ]
+            with (
+                patch.object(PresetResolver, "collect_all_layers", return_value=layers),
+                patch.object(PresetResolver, "resolve_content", return_value="x"),
+            ):
+                composed = self._invoke(project_dir, ["preset", "resolve", "spec-template"])
+            with (
+                patch.object(PresetResolver, "collect_all_layers", return_value=[]),
+                patch.object(
+                    PresetResolver,
+                    "resolve_with_source",
+                    return_value={"path": path, "source": "core"},
+                ),
+            ):
+                fallback = self._invoke(project_dir, ["preset", "resolve", "spec-template"])
+
+            for result, want in ((composed, 3), (fallback, 1)):
+                assert result.exit_code == 0, (result.output, result.exception)
+                lines = strip_ansi(result.output).splitlines()
+                whole = [line for line in lines if str(Path(path)) in line]
+                assert len(whole) == want, (size, lines)

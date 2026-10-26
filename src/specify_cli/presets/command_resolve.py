@@ -49,7 +49,8 @@ def preset_resolve(
         display_layer = layers[0]
         console.print(
             f"  [bold]{safe_template_name}[/bold]: "
-            f"{_escape_markup(str(display_layer['path']))}"
+            f"{_escape_markup(str(display_layer['path']))}",
+            soft_wrap=True,
         )
         console.print(
             f"    [dim](top layer from: "
@@ -101,7 +102,8 @@ def preset_resolve(
                 console.print(
                     f"    {i + 1}. \\[{_escape_markup(str(strategy_label))}] "
                     f"{_escape_markup(str(layer['source']))} → "
-                    f"{_escape_markup(str(layer['path']))}"
+                    f"{_escape_markup(str(layer['path']))}",
+                    soft_wrap=True,
                 )
     else:
         # No layers found — fall back to resolve_with_source for non-composition cases
@@ -109,7 +111,8 @@ def preset_resolve(
         if result:
             console.print(
                 f"  [bold]{safe_template_name}[/bold]: "
-                f"{_escape_markup(str(result['path']))}"
+                f"{_escape_markup(str(result['path']))}",
+                soft_wrap=True,
             )
             console.print(
                 f"    [dim](from: {_escape_markup(str(result['source']))})[/dim]"
