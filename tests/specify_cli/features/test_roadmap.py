@@ -12,12 +12,15 @@ SEED = 9009
 _HEAD = ["ID", "Sub-feature", "Intent", "Scope boundary", "Depends on", "Status", "Sub-spec"]
 
 
-def table(*rows: str, header: str = "| " + " | ".join(_HEAD) + " |") -> str:
-    return "\n".join(["# Roadmap", "", header, "|" + "---|" * 7, *rows]) + "\n"
+def table(*rows: str, waits: bool = False) -> str:
+    head = [*_HEAD[:5], "Waits on", *_HEAD[5:]] if waits else _HEAD
+    return "\n".join(["# Roadmap", "", "| " + " | ".join(head) + " |", "|" + "---|" * len(head), *rows]) + "\n"
 
 
-def row(entry_id: str, *, deps: str = "—", status: str = "planned", sub: str = "—") -> str:
-    return f"| {entry_id} | name {entry_id} | intent | boundary | {deps} | {status} | {sub} |"
+def row(entry_id: str, *, deps: str = "—", status: str = "planned", sub: str = "—", waits: str | None = None) -> str:
+    """With ``waits`` set, the row has a Waits on cell after Depends on, to match ``table(waits=True)``."""
+    waits_cell = "" if waits is None else f" {waits} |"
+    return f"| {entry_id} | name {entry_id} | intent | boundary | {deps} |{waits_cell} {status} | {sub} |"
 
 
 # --- back-reference ---------------------------------------------------------------------------
@@ -53,22 +56,26 @@ def test_generated_tables_round_trip():
     rng = random.Random(SEED)
     print(f"seed={SEED}")
     for case in range(200):
+        has_waits = rng.random() < 0.5
         ids = [f"R{n}" for n in rng.sample(range(1, 50), rng.randint(0, 8))]
         expected = []
         for entry_id in ids:
             deps = rng.sample(ids, rng.randint(0, min(2, len(ids))))
             sub = rng.choice([None, f"specs/{rng.randint(1, 99):03}-x"])
+            waits = rng.choice([None, "PR #15 (owner)", "team infra"]) if has_waits else None
             expected.append({
                 "id": entry_id, "name": _random_value(rng, ["Invoice", "list", "PDF"]),
                 "depends_on": deps, "status": rng.choice(["planned", "In-Progress", "DONE", "weird"]), "sub_spec": sub,
+                "waits_on": waits,
             })
-        columns = [*_HEAD, *(["Notes"] if rng.random() < 0.5 else [])]
+        columns = [*_HEAD, *(["Notes"] if rng.random() < 0.5 else []), *(["Waits on"] if has_waits else [])]
         rng.shuffle(columns)
 
         def cell(item: dict, column: str) -> str:
             value = {
                 "ID": item["id"], "Sub-feature": item["name"], "Intent": "i", "Scope boundary": "b",
                 "Depends on": ", ".join(item["depends_on"]) or rng.choice(["—", "–", "-", ""]),
+                "Waits on": item["waits_on"] or rng.choice(["—", "–", "-", ""]),
                 "Status": item["status"],
                 "Sub-spec": (item["sub_spec"] + rng.choice(["", "/"])) if item["sub_spec"] else rng.choice(["—", ""]),
                 "Notes": "n",
@@ -84,8 +91,8 @@ def test_generated_tables_round_trip():
         assert [(line, cells["id"]) for line, cells in result] == [(5 + i, e["id"]) for i, e in enumerate(expected)], context
         roadmaps, _, _ = check({"specs/e/roadmap.md": text}, {}, {})
         for got, want in zip(roadmaps[0].entries, expected):
-            assert (got.name, got.depends_on, got.status, got.sub_spec) == (
-                want["name"], want["depends_on"], want["status"].lower(), want["sub_spec"]), context
+            assert (got.name, got.depends_on, got.status, got.sub_spec, got.waits_on) == (
+                want["name"], want["depends_on"], want["status"].lower(), want["sub_spec"], want["waits_on"]), context
 
 
 @pytest.mark.parametrize("text, line", [
@@ -129,8 +136,8 @@ def ref(entry_id: str, roadmap: str = EPIC) -> BackRef:
     return BackRef(roadmap, entry_id, 3)
 
 
-def run(rows: list[str], features: dict | None = None, *, unreadable: dict | None = None):
-    return check({EPIC: table(*rows)}, unreadable or {}, features or {})
+def run(rows: list[str], features: dict | None = None, *, unreadable: dict | None = None, waits: bool = False):
+    return check({EPIC: table(*rows, waits=waits)}, unreadable or {}, features or {})
 
 
 def kinds(findings) -> list[tuple[str, str, str | None]]:
@@ -197,7 +204,7 @@ def test_ready_rule_on_generated_roadmaps():
     print(f"seed={SEED}")
     for case in range(300):
         ids = [f"R{n}" for n in range(1, rng.randint(1, 8) + 1)]
-        rows, features, done = [], {}, set()
+        rows, features, done, waiting = [], {}, set(), set()
         for n, entry_id in enumerate(ids):
             deps = rng.sample([*ids, "R99"], rng.randint(0, min(3, len(ids) + 1)))
             stage = rng.choice([None, "done", "planned"])
@@ -205,10 +212,14 @@ def test_ready_rule_on_generated_roadmaps():
                 features[f"specs/{n:03}-f"] = (stage, ref(entry_id))
                 done |= {entry_id} if stage == "done" else set()
             status = rng.choice(["planned", "in-progress", "done"])
-            rows.append(row(entry_id, deps=", ".join(deps) or "—", status=status, sub=f"specs/{n:03}-f" if stage else "—"))
+            waits = rng.choice(["PR #15 (owner)", "`R2`", "—", "–", "-", ""])
+            waiting |= {entry_id} if waits not in ("—", "–", "-", "") else set()
+            rows.append(row(
+                entry_id, deps=", ".join(deps) or "—", status=status, sub=f"specs/{n:03}-f" if stage else "—", waits=waits,
+            ))
         if rng.random() < 0.3:  # a stray spec that claims an entry
             features["specs/900-stray"] = ("spec-ready", ref(rng.choice(ids)))
-        roadmaps, findings, recommendation = run(rows, features)
+        roadmaps, findings, recommendation = run(rows, features, waits=True)
         context = f"seed={SEED} case={case}\n" + "\n".join(rows)
         entries = {e.id: e for e in roadmaps[0].entries}
         flagged = {f.entry for f in findings}
@@ -223,6 +234,7 @@ def test_ready_rule_on_generated_roadmaps():
             looped = entry.id in reach[entry.id]
             assert entry.ready == (
                 entry.expected_status == "planned" and entry.id not in flagged and deps_done and not looped
+                and entry.id not in waiting
             ), context
             if "R99" in entry.depends_on or looped:
                 assert not entry.ready, context
@@ -244,6 +256,18 @@ def test_an_entry_in_a_cycle_is_never_ready_even_when_the_other_entry_is_done():
     assert findings == []
     assert [(e.id, e.expected_status, e.ready) for e in roadmaps[0].entries] == [("R1", "planned", False), ("R2", "done", False)]
     assert recommendation is None
+
+
+@pytest.mark.parametrize("r1, r2, want", [
+    ("PR #15 (owner)", "—", "R2"),
+    ("PR #15 (owner)", "team infra", None),
+    ("—", "team infra", "R1"),
+])
+def test_an_entry_that_waits_is_not_recommended(r1, r2, want):
+    roadmaps, findings, recommendation = run([row("R1", waits=r1), row("R2", waits=r2)], waits=True)
+    assert findings == []
+    assert [e.ready for e in roadmaps[0].entries] == [r1 == "—", r2 == "—"]
+    assert (recommendation.entry if recommendation else None) == want
 
 
 def test_recommendation_is_the_first_ready_entry_by_path_then_row():

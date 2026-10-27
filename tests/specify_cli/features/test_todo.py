@@ -638,3 +638,21 @@ def test_a_report_with_roadmaps_is_stable_and_changes_nothing(tmp_path):
     assert [(e["id"], e["expected_status"], e["ready"]) for e in data["roadmaps"][0]["entries"]] == [
         ("R1", "done", False), ("R2", "planned", True),
     ]
+
+
+def test_waits_on_is_reported_with_and_without_the_column(tmp_path):
+    waits_head = "| ID | Sub-feature | Intent | Scope boundary | Depends on | Waits on | Status | Sub-spec |\n" + "|---" * 8 + "|\n"
+    put(tmp_path, "specs/020-epic/brief.md", "# Brief: epic\n")  # a brief does not make the epic folder a feature
+    put(tmp_path, "specs/020-epic/roadmap.md", waits_head + "| R1 | a | i | b | — | PR #15 | planned | — |\n| R2 | b | i | b | — | — | planned | — |\n")
+    put(tmp_path, "specs/plain/roadmap.md", _ROADMAP_HEAD + "| R1 | a | i | b | — | planned | — |\n")
+
+    data = report(tmp_path)
+
+    assert data["features"] == []
+    assert data["roadmap_findings"] == []
+    assert [[(e["id"], e["waits_on"], e["ready"]) for e in r["entries"]] for r in data["roadmaps"]] == [
+        [("R1", "PR #15", False), ("R2", None, True)],
+        [("R1", None, True)],
+    ]
+    assert data["roadmap_recommendation"]["roadmap"] == "specs/020-epic/roadmap.md"
+    assert data["roadmap_recommendation"]["entry"] == "R2"

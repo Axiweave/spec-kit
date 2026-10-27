@@ -11,6 +11,7 @@ from dataclasses import dataclass
 STATUSES = ("planned", "in-progress", "done")
 FINDING_KINDS = ("unreadable-roadmap", "broken-link", "missing-entry", "status-drift")
 COLUMNS = ("id", "sub-feature", "intent", "scope boundary", "depends on", "status", "sub-spec")
+WAITS_ON = "waits on"  # optional column: free text naming an external blocker
 
 _NONE = frozenset({"", "—", "–", "-"})
 _FENCE = re.compile(r"^\s*(```|~~~)")  # same rule as todo._FENCE
@@ -36,6 +37,7 @@ class Entry:
     name: str
     line: int
     depends_on: list[str]
+    waits_on: str | None
     status: str
     expected_status: str
     sub_spec: str | None
@@ -121,7 +123,7 @@ def parse(text: str) -> list[tuple[int, dict[str, str]]] | tuple[int | None, str
             values = _cells(row)
             if len(values) != len(names):
                 return row_number, f"The row has {len(values)} cells, the header has {len(names)}."
-            cells_by_column = {name: _clean(value) for name, value in zip(names, values) if name in COLUMNS}
+            cells_by_column = {name: _clean(value) for name, value in zip(names, values) if name in COLUMNS or name == WAITS_ON}
             entry_id = cells_by_column["id"]
             if not entry_id:
                 return row_number, "The row has no ID."
@@ -150,6 +152,7 @@ class _Raw:
     name: str
     line: int
     depends_on: list[str]
+    waits_on: str | None
     status: str
     sub_spec: str | None
     expected: str = "planned"
@@ -185,6 +188,7 @@ def check(
                 depends_on=[] if _none(cells["depends on"]) else [
                     _clean(d) for d in cells["depends on"].split(",") if not _none(_clean(d))
                 ],
+                waits_on=None if _none(cells.get(WAITS_ON, "")) else cells[WAITS_ON],
                 status=cells["status"].lower(),
                 sub_spec=None if _none(cells["sub-spec"]) else cells["sub-spec"].rstrip("/"),
             )
@@ -232,10 +236,13 @@ def check(
                 and (path, raw.id) not in flagged
                 and raw.id not in looped
                 and all(expected.get(dep) == "done" for dep in raw.depends_on)
+                and raw.waits_on is None
             )
             if ready and recommendation is None:
                 recommendation = RoadmapRecommendation(path, raw.id)
-            built.append(Entry(raw.id, raw.name, raw.line, raw.depends_on, raw.status, raw.expected, raw.sub_spec, ready))
+            built.append(Entry(
+                raw.id, raw.name, raw.line, raw.depends_on, raw.waits_on, raw.status, raw.expected, raw.sub_spec, ready,
+            ))
         roadmaps.append(Roadmap(path, built))
     findings.sort(key=lambda f: (f.file, f.line or 0, f.kind, f.entry or ""))
     return roadmaps, findings, recommendation

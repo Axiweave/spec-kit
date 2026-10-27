@@ -63,13 +63,14 @@ Write each `stage` with its display name: `unreadable` Unreadable, `no-spec` No 
 3. **Reviewer items**: for each `custom_checklists` entry with open items, write one line with the feature, the file, the open count, and "owner: reviewer". These items have no command.
 4. **Done**: one line, "Done (N): name, name, …", with the features whose stage is `done`.
 5. **Duplicate prefixes**: when `duplicate_prefixes` is not empty, list each group and say that features with the same prefix are hard to select.
-6. **Roadmaps**: when `roadmaps` or `roadmap_findings` is not empty, write one table for each roadmap, under its `path`, with the entries in JSON order:
+6. **Roadmaps**: when `roadmaps` or `roadmap_findings` is not empty, write one table for each roadmap, under its `path`, with the entries in JSON order. Write the `Waits on` column only when an entry of this roadmap has a `waits_on` value that is not null. Otherwise, leave out that column:
 
-   | ID | Sub-feature | Status | Expected | Depends on | Sub-spec | Ready |
-   |---|---|---|---|---|---|---|
+   | ID | Sub-feature | Status | Expected | Depends on | Waits on | Sub-spec | Ready |
+   |---|---|---|---|---|---|---|---|
 
    - ID, Sub-feature, Status, and Expected: `id`, `name`, `status`, and `expected_status`.
    - Depends on: the `depends_on` IDs, or "—" when the list is empty.
+   - Waits on: `waits_on`, or "—" when it is null. An entry with a value is not ready until the developer clears the cell.
    - Sub-spec: `sub_spec`, or "—" when it is null.
    - Ready: "yes" when `ready` is true. Otherwise "—".
 
