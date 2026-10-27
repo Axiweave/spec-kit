@@ -100,6 +100,8 @@ You **MUST** consider the user input before proceeding (if not empty).
      - Resolve `<path>` against the workspace root: the folder that contains the top `specs/` folder of FEATURE_DIR. Do not resolve it against the code repository.
      - `<path>` must have the form `specs/<name>/roadmap.md`, with no `..`. `<name>` must not start with `.` and must have no whitespace. The `<name>` folder must not be a symlink. The file must be a regular file and not a symlink.
      - Keep the implementation inside the row's `Scope boundary`. Do not implement items that the boundary defers to a sibling entry or to later work.
+     - Read the `## Context` section of the roadmap, when it has one, with the section rule of `__SPECKIT_COMMAND_PLAN__` step 2. Follow each decision in its `### Decisions`. Do not implement a rejected option. When the roadmap has no `## Context`, continue with the row alone and give no warning.
+     - Never change the `Waits on` cell, the `## Context` section, or `specs/<name>/brief.md`.
      - If the path fails a check, or the roadmap file or the row is missing, warn and name the broken reference. Then continue without roadmap context, and never edit that file.
      - Remove every `*` and backtick at both ends of the row's `Sub-spec` cell, and every trailing `/`. If the cell then does not name FEATURE_DIR relative to the workspace root, warn and name the entry and the cell value. Then continue without roadmap context, and never edit that file.
 

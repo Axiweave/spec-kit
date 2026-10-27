@@ -206,19 +206,29 @@ An open task keeps a feature unfinished. If you drop a task, delete its line fro
 
 A roadmap splits one epic into sub-features. It follows the [spec of specs](../concepts/spec-of-specs.md) convention. This part holds the rules that `/speckit.roadmap`, `/speckit.specify`, `/speckit.plan`, `/speckit.implement`, and `/speckit.todo` use.
 
-A roadmap is the file `specs/<name>/roadmap.md`, where `<name>` is a direct child folder of the specs root that does not start with `.` and has no whitespace. The report does not check other files, such as a top-level `ROADMAP.md`. To start one, give `/speckit.roadmap` a description of the work:
+A roadmap is the file `specs/<name>/roadmap.md`, where `<name>` is a direct child folder of the specs root that does not start with `.` and has no whitespace. The report does not check other files, such as a top-level `ROADMAP.md`. To start one, give `/speckit.roadmap` a description of the work. After a long discussion, a short input that names the work is enough, because the findings of the conversation are part of the description:
 
 ```text
 /speckit.roadmap A billing portal: invoices, payment methods, and usage reports
 ```
 
-The command makes a new folder name, splits the work into `planned` entries with their dependencies, and writes `specs/<name>/roadmap.md` from the `roadmap-template`. It stops when the folder exists or when the work is only one sub-feature. It then runs `specify feature list --json` to check the file, and names the next `/speckit.specify` command for each ready entry. It creates no feature and changes no other file.
+The command first writes `specs/<name>/brief.md`. The brief holds the findings, the decisions with their rejected options, the owners, and the sources from the input and the conversation. The command then reads only the brief. It splits the work into `planned` entries, puts each finding in the scope boundary of one entry, and writes `specs/<name>/roadmap.md` from the `roadmap-template`. It names each finding that fits no entry in its report. It then runs `specify feature list --json` to check the file, and names the next `/speckit.specify` command for each ready entry. It creates no feature and changes no other file.
 
-To write a roadmap by hand, copy the template path that `specify preset resolve roadmap-template` prints to `specs/<name>/roadmap.md`. Then add one row for each sub-feature.
+The command stops when `specs/<name>/roadmap.md` exists, when the folder exists with no brief and no roadmap, or when the work is only one sub-feature. When the folder has `brief.md` and no `roadmap.md`, the command reads that brief and does not write it again. To fix a roadmap that missed findings, add them to the brief, delete `roadmap.md`, and run the command again.
 
-A numbered roadmap folder `<name>` that has a regular `roadmap.md` and none of `spec.md`, `plan.md`, `tasks.md`, or `checklists/` is an epic folder. A numbered folder whose name has whitespace is never an epic folder. The feature report skips an epic folder as a feature and checks the folders below it. A numbered folder with a roadmap, any of those files, and no feature below it stays a feature row, so its open tasks still show. A folder with a feature below it is a container and is never a feature row. The report ignores its own `plan.md`, `tasks.md`, and checklists, but still checks its `roadmap.md`.
+The roadmap has one `## Context` section after the table. It holds the problem, the reason for doing the work now, `### Decisions`, and `### Sources`. Each decision has a title, the rejected options with a reason each, and a source as a PR number or a file path, in this form:
 
-The roadmap has a Markdown table with the columns ID, Sub-feature, Intent, Scope boundary, Depends on, Status, and Sub-spec. The column order is free, and extra columns are allowed. Readers trim each cell and remove every `*` and backtick at both ends. An ID starts with a letter or a digit, then uses letters, digits, `-`, `_`, or `.` between parts, for example `R2.1`. Status is `planned`, `in-progress`, or `done`. In Depends on and Sub-spec, `—`, `–`, `-`, or an empty cell means "none". Depends on is a comma-separated list of IDs from the same roadmap. Sub-spec is the feature directory, for example `specs/012-billing-payment-methods`. Trailing `/` characters on Sub-spec are allowed.
+```markdown
+- **Keep Valkey** (PR #4): keep the shared store. Rejected: Postgres, because the rewrite takes 3–5 days and gives no speed gain.
+```
+
+A decision number is never the only name of a decision, because projects renumber decisions.
+
+To write a roadmap by hand, copy the template path that `specify preset resolve roadmap-template` prints to `specs/<name>/roadmap.md`. Then add one row for each sub-feature, and fill `## Context`.
+
+A numbered roadmap folder `<name>` that has a regular `roadmap.md` and none of `spec.md`, `plan.md`, `tasks.md`, or `checklists/` is an epic folder. A `brief.md` does not change this. A numbered folder whose name has whitespace is never an epic folder. The feature report skips an epic folder as a feature and checks the folders below it. A numbered folder with a roadmap, any of those files, and no feature below it stays a feature row, so its open tasks still show. A folder with a feature below it is a container and is never a feature row. The report ignores its own `plan.md`, `tasks.md`, and checklists, but still checks its `roadmap.md`.
+
+The roadmap has a Markdown table with the columns ID, Sub-feature, Intent, Scope boundary, Depends on, Status, and Sub-spec, and the optional column Waits on. The column order is free, and extra columns are allowed. Readers trim each cell and remove every `*` and backtick at both ends. An ID starts with a letter or a digit, then uses letters, digits, `-`, `_`, or `.` between parts, for example `R2.1`. Status is `planned`, `in-progress`, or `done`. In Depends on, Waits on, and Sub-spec, `—`, `–`, `-`, or an empty cell means "none". Depends on is a comma-separated list of IDs from the same roadmap. Waits on is free text that names an external change, person, or team, for example `PR #15 (alice)`. A roadmap with no Waits on column is valid, and its entries wait on nothing. Sub-spec is the feature directory, for example `specs/012-billing-payment-methods`. Trailing `/` characters on Sub-spec are allowed.
 
 To start a sub-feature, give `/speckit.specify` the roadmap path and the entry ID. The command writes this back-reference as the **Input** line of `spec.md`:
 
@@ -228,6 +238,8 @@ To start a sub-feature, give `/speckit.specify` the roadmap path and the entry I
 
 Readers also accept the back-reference without `**Input**:`, bold, or backticks, and with `->` in place of `→`. The first matching line outside fenced code blocks wins.
 
+When the roadmap has `## Context`, `/speckit.specify` copies it into the spec as a `## Roadmap Context` section directly before `## User Scenarios & Testing`, with a first line that names the roadmap. The section in the roadmap starts at the first `## Context` line outside fenced code blocks and ends before the next `#` or `##` heading outside fenced code blocks. When the entry has a Waits on value, `/speckit.specify` warns and names it, and still writes the spec.
+
 Two commands write roadmap cells:
 
 | Command | Cells | When |
@@ -235,12 +247,12 @@ Two commands write roadmap cells:
 | `/speckit.specify` | Sub-spec = the new feature directory, Status = `in-progress` | After it writes `spec.md` for the entry |
 | `/speckit.implement` | Status = `done` | When the row's Sub-spec names this feature and the feature meets the Done stage rule |
 
-Each command changes only these cells in the row of its own entry. It does not change other lines. `/speckit.plan` and `/speckit.implement` also read the parent entry as context.
+Each command changes only these cells in the row of its own entry. It does not change other lines, `## Context`, or `brief.md`. `/speckit.plan` and `/speckit.implement` also read the parent entry and the roadmap's `## Context`. They follow each decision and do not reopen a rejected option. A roadmap with no `## Context` gives no warning.
 
 `specify feature list` reads every roadmap and computes these values for each entry:
 
 - **Expected status**: `planned` when Sub-spec is "none", `done` when the sub-spec feature has the stage Done, and `in-progress` otherwise.
-- **Ready**: the expected status is `planned`, no finding names the entry, and each dependency is in the same roadmap with the expected status `done`.
+- **Ready**: the expected status is `planned`, no finding names the entry, each dependency is in the same roadmap with the expected status `done`, and Waits on is "none".
 - **Roadmap recommendation**: the first ready entry, by roadmap path and then by row order. The next step is `/speckit.specify`. When no entry is ready, there is no roadmap recommendation.
 
 An unknown dependency gives no finding, and the entry is never ready. A dependency cycle also gives no finding, and an entry in the cycle is never ready.

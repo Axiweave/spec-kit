@@ -90,9 +90,11 @@ Given that feature description, do this:
    - Find the table row with that `ID`. If the row is missing, stop, create no feature directory, and list the IDs that exist.
    - Remove every `*` and backtick at both ends of the `Sub-spec` cell. If the cell is then not `—`, `–`, `-`, or empty, stop, create no feature directory, and name the existing sub-spec.
    - If a `SPECIFY_FEATURE_DIRECTORY` override names a folder outside the workspace `specs/` folder, stop, create no feature directory, and name the override. The roadmap can link only a feature inside `specs/`.
+   - Remove every `*` and backtick at both ends of the `Waits on` cell when the row has one. If the cell is then not `—`, `–`, `-`, or empty, warn that the entry waits on that value and name it. Then continue. The spec can be written while the entry waits.
+   - Read the `## Context` section of the roadmap, when it has one. The section starts at the first line outside fenced code blocks that is `## Context`. It ends before the next level 1 or level 2 heading outside fenced code blocks (a line that starts with `#` or `##` and a space), or at the end of the file. When the roadmap has no `## Context`, continue with the row alone and give no warning.
    - Use `<Intent>. Scope boundary: <Scope boundary>` from the row as the feature description, with one period after the intent. If the user also gave text, add it. The scope boundary limits the spec.
    - Use this description as the feature description for the rest of this command. Make the step 1 short name again from this description, not from the roadmap path.
-   - Remember the roadmap path and the entry ID for step 8.
+   - Remember the roadmap path, the entry ID, and the `## Context` section for step 8.
 
 4. **Create the spec feature directory**:
 
@@ -166,7 +168,8 @@ Given that feature description, do this:
    Fill **Feature Branch** with the output of `git branch --show-current` run in the code repository. If it prints nothing, write `none`. Never use the feature directory name or `FEATURE_NAME` as the branch.
    If step 3 ran:
    - Write the **Input** line in the back-reference form: ``**Input**: Parent roadmap: `specs/<name>/roadmap.md` → entry **<ID>**. <feature description>``.
-   - After the spec is written, set two cells in the entry row of the roadmap: `Sub-spec` to the workspace-relative feature directory (for example `specs/012-billing-payment-methods`) and `Status` to `in-progress`. Do not realign, reorder, or rewrite any other cell or line of the roadmap.
+   - When step 3 found a `## Context` section, write a `## Roadmap Context` section directly before `## User Scenarios & Testing`. The first line under the heading is ``Copied from `specs/<name>/roadmap.md`, section `## Context`.``. After it, copy the lines below the `## Context` heading with no change. Keep its `###` headings. The quality checks of step 9 do not apply to this section, and step 9 never edits it.
+   - After the spec is written, set two cells in the entry row of the roadmap: `Sub-spec` to the workspace-relative feature directory (for example `specs/012-billing-payment-methods`) and `Status` to `in-progress`. Do not realign, reorder, or rewrite any other cell or line of the roadmap. Never change the `Waits on` cell, the `## Context` section, or `specs/<name>/brief.md`.
 
 9. **Specification Quality Validation**: After writing the initial spec, validate it against quality criteria:
 
@@ -300,7 +303,7 @@ Report completion to the user with:
 - `SPECIFY_FEATURE_DIRECTORY` — the feature directory path
 - `SPEC_FILE` — the spec file path
 - Checklist results summary
-- When step 3 ran: the roadmap path, the entry ID, and the two roadmap cells that step 8 wrote
+- When step 3 ran: the roadmap path, the entry ID, the two roadmap cells that step 8 wrote, whether the spec got a `## Roadmap Context` section, and the `Waits on` value when step 3 warned about it
 - Readiness for the next phase (`__SPECKIT_COMMAND_CLARIFY__` or `__SPECKIT_COMMAND_PLAN__`)
 
 **NOTE:** Branch creation is handled by the `before_specify` hook (git extension). Spec directory and file creation are always handled by this core command.

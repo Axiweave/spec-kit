@@ -70,6 +70,7 @@ You **MUST** consider the user input before proceeding (if not empty).
    - Keep the plan inside the row's `Scope boundary`.
    - In the plan **Summary**, name the entry and its scope boundary.
    - List each plan item that the boundary defers to a sibling entry or to later work, and leave each such item out of the plan.
+   - Read the `## Context` section of the roadmap, when it has one. The section starts at the first line outside fenced code blocks that is `## Context`. It ends before the next level 1 or level 2 heading outside fenced code blocks (a line that starts with `#` or `##` and a space), or at the end of the file. Follow each decision in its `### Decisions`. Do not present a rejected option as an open choice. When the roadmap has no `## Context`, continue with the row alone and give no warning.
    - If the path fails a check, or the roadmap file or the row is missing, warn and name the broken reference. Then continue without roadmap context.
    - Remove every `*` and backtick at both ends of the row's `Sub-spec` cell, and every trailing `/`. If the cell then does not name the folder of FEATURE_SPEC relative to the workspace root, warn and name the entry and the cell value. Then continue without roadmap context.
 
