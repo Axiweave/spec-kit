@@ -153,7 +153,7 @@ A code finding names the behavior that a user or a caller sees break. A code lis
 
 ### 8. Join the results
 
-1. Merge the findings of the same issue that two groups found. Keep all the references.
+1. Merge the findings of the same issue that two groups found. Findings at the same code location about the same behavior are one issue, even when their kinds differ. Keep all the references and the evidence of both, and use the higher severity.
 2. Apply the evidence rules of [Findings](#findings). Downgrade a `verified` finding that does not meet them to `suspected`.
 3. Move every finding that involves an `elsewhere` feature to **Merge risks**.
 4. Drop every finding whose only evidence comes from an `unknown` feature.
