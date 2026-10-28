@@ -36,6 +36,7 @@ skills by default.
 | `/speckit.checklist` | `speckit-checklist` | Generate requirements-quality checklists (optional quality gate) |
 | `/speckit.todo` | `speckit-todo` | List unfinished features with their stage, blockers, and next step |
 | `/speckit.roadmap` | `speckit-roadmap` | Split a large piece of work into a roadmap of sub-features |
+| `/speckit.audit` | `speckit-audit` | Audit all current specs and the shared code for cross-feature conflicts and regressions (read-only) |
 
 ## `/speckit.constitution`
 
@@ -269,6 +270,41 @@ The report gives these findings:
 A valid back-reference path has the form `specs/<name>/roadmap.md`. A valid Sub-spec starts with `specs/`, is relative, and has no `..` or empty segment. The report never reads a file at a path from a cell.
 
 With local storage, parallel worktrees can change neighboring rows of the same roadmap. The merge then can give a conflict. Resolve the conflict by hand, then run `/speckit.todo` to check the roadmap.
+
+## `/speckit.audit`
+
+Audits the whole repository for the places where features meet. It checks that the current specs agree with each other and that the code at a shared subject still meets the current requirements of every feature that names it. `/speckit.analyze` and `/speckit.converge` check one feature. The audit does not check a requirement that belongs to one feature only. The report counts such requirements as "left to converge".
+
+```text
+/speckit.audit
+/speckit.audit 003 007
+/speckit.audit roadmap table
+/speckit.audit save the report to reports/audit.md
+```
+
+With no input, the command audits every feature that [`specify feature list --json`](core.md#list-features) lists. With feature numbers, feature paths, or subject words, it audits that scope against every current feature that shares a subject with it, and it lists the features that it skipped.
+
+The command is read-only. It runs the feature report, reads files, and runs read-only git commands. It never fetches, checks out, or stashes, and it runs no hooks. It runs tests only when the input names the test command. It writes a file only when the input asks to save the report. The path must be inside the code repository or the specs root, and the command does not overwrite a file unless the input says "overwrite".
+
+Each feature gets a checkout state:
+
+| State | Meaning | Effect |
+| --- | --- | --- |
+| `here` | The work of the feature is in this checkout | Its requirements are checked against the code |
+| `elsewhere` | The work is only on a branch that this checkout does not contain | Its conflicts with `here` features are listed as merge risks. They never change the answer |
+| `unknown` | No source gives evidence | It is never evidence for a finding, and it blocks a `yes` when it shares a subject with a `here` feature |
+
+With local storage, every feature is `here`. With external storage, the specs of all branches are in one specs root. The command then decides each state from these sources, in order: git (the branch is merged, or a commit in `HEAD` names the feature folder), the files that the plan says the feature creates, and the `**Feature Branch**` field of the spec.
+
+A requirement is historical only when a `here` feature, the constitution, or a guide that the constitution names states that it is replaced. A higher feature number is never proof. Two current requirements that conflict with no such statement give an `authority-unclear` finding, not a regression.
+
+Each finding has a kind, a status (`verified`, `suspected`, `ambiguous`, or `unverifiable`), a severity from `CRITICAL` to `LOW`, the requirements with their feature folders, the code locations, the quoted evidence, and a fix. A `verified` finding quotes every requirement, and a code finding also gives `path:line`. The report starts with the answer:
+
+- `yes`: every shared subject was checked, and no finding of `MEDIUM` or higher remains.
+- `no`: at least one `verified` finding of `MEDIUM` or higher.
+- `not determined`: a part was not checked, a `suspected` finding remains, or an `unknown` feature shares a subject with a `here` feature.
+
+The report ends with a coverage table of what the command checked and what it did not check, with a reason. In a large repository, the command checks groups of features that share subjects, and it can give each group to a subagent.
 
 ## `/speckit.taskstoissues` (deprecated core command)
 
