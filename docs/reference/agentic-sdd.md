@@ -15,6 +15,8 @@ independent of the SDD process.
 /speckit.constitution -> /speckit.specify -> /speckit.clarify -> /speckit.plan -> /speckit.checklist -> /speckit.tasks -> /speckit.analyze -> /speckit.implement -> /speckit.converge
 ```
 
+Each command stops when it is done. It names the next command, but it does not start it, so you type each step. The mandatory hooks of a command still run.
+
 ## Command overview
 
 After `specify init`, these commands are available in the selected integration.

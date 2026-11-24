@@ -36,6 +36,8 @@ scripts:
 - An agent may assist with evaluating items only when explicitly asked by the reviewer.
 - `checklists/requirements.md` is a separate built-in spec-quality checklist maintained by `__SPECKIT_COMMAND_SPECIFY__` and `__SPECKIT_COMMAND_CLARIFY__`; do not treat that exception as applying to custom checklists generated here.
 
+**Stop after this command.** Do not start another Spec Kit command, also not one that this command suggests. Name the next command, and wait for the user to type it. The mandatory hooks of this command still run.
+
 ## User Input
 
 ```text

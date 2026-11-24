@@ -14,6 +14,8 @@ scripts:
   py: scripts/python/create_new_feature.py --json
 ---
 
+**Stop after this command.** Do not start another Spec Kit command, also not one that this command suggests. Name the next command, and wait for the user to type it. The mandatory hooks of this command still run.
+
 ## User Input
 
 ```text

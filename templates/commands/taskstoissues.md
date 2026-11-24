@@ -15,6 +15,8 @@ You **MUST display the following concise warning first**, as the first step of t
 
 Continue with the existing workflow unchanged. Do not install or enable the extension automatically, do not stop, and do not run the replacement command.
 
+**Stop after this command.** Do not start another Spec Kit command, also not one that this command suggests. Name the next command, and wait for the user to type it. The mandatory hooks of this command still run.
+
 ## User Input
 
 ```text

@@ -2,6 +2,8 @@
 description: Split a large piece of work into a roadmap of sub-features in specs/<name>/roadmap.md.
 ---
 
+**Stop after this command.** Do not start another Spec Kit command, also not one that this command suggests. Name the next command, and wait for the user to type it. The mandatory hooks of this command still run.
+
 ## User Input
 
 ```text

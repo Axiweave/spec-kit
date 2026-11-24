@@ -3,6 +3,8 @@ description: Review and merge specification sets, then report artifact consisten
 disable-model-invocation: true
 ---
 
+**Stop after this command.** Do not start another Spec Kit command, also not one that this command suggests. Name the next command, and wait for the user to type it. The mandatory hooks of this command still run.
+
 ## User Input
 
 ```text

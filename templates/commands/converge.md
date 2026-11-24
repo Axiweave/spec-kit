@@ -6,6 +6,8 @@ scripts:
   py: scripts/python/check_prerequisites.py --json --require-spec --require-tasks --include-tasks
 ---
 
+**Stop after this command.** Do not start another Spec Kit command, also not one that this command suggests. Name the next command, and wait for the user to type it. The mandatory hooks of this command still run.
+
 ## User Input
 
 ```text
