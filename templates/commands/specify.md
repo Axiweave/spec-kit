@@ -144,6 +144,12 @@ Given that feature description, do this:
        If empty: ERROR "No feature description provided"
     2. Extract key concepts from description
        Identify: actors, actions, data, constraints
+       Check the other features for the same concepts:
+       - Run `specify feature list --json`. Skip this feature and each feature with stage `no-spec` or `unreadable`. If the command fails, warn and continue without this check.
+       - Search the `spec.md` of each other feature for these concepts: entities, states, commands, files, and terms. Read only the requirements that match.
+       - Use the name that the other spec uses for the same concept.
+       - When this feature changes a requirement of another feature, write the change in words in the new requirement, for example "changes `specs/003-export` FR-004". `__SPECKIT_COMMAND_AUDIT__` uses this statement to decide which requirement is current.
+       - When this feature conflicts with a requirement of another feature and the description does not say that it changes it, add a conflict marker: `[NEEDS CLARIFICATION: conflicts with <feature folder> <ID>: <question>]`. The conditions and the limit of step 7.3 do not apply to conflict markers.
     3. For unclear aspects:
        - Make informed guesses based on context and industry standards
        - Only mark with [NEEDS CLARIFICATION: specific question] if:
@@ -228,7 +234,7 @@ Given that feature description, do this:
 
       - **If [NEEDS CLARIFICATION] markers remain**:
         1. Extract all [NEEDS CLARIFICATION: ...] markers from the spec
-        2. **LIMIT CHECK**: If more than 3 markers exist, keep only the 3 most critical (by scope/security/UX impact) and make informed guesses for the rest
+        2. **LIMIT CHECK**: If more than 3 markers exist, keep only the 3 most critical (by scope/security/UX impact) and make informed guesses for the rest. Conflict markers from step 7.2 are outside this limit and the question limit below. Ask about each conflict marker, and never guess its answer.
         3. For each clarification needed (max 3), present options to user in this format:
 
            ```markdown

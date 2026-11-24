@@ -67,8 +67,10 @@ another feature or a follow-up change requiring implementation, create a new
 feature directory and use the shared delivery loop above.
 
 The previous feature directory remains intact for audit, comparison, or
-explaining how the project reached its current state. Use clear feature names or
-cross-links when a new directory supersedes or extends earlier work.
+explaining how the project reached its current state. `/speckit.specify` and
+`/speckit.plan` search the other features and write a cross-link, for example
+"changes `specs/003-export` FR-004", when a new directory changes earlier work.
+Run `/speckit.audit` to find the conflicts that remain.
 
 ## Living Spec
 

@@ -78,6 +78,12 @@ You **MUST** consider the user input before proceeding (if not empty).
    - Fill Technical Context (mark unknowns as "NEEDS CLARIFICATION")
    - Fill Constitution Check section from constitution
    - Evaluate gates (ERROR if violations unjustified)
+   - Before Phase 1, check the other features for the same subjects:
+     - Run `specify feature list --json`. Skip this feature and each feature with stage `no-spec` or `unreadable`. If the command fails, warn and continue without this check.
+     - Search the `plan.md`, `data-model.md`, and `contracts/` of each other feature for the entities, files, and interfaces of this plan.
+     - Reuse the names, shapes, and values that the other feature defines for the same subject.
+     - When this plan changes a file, entity, or interface that another feature defines, name the feature folder and the changed item in the plan **Summary**.
+     - When that change conflicts with a requirement of another feature and FEATURE_SPEC does not say that it changes that requirement, do not stop. The other feature can be on a branch that is not merged. List the conflict in the plan **Summary** with both requirements, and tell the user to run `__SPECKIT_COMMAND_AUDIT__`.
    - Phase 0: Generate research.md (resolve all NEEDS CLARIFICATION)
    - Phase 1: Generate data-model.md, contracts/, quickstart.md
    - Re-evaluate Constitution Check post-design
